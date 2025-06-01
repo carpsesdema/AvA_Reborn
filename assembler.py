@@ -1,9 +1,7 @@
 # assembler.py (updated)
 
-import asyncio
-import json
-from typing import List, Dict, Any
-from utils.llm_client import LLMClient
+from typing import List
+from core.llm_client import LLMClient
 from utils.file_manager import FileManager
 from utils.logger import get_logger
 

@@ -1,4 +1,4 @@
-from utils.llm_client import LLMClient
+from core.llm_client import LLMClient
 from utils.file_manager import FileManager
 
 class RAG:
