@@ -1,9 +1,8 @@
-# gui/enhanced_sidebar.py - Complete Left Sidebar matching your design
-
+# gui/enhanced_sidebar.py
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
     QListWidget, QListWidgetItem, QProgressBar, QFrame, QPushButton,
-    QScrollArea, QSizePolicy  # Added QSizePolicy
+    QScrollArea, QSizePolicy, QLayout  # Added QLayout for sizeConstraint
 )
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
@@ -14,13 +13,13 @@ from gui.components import ModernButton, StatusIndicator
 class StyledPanel(QFrame):
     """Base panel with AvA styling matching your design"""
 
-    def __init__(self, title="", collapsible=False, initially_collapsed=False):  # Added initially_collapsed
+    def __init__(self, title="", collapsible=False, initially_collapsed=False):
         super().__init__()
-        self.is_collapsed = initially_collapsed  # Set initial logical state
+        self.is_collapsed = initially_collapsed
         self.collapsible = collapsible
         self._title_text = title
 
-        self.setFrameStyle(QFrame.Shape.NoFrame)  # NoFrame, styling is via stylesheet
+        self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setStyleSheet("""
             StyledPanel {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -35,25 +34,24 @@ class StyledPanel(QFrame):
         self.main_layout.setContentsMargins(10, 6, 10, 8)
         self.main_layout.setSpacing(6)
 
-        if title:  # Create header only if title is provided
+        if title:
             self._create_header(title)
 
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(6)
+        # Try to make the content layout as small as its contents allow
+        self.content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)  # Or SetFixedSize if desperate
+
         self.main_layout.addWidget(self.content_widget)
 
         self.setLayout(self.main_layout)
-
-        if self.collapsible and self.is_collapsed:
-            self.content_widget.setVisible(False)
-            if hasattr(self, 'collapse_btn'):  # Ensure button exists
-                self.collapse_btn.setText("+")
+        self._apply_current_visual_state()
 
     def _create_header(self, title):
         header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 4)  # Small bottom margin for spacing
+        header_layout.setContentsMargins(0, 0, 0, 4)
 
         self.title_label = QLabel(title)
         self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
@@ -74,88 +72,80 @@ class StyledPanel(QFrame):
             self.collapse_btn.setFixedSize(20, 20)
             self.collapse_btn.setStyleSheet("""
                 QPushButton {
-                    background: #00d7ff;
-                    color: #1e1e1e;
-                    border: none;
-                    border-radius: 10px;
-                    font-weight: bold;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background: #40e0ff;
-                }
+                    background: #00d7ff; color: #1e1e1e; border: none;
+                    border-radius: 10px; font-weight: bold; font-size: 12px;
+                } QPushButton:hover { background: #40e0ff; }
             """)
             self.collapse_btn.clicked.connect(self._toggle_collapse)
             header_layout.addWidget(self.collapse_btn)
 
         self.main_layout.insertLayout(0, header_layout)
 
-    def _toggle_collapse(self):
-        if not self.collapsible:
-            return
+    def add_widget(self, widget: QWidget):
+        self.content_layout.addWidget(widget)
 
-        self.is_collapsed = not self.is_collapsed
-        self.content_widget.setVisible(not self.is_collapsed)
-        if hasattr(self, 'collapse_btn'):
+    def add_layout(self, layout: QHBoxLayout | QVBoxLayout):
+        self.content_layout.addLayout(layout)
+
+    def _apply_current_visual_state(self):
+        self.content_widget.setVisible(not self.is_collapsed if self.collapsible else True)
+
+        if self.collapsible and hasattr(self, 'collapse_btn'):
             self.collapse_btn.setText("+" if self.is_collapsed else "−")
 
-        if self.is_collapsed:
-            self.content_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        if self.collapsible and self.is_collapsed:
+            self.content_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             self.content_widget.setFixedHeight(0)
         else:
-            self.content_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-            # Calculate minimum height based on content, or set a reasonable default
-            min_h = self.content_layout.sizeHint().height() if self.content_layout.count() > 0 else 50
-            self.content_widget.setMinimumHeight(min_h)
+            self.content_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            current_content_min_height = self.content_layout.sizeHint().height()
+            effective_min_height = max(current_content_min_height, 10)
+
+            self.content_widget.setMinimumHeight(effective_min_height)
             self.content_widget.setMaximumHeight(16777215)
 
+        if self.layout():
+            self.layout().activate()
+        self.updateGeometry()
         if self.parentWidget() and self.parentWidget().layout():
             self.parentWidget().layout().activate()
         elif self.parentWidget():
             self.parentWidget().updateGeometry()
 
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
+    def _toggle_collapse(self):
+        if not self.collapsible:
+            return
+        self.is_collapsed = not self.is_collapsed
+        self._apply_current_visual_state()
 
-    def add_layout(self, layout):
-        self.content_layout.addLayout(layout)
+    def ensure_expanded_size_fits_content(self):
+        if not (self.collapsible and self.is_collapsed):
+            self._apply_current_visual_state()
 
     def set_initial_collapse_state(self, collapsed: bool):
         if self.collapsible and collapsed != self.is_collapsed:
-            self._toggle_collapse()
-        elif self.collapsible and collapsed:
-            self.is_collapsed = True  # Ensure logical state is correct
-            self.content_widget.setVisible(False)
-            if hasattr(self, 'collapse_btn'):
-                self.collapse_btn.setText("+")
-        elif self.collapsible and not collapsed:
-            self.is_collapsed = False  # Ensure logical state is correct
-            self.content_widget.setVisible(True)
-            if hasattr(self, 'collapse_btn'):
-                self.collapse_btn.setText("−")
+            self.is_collapsed = collapsed
+            self._apply_current_visual_state()
+        elif self.collapsible:
+            self._apply_current_visual_state()
 
 
 class ProjectSessionPanel(StyledPanel):
-    """Projects and Sessions panel matching your design"""
-
     project_changed = Signal(str)
     session_changed = Signal(str)
 
-    def __init__(self, collapsible=False, initially_collapsed=False):  # Added parameters
-        super().__init__(title="", collapsible=collapsible, initially_collapsed=initially_collapsed)  # Pass to super
+    def __init__(self, collapsible=False, initially_collapsed=False):
+        super().__init__(title="", collapsible=collapsible, initially_collapsed=initially_collapsed)
         self._init_ui()
-        if self.collapsible and self.is_collapsed:
-            self.set_initial_collapse_state(True)
+        # ensure_expanded_size_fits_content is called at the end of _init_ui now
 
     def _init_ui(self):
-        # Tab buttons for Projects/Sessions
         tab_layout = QHBoxLayout()
         tab_layout.setContentsMargins(0, 0, 0, 8)
 
         self.projects_btn = QPushButton("Projects")
         self.sessions_btn = QPushButton("Sessions")
 
-        # Style tab buttons
         tab_style = """
             QPushButton {
                 background: #2d2d30; color: #cccccc; border: 1px solid #404040;
@@ -173,16 +163,20 @@ class ProjectSessionPanel(StyledPanel):
         self.projects_btn.setCheckable(True)
         self.sessions_btn.setCheckable(True)
         self.projects_btn.setChecked(True)
+        self.projects_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.sessions_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.projects_btn.clicked.connect(self._switch_to_projects)
         self.sessions_btn.clicked.connect(self._switch_to_sessions)
         tab_layout.addWidget(self.projects_btn)
         tab_layout.addWidget(self.sessions_btn)
-        self.add_layout(tab_layout)  # Use the panel's add_layout method
+        self.add_layout(tab_layout)
 
         projects_label = QLabel("Projects:")
         projects_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
         projects_label.setStyleSheet("color: #cccccc; margin-top: 4px;")
+        projects_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.add_widget(projects_label)
+
         self.project_list = QListWidget()
         self.project_list.setStyleSheet("""
             QListWidget { background: #1e1e1e; border: 1px solid #404040; border-radius: 4px; color: #cccccc; outline: none; }
@@ -191,26 +185,39 @@ class ProjectSessionPanel(StyledPanel):
             QListWidget::item:hover { background: #2d2d30; }""")
         self._add_sample_projects()
         self.project_list.setMaximumHeight(90)
+        # Try to make the list widget not take more space than its contents or max height
+        self.project_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        self.project_list.adjustSize()  # Tell it to adjust to content
         self.add_widget(self.project_list)
+
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
         self.new_project_btn.setMinimumHeight(30)
+        self.new_project_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.add_widget(self.new_project_btn)
 
         sessions_label = QLabel("Sessions (Current Project):")
         sessions_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
         sessions_label.setStyleSheet("color: #cccccc; margin-top: 8px;")
+        sessions_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.add_widget(sessions_label)
+
         self.session_progress = QProgressBar()
         self.session_progress.setValue(45)
         self.session_progress.setMaximumHeight(6)
+        self.session_progress.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.session_progress.setStyleSheet(
             "QProgressBar{background:#2d2d30;border:none;border-radius:3px;}QProgressBar::chunk{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #00d7ff,stop:1 #0078d4);border-radius:3px;}")
         self.add_widget(self.session_progress)
+
         self.session_list = QListWidget()
         self.session_list.setStyleSheet(self.project_list.styleSheet())
         self._add_sample_sessions()
         self.session_list.setMaximumHeight(70)
+        self.session_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        self.session_list.adjustSize()
         self.add_widget(self.session_list)
+
+        self.ensure_expanded_size_fits_content()
 
     def _add_sample_projects(self):
         projects = [("Default Project", 75), ("365_crawl", 23)]
@@ -260,12 +267,10 @@ class LLMConfigPanel(StyledPanel):
     model_changed = Signal(str, str)
     temperature_changed = Signal(float)
 
-    def __init__(self, collapsible=False, initially_collapsed=False):  # Added parameters
-        super().__init__("LLM Configuration", collapsible=collapsible,
-                         initially_collapsed=initially_collapsed)  # Pass to super
+    def __init__(self, collapsible=False, initially_collapsed=False):
+        super().__init__("LLM Configuration", collapsible=collapsible, initially_collapsed=initially_collapsed)
         self._init_ui()
-        if self.collapsible and self.is_collapsed:
-            self.set_initial_collapse_state(True)
+        # ensure_expanded_size_fits_content called at end of _init_ui
 
     def _init_ui(self):
         chat_layout = QHBoxLayout()
@@ -284,10 +289,12 @@ class LLMConfigPanel(StyledPanel):
         chat_layout.addWidget(self.chat_combo, 1)
         chat_layout.addWidget(chat_status)
         self.add_layout(chat_layout)
+
         code_label = QLabel("Specialized LLM (Code Gen):")
         code_label.setFont(QFont("Segoe UI", 9))
         code_label.setStyleSheet("color:#cccccc;background:transparent;")
         self.add_widget(code_label)
+
         code_row = QHBoxLayout()
         self.code_combo = QComboBox()
         self.code_combo.addItems(["Ollama (Gen): qwen2.5-coder", "OpenAI: gpt-4o", "Anthropic: claude-3.5-sonnet",
@@ -297,6 +304,7 @@ class LLMConfigPanel(StyledPanel):
         code_row.addWidget(self.code_combo, 1)
         code_row.addWidget(code_status)
         self.add_layout(code_row)
+
         temp_label_layout = QHBoxLayout()
         temp_label = QLabel("Temperature (Chat):")
         temp_label.setFont(QFont("Segoe UI", 9))
@@ -307,6 +315,7 @@ class LLMConfigPanel(StyledPanel):
         temp_label_layout.addStretch()
         temp_label_layout.addWidget(self.temp_value)
         self.add_layout(temp_label_layout)
+
         self.temp_slider = QSlider(Qt.Orientation.Horizontal)
         self.temp_slider.setRange(0, 100)
         self.temp_slider.setValue(70)
@@ -314,9 +323,11 @@ class LLMConfigPanel(StyledPanel):
             "QSlider::groove:horizontal{border:1px solid #404040;height:4px;background:#1e1e1e;border-radius:2px;} QSlider::handle:horizontal{background:#00d7ff;border:2px solid #00d7ff;width:14px;height:14px;border-radius:7px;margin:-6px 0;} QSlider::handle:horizontal:hover{background:#40e0ff;border-color:#40e0ff;} QSlider::sub-page:horizontal{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #00d7ff,stop:1 #0078d4);border-radius:2px;}")
         self.temp_slider.valueChanged.connect(self._on_temperature_changed)
         self.add_widget(self.temp_slider)
+
         self.persona_btn = ModernButton("🎭 Configure Persona", button_type="secondary")
         self.persona_btn.setMinimumHeight(28)
         self.add_widget(self.persona_btn)
+        self.ensure_expanded_size_fits_content()
 
     def _on_temperature_changed(self, value):
         temp_val = value / 100.0
@@ -325,41 +336,40 @@ class LLMConfigPanel(StyledPanel):
 
 
 class KnowledgeBasePanel(StyledPanel):
-    def __init__(self, collapsible=False, initially_collapsed=False):  # Added parameters
-        super().__init__("Knowledge Base (RAG)", collapsible=collapsible,
-                         initially_collapsed=initially_collapsed)  # Pass to super
+    def __init__(self, collapsible=False, initially_collapsed=False):
+        super().__init__("Knowledge Base (RAG)", collapsible=collapsible, initially_collapsed=initially_collapsed)
         self._init_ui()
-        if self.collapsible and self.is_collapsed:
-            self.set_initial_collapse_state(True)
+        # ensure_expanded_size_fits_content called at end of _init_ui
 
     def _init_ui(self):
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
         self.scan_btn.setMinimumHeight(28)
         self.add_widget(self.scan_btn)
+
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
         self.add_files_btn.setMinimumHeight(28)
         self.add_widget(self.add_files_btn)
+
         rag_status_layout = QHBoxLayout()
         rag_status_layout.setContentsMargins(0, 4, 0, 0)
         rag_status_label = QLabel("RAG:")
         rag_status_label.setFont(QFont("Segoe UI", 9))
         rag_status_label.setStyleSheet("color:#cccccc;background:transparent;")
-        self.rag_status_display_label = QLabel("Initializing embedder...")  # Made instance variable
+        self.rag_status_display_label = QLabel("Initializing embedder...")
         self.rag_status_display_label.setStyleSheet("color:#ffb900;font-size:9px;background:transparent;")
         rag_status_layout.addWidget(rag_status_label)
         rag_status_layout.addWidget(self.rag_status_display_label, 1)
         self.add_layout(rag_status_layout)
+        self.ensure_expanded_size_fits_content()
 
 
 class ChatActionsPanel(StyledPanel):
     action_triggered = Signal(str)
 
-    def __init__(self, collapsible=False, initially_collapsed=False):  # Added parameters
-        super().__init__("Chat Actions", collapsible=collapsible,
-                         initially_collapsed=initially_collapsed)  # Pass to super
+    def __init__(self, collapsible=False, initially_collapsed=False):
+        super().__init__("Chat Actions", collapsible=collapsible, initially_collapsed=initially_collapsed)
         self._init_ui()
-        if self.collapsible and self.is_collapsed:
-            self.set_initial_collapse_state(True)
+        # ensure_expanded_size_fits_content called at end of _init_ui
 
     def _init_ui(self):
         buttons = [("💬 New Session", "new_session"), ("📊 View LLM Log", "view_log"),
@@ -371,10 +381,10 @@ class ChatActionsPanel(StyledPanel):
             btn.setMinimumHeight(28)
             btn.clicked.connect(lambda checked=False, a=action_id: self.action_triggered.emit(a))
             self.add_widget(btn)
+        self.ensure_expanded_size_fits_content()
 
 
 class AvALeftSidebar(QWidget):
-    """Complete left sidebar containing all panels"""
     model_changed = Signal(str, str)
     temperature_changed = Signal(float)
     action_triggered = Signal(str)
@@ -405,11 +415,10 @@ class AvALeftSidebar(QWidget):
         """)
 
         content_widget = QWidget()
-        content_layout = QVBoxLayout()
+        content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(6)
 
-        # Instantiate panels with collapsible properties
         self.project_panel = ProjectSessionPanel(collapsible=False)
         self.llm_panel = LLMConfigPanel(collapsible=True, initially_collapsed=False)
         self.rag_panel = KnowledgeBasePanel(collapsible=True, initially_collapsed=True)
@@ -421,7 +430,6 @@ class AvALeftSidebar(QWidget):
         content_layout.addWidget(self.actions_panel)
         content_layout.addStretch()
 
-        content_widget.setLayout(content_layout)
         scroll_area.setWidget(content_widget)
         main_layout.addWidget(scroll_area)
         self.setLayout(main_layout)
@@ -433,14 +441,6 @@ class AvALeftSidebar(QWidget):
                 border-right: 2px solid #00d7ff;
             }
         """)
-
-        # Ensure initial visual state for panels that start collapsed
-        # The StyledPanel __init__ and set_initial_collapse_state should handle this.
-        # This is an explicit call to ensure it if there were any issues with initial sizing.
-        if self.rag_panel.is_collapsed:  # is_collapsed is set by initially_collapsed=True
-            self.rag_panel.set_initial_collapse_state(True)
-        if self.actions_panel.is_collapsed:
-            self.actions_panel.set_initial_collapse_state(True)
 
     def _connect_signals(self):
         self.llm_panel.model_changed.connect(self.model_changed)
@@ -454,7 +454,7 @@ class AvALeftSidebar(QWidget):
             "temperature": self.llm_panel.temp_slider.value() / 100.0
         }
 
-    def update_sidebar_rag_status(self, status_text: str, color_hex: str):  # Added method
+    def update_sidebar_rag_status(self, status_text: str, color_hex: str):
         if hasattr(self.rag_panel, 'rag_status_display_label'):
             self.rag_panel.rag_status_display_label.setText(status_text)
             self.rag_panel.rag_status_display_label.setStyleSheet(
