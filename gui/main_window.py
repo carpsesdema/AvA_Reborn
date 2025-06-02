@@ -1,9 +1,9 @@
-# gui/main_window.py - Replace your existing file with this
+# gui/main_window.py - COMPLETE WORKING REPLACEMENT
 
 from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QFrame, QLabel, QTextEdit, QScrollArea, QComboBox
+    QLineEdit, QFrame, QLabel, QTextEdit, QScrollArea, QComboBox, QSlider
 )
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
@@ -130,7 +130,7 @@ class ChatInterface(QWidget):
 
         if is_workflow_request:
             self.chat_display.add_assistant_message("I'll help you build that! Opening the development workflow...")
-            self.status_text.setText("🚀 Starting development workflow...")
+            self.status_text.setText("Starting development workflow...")
             self.status_indicator.update_status("working")
             self.message_sent.emit(message)
         else:
@@ -166,32 +166,34 @@ class AvALeftSidebar(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(12)
 
-        # Simple clean panels
-        self._add_projects_panel(layout)
-        self._add_llm_panel(layout)
-        self._add_actions_panel(layout)
-
-        layout.addStretch()
-        self.setLayout(layout)
-
-        self.setStyleSheet("""
-            AvALeftSidebar {
+        # PROJECT PANEL
+        projects_frame = QFrame()
+        projects_frame.setStyleSheet("""
+            QFrame {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1e1e1e, stop:1 #252526);
-                border-right: 2px solid #00d7ff;
+                    stop:0 #2a2a2e, stop:1 #252526);
+                border: 2px solid #00d7ff;
+                border-radius: 8px;
+                margin: 2px;
             }
         """)
 
-    def _add_projects_panel(self, layout):
-        panel = self._create_panel("Projects & Sessions")
+        projects_layout = QVBoxLayout()
+        projects_layout.setContentsMargins(12, 8, 12, 12)
+        projects_layout.setSpacing(6)
+
+        projects_title = QLabel("Projects & Sessions")
+        projects_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        projects_title.setStyleSheet("color: #00d7ff; margin-bottom: 6px; background: transparent; border: none;")
+        projects_layout.addWidget(projects_title)
 
         projects_label = QLabel("Projects:")
         projects_label.setStyleSheet("color: #cccccc; font-weight: bold;")
-        panel.addWidget(projects_label)
+        projects_layout.addWidget(projects_label)
 
         project_item = QFrame()
         project_item.setStyleSheet("""
@@ -202,21 +204,40 @@ class AvALeftSidebar(QWidget):
                 margin: 2px 0;
             }
         """)
-        project_layout = QVBoxLayout()
-        project_layout.setContentsMargins(4, 4, 4, 4)
+        project_item_layout = QVBoxLayout()
+        project_item_layout.setContentsMargins(4, 4, 4, 4)
         project_name = QLabel("Default Project")
         project_name.setStyleSheet("color: white; font-weight: bold;")
-        project_layout.addWidget(project_name)
-        project_item.setLayout(project_layout)
-        panel.addWidget(project_item)
+        project_item_layout.addWidget(project_name)
+        project_item.setLayout(project_item_layout)
+        projects_layout.addWidget(project_item)
 
-        new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        panel.addWidget(new_project_btn)
+        new_project_btn = ModernButton("New Project", button_type="primary")
+        projects_layout.addWidget(new_project_btn)
 
-        layout.addWidget(panel)
+        projects_frame.setLayout(projects_layout)
+        main_layout.addWidget(projects_frame)
 
-    def _add_llm_panel(self, layout):
-        panel = self._create_panel("LLM Configuration")
+        # LLM CONFIG PANEL
+        llm_frame = QFrame()
+        llm_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2a2a2e, stop:1 #252526);
+                border: 2px solid #00d7ff;
+                border-radius: 8px;
+                margin: 2px;
+            }
+        """)
+
+        llm_layout = QVBoxLayout()
+        llm_layout.setContentsMargins(12, 8, 12, 12)
+        llm_layout.setSpacing(6)
+
+        llm_title = QLabel("LLM Configuration")
+        llm_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        llm_title.setStyleSheet("color: #00d7ff; margin-bottom: 6px; background: transparent; border: none;")
+        llm_layout.addWidget(llm_title)
 
         # Chat LLM
         chat_layout = QHBoxLayout()
@@ -225,10 +246,11 @@ class AvALeftSidebar(QWidget):
 
         self.chat_combo = QComboBox()
         self.chat_combo.addItems([
-            "Gemini: gemini-2.5-pro",
+            "Gemini: gemini-2.5-pro",  # DEFAULT FIRST
             "OpenAI: gpt-4o",
             "Anthropic: claude-3.5-sonnet"
         ])
+        self.chat_combo.setCurrentIndex(0)  # SET GEMINI AS DEFAULT
         self.chat_combo.setStyleSheet("""
             QComboBox {
                 background: #1e1e1e;
@@ -241,55 +263,96 @@ class AvALeftSidebar(QWidget):
             QComboBox:hover {
                 border-color: #00d7ff;
             }
+            QComboBox::drop-down {
+                border: none;
+                width: 16px;
+            }
+            QComboBox QAbstractItemView {
+                background: #2d2d30;
+                border: 1px solid #00d7ff;
+                selection-background-color: #00d7ff;
+                selection-color: #1e1e1e;
+            }
         """)
 
         chat_status = StatusIndicator("ready")
         chat_layout.addWidget(chat_label)
         chat_layout.addWidget(self.chat_combo, 1)
         chat_layout.addWidget(chat_status)
-        panel.addLayout(chat_layout)
+        llm_layout.addLayout(chat_layout)
 
         # Code LLM
         code_label = QLabel("Code LLM:")
         code_label.setStyleSheet("color: #cccccc; margin-top: 8px;")
-        panel.addWidget(code_label)
+        llm_layout.addWidget(code_label)
 
         code_layout = QHBoxLayout()
         self.code_combo = QComboBox()
         self.code_combo.addItems([
-            "Ollama: qwen2.5-coder",
+            "Ollama: qwen2.5-coder",  # DEFAULT FIRST
+            "Gemini: gemini-2.5-pro",
             "OpenAI: gpt-4o",
             "Anthropic: claude-3.5-sonnet"
         ])
+        self.code_combo.setCurrentIndex(0)  # SET OLLAMA AS DEFAULT FOR CODE
         self.code_combo.setStyleSheet(self.chat_combo.styleSheet())
 
         code_status = StatusIndicator("ready")
         code_layout.addWidget(self.code_combo, 1)
         code_layout.addWidget(code_status)
-        panel.addLayout(code_layout)
+        llm_layout.addLayout(code_layout)
 
-        layout.addWidget(panel)
+        # Temperature Slider
+        temp_label_layout = QHBoxLayout()
+        temp_label = QLabel("Temperature (Chat):")
+        temp_label.setStyleSheet("color: #cccccc; margin-top: 8px;")
 
-    def _add_actions_panel(self, layout):
-        panel = self._create_panel("Actions")
+        self.temp_value = QLabel("0.70")
+        self.temp_value.setStyleSheet("color: #00d7ff; font-weight: bold;")
 
-        buttons = [
-            ("💬 New Session", "new_session"),
-            ("📟 Open Terminal", "open_terminal"),
-            ("📄 Open Code Viewer", "open_code_viewer"),
-            ("🔨 Force Generation", "force_gen"),
-        ]
+        temp_label_layout.addWidget(temp_label)
+        temp_label_layout.addStretch()
+        temp_label_layout.addWidget(self.temp_value)
+        llm_layout.addLayout(temp_label_layout)
 
-        for text, action in buttons:
-            btn = ModernButton(text, button_type="secondary")
-            btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
-            panel.addWidget(btn)
+        self.temp_slider = QSlider(Qt.Orientation.Horizontal)
+        self.temp_slider.setRange(0, 100)
+        self.temp_slider.setValue(70)
+        self.temp_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #404040;
+                height: 4px;
+                background: #1e1e1e;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #00d7ff;
+                border: 2px solid #00d7ff;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                margin: -6px 0;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #40e0ff;
+                border-color: #40e0ff;
+            }
+            QSlider::sub-page:horizontal {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00d7ff, stop:1 #0078d4);
+                border-radius: 2px;
+            }
+        """)
+        self.temp_slider.valueChanged.connect(lambda v: self.temp_value.setText(f"{v / 100:.2f}"))
+        self.temp_slider.valueChanged.connect(lambda v: self.temperature_changed.emit(v / 100.0))
+        llm_layout.addWidget(self.temp_slider)
 
-        layout.addWidget(panel)
+        llm_frame.setLayout(llm_layout)
+        main_layout.addWidget(llm_frame)
 
-    def _create_panel(self, title: str) -> QVBoxLayout:
-        frame = QFrame()
-        frame.setStyleSheet("""
+        # RAG PANEL
+        rag_frame = QFrame()
+        rag_frame.setStyleSheet("""
             QFrame {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #2a2a2e, stop:1 #252526);
@@ -299,23 +362,92 @@ class AvALeftSidebar(QWidget):
             }
         """)
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 8, 12, 12)
-        layout.setSpacing(6)
+        rag_layout = QVBoxLayout()
+        rag_layout.setContentsMargins(12, 8, 12, 12)
+        rag_layout.setSpacing(6)
 
-        title_label = QLabel(title)
-        title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        title_label.setStyleSheet("color: #00d7ff; margin-bottom: 6px; background: transparent; border: none;")
-        layout.addWidget(title_label)
+        rag_title = QLabel("Knowledge Base (RAG)")
+        rag_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        rag_title.setStyleSheet("color: #00d7ff; margin-bottom: 6px; background: transparent; border: none;")
+        rag_layout.addWidget(rag_title)
 
-        frame.setLayout(layout)
-        return layout
+        # Scan Directory button
+        self.scan_btn = ModernButton("Scan Directory (Global)", button_type="secondary")
+        self.scan_btn.clicked.connect(lambda: self.action_triggered.emit("scan_directory"))
+        rag_layout.addWidget(self.scan_btn)
+
+        # Add Files button
+        self.add_files_btn = ModernButton("Add Files (Project)", button_type="secondary")
+        self.add_files_btn.clicked.connect(lambda: self.action_triggered.emit("add_files"))
+        rag_layout.addWidget(self.add_files_btn)
+
+        # RAG Status
+        rag_status_layout = QHBoxLayout()
+        rag_status_label = QLabel("RAG:")
+        rag_status_label.setStyleSheet("color: #cccccc;")
+
+        rag_status_text = QLabel("Initializing embedder...")
+        rag_status_text.setStyleSheet("color: #ffb900; font-size: 9px;")
+
+        rag_status_layout.addWidget(rag_status_label)
+        rag_status_layout.addWidget(rag_status_text, 1)
+        rag_layout.addLayout(rag_status_layout)
+
+        rag_frame.setLayout(rag_layout)
+        main_layout.addWidget(rag_frame)
+
+        # ACTIONS PANEL
+        actions_frame = QFrame()
+        actions_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2a2a2e, stop:1 #252526);
+                border: 2px solid #00d7ff;
+                border-radius: 8px;
+                margin: 2px;
+            }
+        """)
+
+        actions_layout = QVBoxLayout()
+        actions_layout.setContentsMargins(12, 8, 12, 12)
+        actions_layout.setSpacing(6)
+
+        actions_title = QLabel("Actions")
+        actions_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        actions_title.setStyleSheet("color: #00d7ff; margin-bottom: 6px; background: transparent; border: none;")
+        actions_layout.addWidget(actions_title)
+
+        buttons = [
+            ("New Session", "new_session"),
+            ("Open Terminal", "open_terminal"),
+            ("Open Code Viewer", "open_code_viewer"),
+            ("Force Generation", "force_gen"),
+        ]
+
+        for text, action in buttons:
+            btn = ModernButton(text, button_type="secondary")
+            btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
+            actions_layout.addWidget(btn)
+
+        actions_frame.setLayout(actions_layout)
+        main_layout.addWidget(actions_frame)
+
+        main_layout.addStretch()
+        self.setLayout(main_layout)
+
+        self.setStyleSheet("""
+            AvALeftSidebar {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e1e1e, stop:1 #252526);
+                border-right: 2px solid #00d7ff;
+            }
+        """)
 
     def get_current_models(self):
         return {
             "chat_model": self.chat_combo.currentText(),
             "code_model": self.code_combo.currentText(),
-            "temperature": 0.7
+            "temperature": self.temp_slider.value() / 100.0
         }
 
 
@@ -359,6 +491,8 @@ class AvAMainWindow(QMainWindow):
     def _connect_signals(self):
         self.chat_interface.message_sent.connect(self.workflow_requested)
         self.sidebar.action_triggered.connect(self._handle_action)
+        self.sidebar.temperature_changed.connect(
+            lambda temp: print(f"Temperature changed to: {temp}"))  # TODO: Implement
 
     def _handle_action(self, action):
         if action == "open_terminal":
@@ -370,21 +504,27 @@ class AvAMainWindow(QMainWindow):
         elif action == "new_session":
             self.chat_interface.chat_display.clear()
             self.chat_interface.chat_display.add_assistant_message("New session started! How can I help you today?")
+        elif action == "scan_directory":
+            print("Scan directory requested")  # TODO: Implement
+        elif action == "add_files":
+            print("Add files requested")  # TODO: Implement
+        elif action == "force_gen":
+            print("Force generation requested")  # TODO: Implement
 
     def on_workflow_started(self, prompt, metadata=None):
-        self.chat_interface.update_status("🚀 Building your project... Check terminal for progress", "working")
+        self.chat_interface.update_status("Building your project... Check terminal for progress", "working")
 
     def on_workflow_completed(self, result):
         if hasattr(result, 'success') and result.success:
             file_count = len(result.files_generated) if hasattr(result, 'files_generated') else 0
-            self.chat_interface.update_status(f"✅ Generated {file_count} files successfully", "success")
+            self.chat_interface.update_status(f"Generated {file_count} files successfully", "success")
             self.chat_interface.chat_display.add_assistant_message(
                 f"Perfect! I've generated {file_count} files for your project. Check the code viewer to see the results!")
         else:
-            self.chat_interface.update_status("❌ Generation failed", "error")
+            self.chat_interface.update_status("Generation failed", "error")
             self.chat_interface.chat_display.add_assistant_message(
                 "Sorry, something went wrong during generation. Check the terminal for details.")
 
     def on_error_occurred(self, component, message, context=None):
-        self.chat_interface.update_status(f"❌ Error: {message}", "error")
+        self.chat_interface.update_status(f"Error: {message}", "error")
         self.chat_interface.chat_display.add_assistant_message(f"I encountered an error: {message}")
