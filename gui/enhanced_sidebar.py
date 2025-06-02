@@ -390,7 +390,7 @@ class LLMConfigPanel(StyledPanel):
 
 class KnowledgeBasePanel(StyledPanel):
     def __init__(self):
-        super().__init__("Knowledge Base (RAG)", collapsible=True, initially_collapsed=True)
+        super().__init__("Knowledge Base (RAG)", collapsible=True, initially_collapsed=False) # Changed initially_collapsed
         self._init_ui()
 
     def _init_ui(self):
@@ -406,10 +406,11 @@ class KnowledgeBasePanel(StyledPanel):
         """)
         self.add_widget(self.scan_btn)
 
-        self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
-        self.add_files_btn.setMinimumHeight(26)
-        self.add_files_btn.setStyleSheet(self.scan_btn.styleSheet())
-        self.add_widget(self.add_files_btn)
+        # REMOVED Add Files Button
+        # self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
+        # self.add_files_btn.setMinimumHeight(26)
+        # self.add_files_btn.setStyleSheet(self.scan_btn.styleSheet())
+        # self.add_widget(self.add_files_btn)
 
         # Compact RAG status
         rag_status_layout = QHBoxLayout()
@@ -431,7 +432,7 @@ class ChatActionsPanel(StyledPanel):
     action_triggered = Signal(str)
 
     def __init__(self):
-        super().__init__("Chat Actions", collapsible=True, initially_collapsed=True)
+        super().__init__("Chat Actions", collapsible=True, initially_collapsed=False) # Changed initially_collapsed
         self._init_ui()
 
     def _init_ui(self):

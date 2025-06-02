@@ -51,11 +51,24 @@ class UploadService:
         self.vector_db = VectorDBService()  # Assumes VectorDBService constructor is safe
         self.chunking_service = ChunkingService()  # Assumes ChunkingService constructor is safe
 
-        # Supported file types
+        # Supported file types - EXPANDED
         self.supported_extensions = {
+            # Code
             '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h',
-            '.txt', '.md', '.rst', '.html', '.css', '.json', '.yaml', '.yml',
-            '.xml', '.sql', '.sh', '.bat', '.ps1', '.php', '.rb', '.go', '.rs'
+            '.cs', '.swift', '.kt', '.go', '.rs', '.rb', '.php', '.pl', '.sh',
+            '.ipynb',  # Jupyter Notebooks (content extraction needed)
+            # Text & Markup
+            '.txt', '.md', '.rst', '.tex', '.log',
+            # Config & Data
+            '.json', '.yaml', '.yml', '.xml', '.csv', '.ini', '.toml',
+            # Web
+            '.html', '.css', '.scss', '.less',
+            # Documents (basic support - content extraction from binary formats needs more work)
+            '.pdf', '.docx',  # Added PDF and DOCX
+            # SQL
+            '.sql',
+            # Shell & Batch
+            '.bat', '.ps1'
         }
         logger.info(
             f"UploadService initialized. Embedder will be loaded asynchronously. RAG Available: {SENTENCE_TRANSFORMERS_AVAILABLE}")
@@ -150,8 +163,8 @@ class UploadService:
                     results['failed_files'].append(str(file_path))
                     continue
                 if file_path.suffix.lower() not in self.supported_extensions:
-                    logger.warning(f"Unsupported file type: {file_path}")
-                    results['failed_files'].append(str(file_path))
+                    logger.info(f"Skipping unsupported file type: {file_path}")  # Changed to INFO for less noise
+                    # results['failed_files'].append(str(file_path)) # Don't treat as failure, just skip
                     continue
 
                 file_result = self._process_single_file(file_path, collection_id)
@@ -172,7 +185,7 @@ class UploadService:
         )
         upload_result.metadata = {'upload_summary_v5_final': results.copy()}  # Store detailed summary
         logger.info(f"UploadService: Processed {len(results['successfully_processed'])} files, "
-                    f"{results['total_chunks']} chunks in {results['processing_time']:.2f}s")
+                    f"{results['total_chunks']} chunks in {results['processing_time']:.2f}s. Failed: {len(results['failed_files'])}.")
         return upload_result
 
     def process_directory_for_context(self, directory_path: Union[str, Path],
@@ -184,17 +197,42 @@ class UploadService:
             logger.error(f"Directory not found: {directory_path}")
             return None
 
-        file_paths = []
+        all_found_files = []
         pattern_gen = directory_path.rglob if recursive else directory_path.glob
+
+        # Log all files found before filtering
+        raw_file_list = list(pattern_gen("*"))
+        logger.info(
+            f"UploadService: Scanned {directory_path}. Found {len(raw_file_list)} total items (files/dirs) before filtering.")
+
+        # Filter for supported extensions
+        file_paths_by_extension = []
         for ext in self.supported_extensions:
-            file_paths.extend(pattern_gen(f"*{ext}"))
+            # Reset generator for each extension or glob once and filter
+            # For simplicity, re-globbing per extension or use a single glob and filter
+            file_paths_by_extension.extend(
+                directory_path.rglob(f"*{ext}") if recursive else directory_path.glob(f"*{ext}"))
 
-        ignore_dirs = {'.git', '__pycache__', '.venv', 'venv', 'node_modules', '.env', 'build', 'dist'}
-        valid_file_paths = [f for f in file_paths if f.is_file() and not any(part in ignore_dirs for part in f.parts)]
+        # Deduplicate (if rglobbing '*' and then filtering by suffix)
+        # Since we glob per extension, it should be mostly unique file paths
+        # unique_file_paths = list(set(file_paths_by_extension))
+        # logger.info(f"UploadService: Found {len(unique_file_paths)} files matching supported extensions before ignoring directories.")
 
-        logger.info(f"UploadService: Found {len(valid_file_paths)} supported files in {directory_path}")
+        ignore_dirs = {'.git', '__pycache__', '.venv', 'venv', 'node_modules', '.env', 'build', 'dist', '.idea',
+                       '.vscode'}
+        # Filter out ignored directories and ensure they are files
+        valid_file_paths = [
+            f for f in file_paths_by_extension
+            if f.is_file() and not any(part in ignore_dirs for part in f.parts)
+        ]
+        # Deduplicate final list as rglobbing per extension might overlap if a file somehow matches multiple (unlikely for distinct exts)
+        valid_file_paths = list(set(valid_file_paths))
+
+        logger.info(f"UploadService: Found {len(valid_file_paths)} supported and non-ignored files in {directory_path}")
         if not valid_file_paths:
-            return UploadResult(0, 0, 0)  # Return an empty result
+            logger.info(f"UploadService: No processable files found in {directory_path}. Returning empty result.")
+            return UploadResult(0, 0, 0)
+
         return self.process_files_for_context(valid_file_paths, collection_id)
 
     def _process_single_file(self, file_path: Path, collection_id: str) -> Optional[Dict[str, Any]]:
@@ -203,8 +241,12 @@ class UploadService:
             logger.error(f"UploadService: Embedder not ready or not initialized, cannot process file {file_path.name}")
             return None
         try:
+            # TODO: Implement specific content readers for .pdf, .docx using pypdf, python-docx
+            # For now, it will only work well with text-based files in supported_extensions
             content = self._read_file_content(file_path)
-            if not content: return None
+            if not content:
+                logger.warning(f"Could not read content or content is empty for {file_path}. Skipping.")
+                return None
 
             file_metadata = {
                 'filename': file_path.name, 'file_path': str(file_path),
@@ -235,6 +277,7 @@ class UploadService:
                     f"UploadService: Added {len(documents_with_embeddings)} chunks from {file_path.name} to {collection_id}")
                 return {'file_path': str(file_path), 'chunk_count': len(documents_with_embeddings),
                         'file_size': len(content)}
+            logger.warning(f"No documents with embeddings were prepared for {file_path.name}")
             return None
         except Exception as e:
             logger.error(f"UploadService: Failed to process file {file_path}: {e}", exc_info=True)
@@ -242,6 +285,16 @@ class UploadService:
 
     def _read_file_content(self, file_path: Path) -> Optional[str]:
         """Read file content with encoding detection."""
+        # Placeholder: Actual binary file content extraction (PDF, DOCX) needs specific libraries.
+        if file_path.suffix.lower() in ['.pdf', '.docx']:
+            logger.warning(
+                f"Content extraction for {file_path.suffix} not fully implemented. Reading as plain text if possible or skipping.")
+            # Attempt to read as text for now, or return empty to indicate it needs proper handling
+            try:
+                return file_path.read_text(encoding='utf-8', errors='ignore')  # very basic for now
+            except:
+                return ""
+
         try:
             return file_path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
@@ -318,4 +371,3 @@ class UploadResult:
     def __str__(self):
         return (f"UploadResult(files_added: {self.successfully_added_files}, "
                 f"files_failed: {self.failed_files}, total_chunks: {self.total_chunks})")
-
