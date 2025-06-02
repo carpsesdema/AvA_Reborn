@@ -1,5 +1,4 @@
-# gui/main_window.py - COMPLETE WORKING REPLACEMENT
-# This version uses the AvALeftSidebar from gui.enhanced_sidebar
+# gui/main_window.py - FIXED with Casual Chat Support
 
 from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
@@ -8,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
+import asyncio
 
 from gui.components import ModernButton, StatusIndicator
 from gui.enhanced_sidebar import AvALeftSidebar  # Uses the enhanced sidebar
@@ -215,7 +215,9 @@ class AvAMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _connect_signals(self):
-        self.chat_interface.message_sent.connect(self.workflow_requested)
+        # NEW: Connect to handle_user_message instead of directly to workflow_requested
+        self.chat_interface.message_sent.connect(self.handle_user_message)
+
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
 
         if hasattr(self.sidebar, 'project_panel') and hasattr(self.sidebar.project_panel, 'new_project_btn'):
@@ -223,6 +225,108 @@ class AvAMainWindow(QMainWindow):
 
         self.sidebar.temperature_changed.connect(self._on_temperature_changed)
         self.sidebar.model_changed.connect(self._on_model_changed)
+
+    def handle_user_message(self, message: str):
+        """
+        NEW: Handle user messages - decide between casual chat vs workflow
+        """
+        if self._is_build_request(message):
+            # This is a build request - send to workflow
+            self.workflow_requested.emit(message)
+        else:
+            # This is casual chat - handle directly
+            self._handle_casual_chat(message)
+
+    def _is_build_request(self, prompt: str) -> bool:
+        """
+        NEW: Determine if this is a build request (copied from workflow engine logic)
+        """
+        prompt_lower = prompt.lower().strip()
+
+        # IGNORE casual chat
+        casual_phrases = [
+            'hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay',
+            'yes', 'no', 'sure', 'cool', 'nice', 'good', 'great'
+        ]
+
+        if prompt_lower in casual_phrases:
+            return False
+
+        # IGNORE questions without build intent
+        question_words = ['what', 'how', 'why', 'when', 'where', 'who']
+        if any(prompt_lower.startswith(word) for word in question_words):
+            build_question_patterns = ['how to build', 'how to create', 'how to make', 'what should i build']
+            if not any(pattern in prompt_lower for pattern in build_question_patterns):
+                return False
+
+        # REQUIRE explicit build keywords
+        build_keywords = [
+            'build', 'create', 'make', 'generate', 'develop', 'code',
+            'implement', 'write', 'design', 'construct', 'program',
+            'application', 'app', 'website', 'tool', 'script', 'project'
+        ]
+
+        has_build_keyword = any(keyword in prompt_lower for keyword in build_keywords)
+        is_substantial = len(prompt.split()) >= 3
+
+        return has_build_keyword and is_substantial
+
+    def _handle_casual_chat(self, message: str):
+        """
+        NEW: Handle casual chat directly with LLM
+        """
+        if not self.ava_app or not self.ava_app.llm_client:
+            self.chat_interface.chat_display.add_assistant_message(
+                "Sorry, LLM client is not available right now."
+            )
+            return
+
+        # Update status to show we're chatting
+        self.chat_interface.update_llm_status("LLM: Chatting...", "working")
+
+        # Create casual chat prompt
+        chat_prompt = f"""
+You are AvA, a friendly AI development assistant. The user said: "{message}"
+
+Respond naturally and helpfully. If they're just greeting you or making casual conversation, 
+respond warmly. If they ask about your capabilities, mention you can help build applications 
+and have coding assistance features.
+
+Keep responses conversational and under 2-3 sentences unless they ask for detailed information.
+"""
+
+        # Handle chat asynchronously to avoid blocking UI
+        asyncio.create_task(self._async_casual_chat(chat_prompt))
+
+    async def _async_casual_chat(self, prompt: str):
+        """
+        NEW: Async casual chat handler with streaming
+        """
+        try:
+            # Stream the casual chat response
+            response_chunks = []
+            async for chunk in self.ava_app.llm_client.stream_chat(prompt):
+                response_chunks.append(chunk)
+
+            response = ''.join(response_chunks).strip()
+
+            # Add to chat display
+            self.chat_interface.chat_display.add_assistant_message(response)
+
+            # Reset status
+            llm_name = "LLM"
+            temp = 0.0
+            if self.ava_app.current_config:
+                llm_name = self.ava_app.current_config.get("chat_model", "LLM").split(':')[-1].strip()
+                temp = self.ava_app.current_config.get("temperature", 0.0)
+
+            self.chat_interface.update_llm_status(f"LLM: {llm_name} (Temp: {temp:.2f})", "ready")
+
+        except Exception as e:
+            self.chat_interface.chat_display.add_assistant_message(
+                f"Sorry, I encountered an error: {e}"
+            )
+            self.chat_interface.update_llm_status("LLM: Error", "error")
 
     def _update_initial_ui_status(self):
         llm_model_text = "LLM: Unknown"
@@ -300,16 +404,18 @@ class AvAMainWindow(QMainWindow):
             if self.ava_app.rag_manager:
                 self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
             else:
-                self.chat_interface.add_assistant_message("RAG Manager not available for scanning.")
+                self.chat_interface.chat_display.add_assistant_message("RAG Manager not available for scanning.")
         elif action == "add_files":
             if self.ava_app.rag_manager:
                 self.ava_app.rag_manager.add_files_dialog(parent_widget=self)
             else:
-                self.chat_interface.add_assistant_message("RAG Manager not available for adding files.")
+                self.chat_interface.chat_display.add_assistant_message("RAG Manager not available for adding files.")
         elif action == "force_gen":
-            self.chat_interface.add_assistant_message("Force code generation triggered (logic to be implemented).")
+            self.chat_interface.chat_display.add_assistant_message(
+                "Force code generation triggered (logic to be implemented).")
         elif action == "check_updates":
-            self.chat_interface.add_assistant_message("Checking for updates (feature not yet implemented).")
+            self.chat_interface.chat_display.add_assistant_message(
+                "Checking for updates (feature not yet implemented).")
         else:
             print(f"Unknown sidebar action: {action}")
 
@@ -333,16 +439,16 @@ class AvAMainWindow(QMainWindow):
             project_name = result.get("project_name", "your project")
             num_files = result.get("file_count", 0)
             message = f"✅ Workflow for '{project_name}' completed! Generated {num_files} files. View them in the Code Viewer."
-            self.chat_interface.add_assistant_message(message)
+            self.chat_interface.chat_display.add_assistant_message(message)
             self.chat_interface.update_llm_status(f"LLM: {llm_name} (Temp: {temp:.2f})", "success")
         else:
             error_msg = result.get("error", "An unknown error occurred.")
-            self.chat_interface.add_assistant_message(f"❌ Workflow failed: {error_msg}")
+            self.chat_interface.chat_display.add_assistant_message(f"❌ Workflow failed: {error_msg}")
             self.chat_interface.update_llm_status(f"LLM: {llm_name} (Temp: {temp:.2f})", "error")
 
     @Slot(str, str)
     def on_app_error_occurred(self, component: str, error_message: str):
-        self.chat_interface.add_assistant_message(f"⚠️ Error in {component}: {error_message}")
+        self.chat_interface.chat_display.add_assistant_message(f"⚠️ Error in {component}: {error_message}")
         llm_name = "LLM";
         temp = 0.0
         if self.ava_app and self.ava_app.current_config:

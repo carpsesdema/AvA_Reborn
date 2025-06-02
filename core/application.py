@@ -1,20 +1,18 @@
-import sys
-import os
+import asyncio  # Ensure asyncio is imported
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 from datetime import datetime
-import asyncio # Ensure asyncio is imported
+from pathlib import Path
+from typing import Dict, Any
 
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtWidgets import QApplication
 
+from core.llm_client import LLMClient
+from core.workflow_engine import WorkflowEngine
 # Import the components
 from gui.main_window import AvAMainWindow
-from windows.terminal_window import LLMTerminalWindow
 from windows.code_viewer import CodeViewerWindow
-from core.workflow_engine import WorkflowEngine
-from core.llm_client import LLMClient
+from windows.terminal_window import LLMTerminalWindow
 
 # Try to import RAG manager - gracefully handle if not available
 try:
@@ -28,7 +26,7 @@ except ImportError as e:
 
 class AvAApplication(QObject):
     """
-    AvA Application - Windows Compatible with Optional RAG
+    AvA Application - Enhanced with Streaming & Progress Tracking
     """
     fully_initialized_signal = Signal()  # Signal to indicate all async init is done
 
@@ -69,6 +67,11 @@ class AvAApplication(QObject):
             "temperature": 0.7
         }
 
+        # NEW: Performance monitoring timer
+        self.performance_timer = QTimer()
+        self.performance_timer.timeout.connect(self._update_performance_stats)
+        self.performance_timer.start(5000)  # Update every 5 seconds
+
     def _setup_logging(self):
         """Setup Windows-compatible logging without Unicode emojis"""
         log_dir = Path("./logs")
@@ -108,10 +111,10 @@ class AvAApplication(QObject):
         if self.main_window and not self.main_window.isVisible():
             self.main_window.show()
             self.logger.info("Main window shown.")
-            await asyncio.sleep(0.01) # Slightly longer sleep to ensure UI processes events
+            await asyncio.sleep(0.01)  # Slightly longer sleep to ensure UI processes events
 
         self.logger.info("About to start and await async_initialize_components...")
-        await self.async_initialize_components() # Directly await the async initialization
+        await self.async_initialize_components()  # Directly await the async initialization
         self.logger.info("Finished awaiting async_initialize_components in initialize method.")
         # fully_initialized_signal is emitted from async_initialize_components
 
@@ -119,7 +122,8 @@ class AvAApplication(QObject):
         self.logger.info("[LAUNCH] Initializing AvA Application (async components part)...")
         try:
             await self._initialize_rag_manager_async()
-            self.logger.info(f"RAG Manager initialization attempt complete. RAG ready: {self.rag_manager.is_ready if self.rag_manager and hasattr(self.rag_manager, 'is_ready') else 'N/A or Manager not created'}")
+            self.logger.info(
+                f"RAG Manager initialization attempt complete. RAG ready: {self.rag_manager.is_ready if self.rag_manager and hasattr(self.rag_manager, 'is_ready') else 'N/A or Manager not created'}")
 
             self._initialize_workflow_engine()
             self._connect_components()
@@ -137,7 +141,6 @@ class AvAApplication(QObject):
             # so main.py (or any listener) knows this phase is over.
             self.fully_initialized_signal.emit()
 
-
     def _initialize_core_services(self):
         self.logger.info("Initializing core services...")
         self.llm_client = LLMClient()
@@ -153,11 +156,12 @@ class AvAApplication(QObject):
                 self.rag_manager = RAGManager()
                 self.rag_manager.status_changed.connect(self._on_rag_status_changed)
                 self.rag_manager.upload_completed.connect(self._on_rag_upload_completed)
-                await self.rag_manager.async_initialize() # This now waits for embedder
-                self.logger.info(f"[OK] RAG manager async_initialize call completed. RAG ready: {self.rag_manager.is_ready}")
+                await self.rag_manager.async_initialize()  # This now waits for embedder
+                self.logger.info(
+                    f"[OK] RAG manager async_initialize call completed. RAG ready: {self.rag_manager.is_ready}")
             except Exception as e:
                 self.logger.error(f"[ERROR] RAG manager async initialization threw an exception: {e}", exc_info=True)
-                self.rag_manager = None # Ensure rag_manager is None if init fails
+                self.rag_manager = None  # Ensure rag_manager is None if init fails
                 self._on_rag_status_changed(f"RAG Init Exception: {e}", "error")
         else:
             self.logger.info("RAG services not available (import failed) - running without RAG functionality.")
@@ -178,21 +182,25 @@ class AvAApplication(QObject):
         self.logger.info("Connecting components...")
         if self.main_window:
             self.main_window.workflow_requested.connect(self._handle_workflow_request)
-            if hasattr(self.main_window, 'new_project_requested'): # Check before connecting
+            if hasattr(self.main_window, 'new_project_requested'):  # Check before connecting
                 self.main_window.new_project_requested.connect(self.create_new_project_dialog)
 
         self.workflow_started.connect(self._on_workflow_started)
         self.workflow_completed.connect(self._on_workflow_completed)
         self.error_occurred.connect(self._on_error_occurred)
 
-        if self.workflow_engine: # Check if workflow_engine was initialized
-            if self.main_window: # Check if main_window exists
+        if self.workflow_engine:  # Check if workflow_engine was initialized
+            if self.main_window:  # Check if main_window exists
                 self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
                 self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
+
+            # NEW: Connect workflow progress signals to terminal
+            if self.terminal_window:
+                self.workflow_engine.workflow_progress.connect(self.terminal_window.update_workflow_progress)
+
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
         self.logger.info("[OK] Components connected.")
-
 
     def _setup_window_behaviors(self):
         if self.main_window:
@@ -207,24 +215,68 @@ class AvAApplication(QObject):
     def _position_windows(self):
         screen_geo = QApplication.primaryScreen().geometry()
         if self.main_window: self.main_window.setGeometry(100, 50, 1400, 900)
-        if self.terminal_window: self.terminal_window.setGeometry(screen_geo.width() - 850, screen_geo.height() - 400, 800, 350)
+        if self.terminal_window: self.terminal_window.setGeometry(screen_geo.width() - 850, screen_geo.height() - 400,
+                                                                  900, 700)  # Larger for progress widgets
         if self.code_viewer: self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
+
+    def _update_performance_stats(self):
+        """NEW: Update performance statistics in terminal"""
+        if not (self.terminal_window and self.workflow_engine):
+            return
+
+        try:
+            # Get workflow stats including cache performance
+            stats = self.workflow_engine.get_workflow_stats()
+            cache_stats = stats.get("cache_stats", {})
+
+            # Update terminal cache status
+            cache_size = cache_stats.get("cache_size", 0)
+            hit_rate = cache_stats.get("hit_rate", 0.0)
+
+            if hasattr(self.terminal_window, 'update_cache_status'):
+                self.terminal_window.update_cache_status(cache_size, hit_rate)
+
+            # Update task progress if workflow is active
+            workflow_state = stats.get("workflow_state", {})
+            if workflow_state.get("stage") not in ["idle", "complete", "error"]:
+                completed = workflow_state.get("completed_tasks", 0)
+                total = workflow_state.get("total_tasks", 0)
+                if hasattr(self.terminal_window, 'update_task_progress'):
+                    self.terminal_window.update_task_progress(completed, total)
+
+        except Exception as e:
+            self.logger.debug(f"Performance stats update failed: {e}")
 
     def get_status(self) -> Dict[str, Any]:
         llm_models_list = self.llm_client.get_available_models() if self.llm_client else ["LLM Client not init"]
-        rag_info = {"ready": False, "status_text": "RAG: Not Initialized", "available": RAG_MANAGER_AVAILABLE, "collections": {}}
+        rag_info = {"ready": False, "status_text": "RAG: Not Initialized", "available": RAG_MANAGER_AVAILABLE,
+                    "collections": {}}
         if RAG_MANAGER_AVAILABLE:
-            if self.rag_manager and hasattr(self.rag_manager, 'is_ready') and hasattr(self.rag_manager, 'current_status'):
+            if self.rag_manager and hasattr(self.rag_manager, 'is_ready') and hasattr(self.rag_manager,
+                                                                                      'current_status'):
                 rag_info["ready"] = self.rag_manager.is_ready
                 rag_info["status_text"] = self.rag_manager.current_status
-                if hasattr(self.rag_manager, 'get_collection_info') and callable(getattr(self.rag_manager, 'get_collection_info')):
+                if hasattr(self.rag_manager, 'get_collection_info') and callable(
+                        getattr(self.rag_manager, 'get_collection_info')):
                     rag_info["collections"] = self.rag_manager.get_collection_info()
-            elif self.rag_manager: # Manager exists but might not have all attributes (e.g. during init fail)
-                 rag_info["status_text"] = "RAG: Manager exists, status uncertain"
-            else: # RAG_MANAGER_AVAILABLE is true, but self.rag_manager is None (init failed badly)
+            elif self.rag_manager:  # Manager exists but might not have all attributes (e.g. during init fail)
+                rag_info["status_text"] = "RAG: Manager exists, status uncertain"
+            else:  # RAG_MANAGER_AVAILABLE is true, but self.rag_manager is None (init failed badly)
                 rag_info["status_text"] = "RAG: Initialization Failed (Manager None)"
-        else: # RAG_MANAGER_AVAILABLE is false
+        else:  # RAG_MANAGER_AVAILABLE is false
             rag_info["status_text"] = "RAG: Dependencies Missing / Not Available"
+
+        # NEW: Include performance stats
+        performance_stats = {}
+        if self.workflow_engine:
+            try:
+                workflow_stats = self.workflow_engine.get_workflow_stats()
+                performance_stats = {
+                    "cache_stats": workflow_stats.get("cache_stats", {}),
+                    "workflow_state": workflow_stats.get("workflow_state", {})
+                }
+            except Exception:
+                pass
 
         return {
             "ready": self.workflow_engine is not None,
@@ -232,6 +284,7 @@ class AvAApplication(QObject):
             "workspace": str(self.workspace_dir), "current_project": self.current_project,
             "current_session": self.current_session, "configuration": self.current_config,
             "rag": rag_info,
+            "performance": performance_stats,  # NEW
             "windows": {
                 "main": self.main_window.isVisible() if self.main_window else False,
                 "terminal": self.terminal_window.isVisible() if self.terminal_window else False,
@@ -243,7 +296,8 @@ class AvAApplication(QObject):
     def _handle_workflow_request(self, user_prompt: str):
         self.logger.info(f"Workflow request received: {user_prompt[:100]}...")
         current_status = self.get_status()
-        if not current_status["llm_models"] or current_status["llm_models"] == ["LLM Client not init"] or current_status["llm_models"] == ["No LLM services available"]:
+        if not current_status["llm_models"] or current_status["llm_models"] == ["LLM Client not init"] or \
+                current_status["llm_models"] == ["No LLM services available"]:
             error_msg = "No LLM services available. Please configure API keys."
             if self.terminal_window: self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
             self.error_occurred.emit("llm_unavailable", error_msg)
@@ -266,9 +320,9 @@ class AvAApplication(QObject):
             self.active_workflows[workflow_id]["status"] = "failed"
             self.active_workflows[workflow_id]["error"] = str(e)
 
-
     def _open_terminal(self):
         if self.terminal_window: self.terminal_window.show(); self.terminal_window.raise_(); self.terminal_window.activateWindow()
+
     def _open_code_viewer(self):
         if self.code_viewer: self.code_viewer.show(); self.code_viewer.raise_(); self.code_viewer.activateWindow()
 
@@ -291,7 +345,7 @@ class AvAApplication(QObject):
     def _on_workflow_completed(self, result: dict):
         self.logger.info(f"[OK] Workflow completed (app signal): {result.get('project_name', 'N/A')}")
         for wf_id, wf_data in self.active_workflows.items():
-            if wf_data["status"] == "running": # Assuming only one runs at a time for this logic
+            if wf_data["status"] == "running":  # Assuming only one runs at a time for this logic
                 wf_data["status"] = "completed" if result.get("success") else "failed"
                 wf_data["end_time"] = datetime.now()
                 # ... (duration calculation)
@@ -306,7 +360,7 @@ class AvAApplication(QObject):
 
     def _on_rag_status_changed(self, status_text: str, color: str):
         self.logger.info(f"RAG Status Update (internal slot): {status_text} (Color: {color})")
-        self.rag_status_changed.emit(status_text, color) # Re-emit for main_window
+        self.rag_status_changed.emit(status_text, color)  # Re-emit for main_window
 
     def _on_rag_upload_completed(self, collection_id: str, files_processed: int):
         msg = f"RAG: {files_processed} files added to {collection_id}"
@@ -317,27 +371,34 @@ class AvAApplication(QObject):
         self.current_config.update(config_updates)
         self.logger.info(f"Configuration updated: {config_updates}")
         if self.main_window and hasattr(self.main_window, '_update_initial_ui_status'):
-             self.main_window._update_initial_ui_status()
+            self.main_window._update_initial_ui_status()
 
     def create_new_project_dialog(self):
         self.logger.info("Request to create a new project received.")
         if self.terminal_window: self.terminal_window.log("✨ New Project creation requested.")
         from PySide6.QtWidgets import QFileDialog
         if self.main_window:
-            project_dir = QFileDialog.getExistingDirectory(self.main_window, "Create or Select Project Directory", str(self.workspace_dir))
+            project_dir = QFileDialog.getExistingDirectory(self.main_window, "Create or Select Project Directory",
+                                                           str(self.workspace_dir))
             if project_dir:
                 project_path = Path(project_dir)
                 self.current_project = project_path.name
                 self.logger.info(f"New project selected/created at: {project_path}")
-                if hasattr(self.main_window, 'update_project_display'): self.main_window.update_project_display(self.current_project)
-                self.project_loaded.emit(str(project_path)) # Ensure this signal is connected if used
-            else: self.logger.info("New project creation cancelled by user.")
+                if hasattr(self.main_window, 'update_project_display'): self.main_window.update_project_display(
+                    self.current_project)
+                self.project_loaded.emit(str(project_path))  # Ensure this signal is connected if used
+            else:
+                self.logger.info("New project creation cancelled by user.")
 
     def shutdown(self):
         self.logger.info("Shutting down AvA Application...")
+
+        # NEW: Stop performance monitoring
+        if self.performance_timer:
+            self.performance_timer.stop()
+
         # Add proper async shutdown for RAG if needed
         if self.main_window: self.main_window.close()
         if self.terminal_window: self.terminal_window.close()
         if self.code_viewer: self.code_viewer.close()
         self.logger.info("AvA Application shutdown complete.")
-

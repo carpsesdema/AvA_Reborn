@@ -1,12 +1,15 @@
-# core/llm_client.py - LLM API calls ONLY
+# core/llm_client.py - Enhanced with Streaming Support
 
 import os
 import requests
+import json
+import asyncio
+from typing import AsyncGenerator, Optional
 
 
 class LLMClient:
     """
-    SINGLE RESPONSIBILITY: Handle LLM API calls
+    SINGLE RESPONSIBILITY: Handle LLM API calls with streaming support
     Does NOT handle workflow, UI, file operations, or other logic
     """
 
@@ -17,7 +20,7 @@ class LLMClient:
 
     def chat(self, prompt: str) -> str:
         """
-        Send prompt to LLM and return response
+        Send prompt to LLM and return complete response (synchronous)
         Tries Gemini first (user preference), then fallbacks
         """
 
@@ -47,8 +50,45 @@ class LLMClient:
         # No LLM available
         return self._fallback_response(prompt)
 
+    async def stream_chat(self, prompt: str) -> AsyncGenerator[str, None]:
+        """
+        Stream response from LLM token by token (asynchronous generator)
+        Tries same fallback order as chat()
+        """
+
+        # Try Gemini streaming first
+        if self.gemini_key:
+            async for chunk in self._stream_gemini(prompt):
+                if chunk:
+                    yield chunk
+            return
+
+        # Try OpenAI streaming
+        if self.openai_key:
+            async for chunk in self._stream_openai(prompt):
+                if chunk:
+                    yield chunk
+            return
+
+        # Try Anthropic streaming
+        if self.anthropic_key:
+            async for chunk in self._stream_anthropic(prompt):
+                if chunk:
+                    yield chunk
+            return
+
+        # Try Ollama streaming
+        async for chunk in self._stream_ollama(prompt):
+            if chunk:
+                yield chunk
+            return
+
+        # Fallback: yield complete response as single chunk
+        fallback_response = self._fallback_response(prompt)
+        yield fallback_response
+
     def _call_gemini(self, prompt: str) -> str:
-        """Call Gemini API"""
+        """Call Gemini API (synchronous)"""
         try:
             response = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key}",
@@ -79,8 +119,29 @@ class LLMClient:
             print(f"Gemini failed: {e}")
             return None
 
+    async def _stream_gemini(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream from Gemini API"""
+        try:
+            # Gemini doesn't have true streaming in their REST API yet
+            # So we simulate streaming by chunking the response
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, self._call_gemini, prompt
+            )
+
+            if response:
+                # Simulate streaming by yielding chunks
+                words = response.split()
+                for i in range(0, len(words), 3):  # 3 words per chunk
+                    chunk = " ".join(words[i:i + 3]) + " "
+                    yield chunk
+                    await asyncio.sleep(0.05)  # Small delay for streaming effect
+
+        except Exception as e:
+            print(f"Gemini streaming failed: {e}")
+            return
+
     def _call_openai(self, prompt: str) -> str:
-        """Call OpenAI API"""
+        """Call OpenAI API (synchronous)"""
         try:
             response = requests.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -106,8 +167,51 @@ class LLMClient:
             print(f"OpenAI failed: {e}")
             return None
 
+    async def _stream_openai(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream from OpenAI API"""
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.openai_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": 0.1,
+                            "stream": True
+                        }
+                ) as response:
+                    async for line in response.content:
+                        line = line.decode('utf-8').strip()
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk_data = json.loads(data)
+                                if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                                    delta = chunk_data["choices"][0].get("delta", {})
+                                    if "content" in delta:
+                                        yield delta["content"]
+                            except json.JSONDecodeError:
+                                continue
+
+        except Exception as e:
+            print(f"OpenAI streaming failed: {e}")
+            # Fallback to non-streaming
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, self._call_openai, prompt
+            )
+            if response:
+                yield response
+
     def _call_anthropic(self, prompt: str) -> str:
-        """Call Anthropic API"""
+        """Call Anthropic API (synchronous)"""
         try:
             response = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -134,8 +238,29 @@ class LLMClient:
             print(f"Anthropic failed: {e}")
             return None
 
+    async def _stream_anthropic(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream from Anthropic API"""
+        try:
+            # Anthropic streaming implementation would go here
+            # For now, fallback to chunked response
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, self._call_anthropic, prompt
+            )
+
+            if response:
+                # Simulate streaming by chunking
+                words = response.split()
+                for i in range(0, len(words), 4):  # 4 words per chunk
+                    chunk = " ".join(words[i:i + 4]) + " "
+                    yield chunk
+                    await asyncio.sleep(0.03)
+
+        except Exception as e:
+            print(f"Anthropic streaming failed: {e}")
+            return
+
     def _call_ollama(self, prompt: str) -> str:
-        """Call local Ollama API"""
+        """Call local Ollama API (synchronous)"""
         try:
             response = requests.post(
                 "http://localhost:11434/api/generate",
@@ -155,6 +280,39 @@ class LLMClient:
         except Exception as e:
             print(f"Ollama failed: {e}")
             return None
+
+    async def _stream_ollama(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream from Ollama API"""
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "qwen2.5-coder",
+                            "prompt": prompt,
+                            "stream": True
+                        }
+                ) as response:
+                    async for line in response.content:
+                        try:
+                            data = json.loads(line.decode('utf-8'))
+                            if "response" in data:
+                                yield data["response"]
+                            if data.get("done", False):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+
+        except Exception as e:
+            print(f"Ollama streaming failed: {e}")
+            # Fallback to non-streaming
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, self._call_ollama, prompt
+            )
+            if response:
+                yield response
 
     def _fallback_response(self, prompt: str) -> str:
         """Fallback response when no LLM is available"""
