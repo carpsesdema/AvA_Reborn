@@ -1,18 +1,17 @@
-# core/workflow_engine.py - Updated with Modular Services - ASYNC GENERATOR FIXED
+# core/workflow_engine.py - FIXED & OPTIMIZED for Smooth Operation
 
 import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal, QTimer
 
 from core.workflow_services import (
     PlannerService, CoderService, WorkflowOrchestrator
 )
-from core.assembler_service import AssemblerService  # Import the separate assembler
+from core.assembler_service import AssemblerService
 
 
-# Keep the existing ContextCache class
 class ContextCache:
     """Smart context cache for RAG results with ranking and pruning"""
 
@@ -74,21 +73,8 @@ class ContextCache:
         }
 
 
-class StreamingWorkflowThread(QThread):
-    """Async workflow thread for streaming execution"""
-
-    def __init__(self, workflow_engine, user_prompt):
-        super().__init__()
-        self.workflow_engine = workflow_engine
-        self.user_prompt = user_prompt
-
-    def run(self):
-        # Run async workflow in thread
-        asyncio.run(self.workflow_engine._execute_enhanced_workflow_async(self.user_prompt))
-
-
 class WorkflowEngine(QObject):
-    """🎼 Main Workflow Engine - Now with Modular Services"""
+    """🎼 Main Workflow Engine - OPTIMIZED for Smooth Streaming & Responsiveness"""
 
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
@@ -108,13 +94,13 @@ class WorkflowEngine(QObject):
         # Initialize modular AI services
         self.planner_service = PlannerService(llm_client, rag_manager)
         self.coder_service = CoderService(llm_client, rag_manager)
-        self.assembler_service = AssemblerService(llm_client, rag_manager)  # Use separate assembler
+        self.assembler_service = AssemblerService(llm_client, rag_manager)
 
         # Create orchestrator with the separate assembler
         self.orchestrator = WorkflowOrchestrator(
             self.planner_service,
             self.coder_service,
-            self.assembler_service,  # Pass the separate assembler
+            self.assembler_service,
             terminal_window
         )
 
@@ -128,6 +114,10 @@ class WorkflowEngine(QObject):
             "total_tasks": 0,
             "completed_tasks": 0
         }
+
+        # OPTIMIZATION: Add workflow task tracking
+        self.current_workflow_task = None
+        self.workflow_active = False
 
         self._connect_code_viewer()
         self._log_service_info()
@@ -152,10 +142,16 @@ class WorkflowEngine(QObject):
             self.terminal.log(f"   📄 Assembler: {assignments.get('assembler', 'Not assigned')}")
 
     def execute_workflow(self, user_prompt: str):
-        """Execute the enhanced modular workflow"""
+        """FIXED: Execute the enhanced modular workflow with proper async handling"""
+
         # Validation
         if not self._is_build_request(user_prompt):
             self.terminal.log(f"⚠️ Skipping workflow - not a build request: '{user_prompt}'")
+            return
+
+        # Check if workflow is already running
+        if self.workflow_active:
+            self.terminal.log("⚠️ Workflow already running - please wait for completion")
             return
 
         self.terminal.log("🚀 Starting Enhanced Modular Workflow...")
@@ -171,6 +167,7 @@ class WorkflowEngine(QObject):
             self.terminal.log("⚠️ RAG system not ready - using base knowledge")
 
         self.workflow_started.emit(user_prompt)
+        self.workflow_active = True
 
         # Reset workflow state
         self.current_workflow_state = {
@@ -180,38 +177,83 @@ class WorkflowEngine(QObject):
             "completed_tasks": 0
         }
 
-        # Use streaming workflow thread
-        self.workflow_thread = StreamingWorkflowThread(self, user_prompt)
-        self.workflow_thread.start()
+        # FIXED: Use asyncio.create_task instead of QThread
+        # This runs in the main qasync event loop, avoiding event loop conflicts
+        try:
+            self.current_workflow_task = asyncio.create_task(
+                self._execute_enhanced_workflow_async(user_prompt)
+            )
+        except Exception as e:
+            self.terminal.log(f"❌ Failed to start workflow task: {e}")
+            self.workflow_active = False
+            self._update_workflow_stage("error", f"Failed to start: {e}")
 
     async def _execute_enhanced_workflow_async(self, user_prompt: str):
-        """Enhanced async workflow with modular services - FIXED ASYNC GENERATOR ISSUE"""
+        """Enhanced async workflow with modular services - OPTIMIZED for smooth execution"""
         try:
             # Update workflow stage
             self._update_workflow_stage("planning", "Initializing modular services...")
 
+            # OPTIMIZATION: Add small delays to allow UI updates
+            await asyncio.sleep(0.1)
+
             # Execute workflow using orchestrator
             self._update_workflow_stage("generation", "Processing files in parallel...")
+            await asyncio.sleep(0.1)  # Allow UI to update
+
             result = await self.orchestrator.execute_workflow(user_prompt, self.output_dir)
 
             # Stage 4: Project finalization
             if result["success"]:
                 self._update_workflow_stage("finalization", "Setting up code viewer...")
+                await asyncio.sleep(0.1)  # Allow UI to update
                 self._setup_code_viewer_project(result)
 
             self._update_workflow_stage("complete", "Modular workflow completed!")
             self.terminal.log("✅ Enhanced modular workflow completed successfully!")
+
+            # OPTIMIZATION: Emit completion signal after small delay
+            await asyncio.sleep(0.1)
             self.workflow_completed.emit(result)
 
-        except Exception as e:
-            self._update_workflow_stage("error", f"Workflow failed: {e}")
-            self.terminal.log(f"❌ Enhanced workflow failed: {e}")
-            # Log the full traceback for debugging
-            import traceback
-            self.terminal.log(f"❌ Full error traceback: {traceback.format_exc()}")
-
-            error_result = {"success": False, "error": str(e)}
+        except asyncio.CancelledError:
+            self.terminal.log("⚠️ Workflow was cancelled")
+            self._update_workflow_stage("cancelled", "Workflow cancelled by user")
+            error_result = {"success": False, "error": "Workflow cancelled", "cancelled": True}
             self.workflow_completed.emit(error_result)
+
+        except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+
+            self.terminal.log(f"❌ Enhanced workflow failed: {e}")
+            self.terminal.log("📝 Full error traceback:")
+            # Split traceback into lines for better terminal display
+            for line in error_traceback.split('\n'):
+                if line.strip():
+                    self.terminal.log(f"   {line}")
+
+            self._update_workflow_stage("error", f"Workflow failed: {e}")
+            error_result = {
+                "success": False,
+                "error": str(e),
+                "traceback": error_traceback
+            }
+            self.workflow_completed.emit(error_result)
+
+        finally:
+            # OPTIMIZATION: Always clean up workflow state
+            self.workflow_active = False
+            self.current_workflow_task = None
+
+    def cancel_workflow(self):
+        """OPTIMIZATION: Allow users to cancel running workflows"""
+        if self.current_workflow_task and not self.current_workflow_task.done():
+            self.terminal.log("🛑 Cancelling workflow...")
+            self.current_workflow_task.cancel()
+            self.workflow_active = False
+            return True
+        return False
 
     def _is_build_request(self, prompt: str) -> bool:
         """Determine if this is actually a request to build something"""
@@ -252,29 +294,52 @@ class WorkflowEngine(QObject):
         self.terminal.log(f"📋 {description}")
 
     def _setup_code_viewer_project(self, result: dict):
-        if result["success"] and self.code_viewer:
-            self.code_viewer.load_project(result["project_dir"])
+        """OPTIMIZATION: Smooth code viewer setup with error handling"""
+        if not result.get("success") or not self.code_viewer:
+            return
 
-            main_files = ["main.py", "app.py", "__init__.py"]
-            project_path = Path(result["project_dir"])
+        try:
+            project_dir = result.get("project_dir")
+            if not project_dir:
+                self.terminal.log("⚠️ No project directory in result")
+                return
+
+            self.code_viewer.load_project(project_dir)
+            self.terminal.log(f"📂 Code viewer loaded project: {Path(project_dir).name}")
+
+            # OPTIMIZATION: Find and open the most likely main file
+            main_files = ["main.py", "app.py", "calculator.py", "__init__.py", "gui.py"]
+            project_path = Path(project_dir)
 
             for main_file in main_files:
                 main_path = project_path / main_file
                 if main_path.exists():
                     self.code_viewer.auto_open_file(str(main_path))
+                    self.terminal.log(f"📄 Opened main file: {main_file}")
                     break
+            else:
+                # If no main file found, open the first Python file
+                py_files = list(project_path.glob("*.py"))
+                if py_files:
+                    self.code_viewer.auto_open_file(str(py_files[0]))
+                    self.terminal.log(f"📄 Opened file: {py_files[0].name}")
 
-            self.project_loaded.emit(result["project_dir"])
+            self.project_loaded.emit(project_dir)
+
+        except Exception as e:
+            self.terminal.log(f"⚠️ Error setting up code viewer: {e}")
 
     def _on_file_changed(self, file_path: str, content: str):
+        """Handle file changes in code viewer"""
         self.terminal.log(f"📝 File modified: {Path(file_path).name}")
 
     def get_workflow_stats(self) -> Dict:
         """Get current workflow statistics"""
         cache_stats = self.context_cache.get_stats()
         return {
-            "workflow_state": self.current_workflow_state,
+            "workflow_state": self.current_workflow_state.copy(),
             "cache_stats": cache_stats,
+            "workflow_active": self.workflow_active,
             "services": {
                 "planner": "ModularPlannerService",
                 "coder": "ParallelCoderService",
@@ -282,3 +347,20 @@ class WorkflowEngine(QObject):
                 "orchestrator": "ParallelWorkflowOrchestrator"
             }
         }
+
+    def is_workflow_running(self) -> bool:
+        """OPTIMIZATION: Check if workflow is currently running"""
+        return self.workflow_active and (
+                self.current_workflow_task is not None and
+                not self.current_workflow_task.done()
+        )
+
+    def get_workflow_status(self) -> str:
+        """OPTIMIZATION: Get human-readable workflow status"""
+        if not self.workflow_active:
+            return "Idle"
+        elif self.current_workflow_task and self.current_workflow_task.done():
+            return "Completed"
+        else:
+            stage = self.current_workflow_state.get("stage", "unknown")
+            return stage.title()

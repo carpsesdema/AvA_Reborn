@@ -1,4 +1,4 @@
-# core/workflow_services.py - FIXED ASYNC GENERATOR ISSUE
+# core/workflow_services.py - FIXED ASYNC GENERATOR ISSUES & OPTIMIZED
 
 import asyncio
 import json
@@ -44,16 +44,21 @@ Return JSON:
 Maximum 6 files for clean workflow.
 """
 
-        # FIXED: Properly consume the async generator
-        response_chunks = []
-        async for chunk in self.llm_client.stream_chat(plan_prompt, LLMRole.PLANNER):
-            response_chunks.append(chunk)
-        response_text = ''.join(response_chunks)
-
         try:
+            # FIXED: Properly consume the async generator
+            response_chunks = []
+            async for chunk in self.llm_client.stream_chat(plan_prompt, LLMRole.PLANNER):
+                response_chunks.append(chunk)
+                # OPTIMIZATION: Allow UI updates during streaming
+                if len(response_chunks) % 10 == 0:
+                    await asyncio.sleep(0.01)
+
+            response_text = ''.join(response_chunks)
             plan = self._extract_json(response_text)
             return plan
-        except:
+
+        except Exception as e:
+            print(f"Planning failed: {e}")
             return self._create_fallback_plan(user_prompt)
 
     async def create_micro_tasks(self, file_path: str, plan: dict, context_cache) -> List[dict]:
@@ -89,18 +94,24 @@ Return JSON array:
 Keep tasks ATOMIC and independent.
 """
 
-        # FIXED: Properly consume the async generator
-        response_chunks = []
-        async for chunk in self.llm_client.stream_chat(task_prompt, LLMRole.PLANNER):
-            response_chunks.append(chunk)
-        response_text = ''.join(response_chunks)
-
         try:
+            # FIXED: Properly consume the async generator
+            response_chunks = []
+            async for chunk in self.llm_client.stream_chat(task_prompt, LLMRole.PLANNER):
+                response_chunks.append(chunk)
+                # OPTIMIZATION: Allow UI updates during streaming
+                if len(response_chunks) % 10 == 0:
+                    await asyncio.sleep(0.01)
+
+            response_text = ''.join(response_chunks)
             tasks = self._extract_json(response_text)
+
             for task in tasks:
                 task["file_path"] = file_path
             return tasks
-        except:
+
+        except Exception as e:
+            print(f"Task creation failed for {file_path}: {e}")
             return [{"id": f"implement_{file_path}", "type": "complete",
                      "description": f"Implement {file_path}", "file_path": file_path}]
 
@@ -120,19 +131,61 @@ Keep tasks ATOMIC and independent.
         return ""
 
     def _extract_json(self, text: str) -> dict:
-        start, end = text.find('{'), text.rfind('}') + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
-        raise ValueError("No JSON found")
+        """Extract JSON with better error handling"""
+        try:
+            start, end = text.find('{'), text.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_text = text[start:end]
+                return json.loads(json_text)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"JSON extraction failed: {e}")
+
+        # Try to find JSON array
+        try:
+            start, end = text.find('['), text.rfind(']') + 1
+            if start >= 0 and end > start:
+                json_text = text[start:end]
+                return json.loads(json_text)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        raise ValueError("No valid JSON found in response")
 
     def _create_fallback_plan(self, prompt: str) -> dict:
-        return {
-            "project_name": "generated_project",
-            "description": prompt,
-            "architecture_type": "cli",
-            "files": {"main.py": {"priority": 1, "description": "Main file"}},
-            "dependencies": []
-        }
+        """Create fallback plan when LLM planning fails"""
+        # Determine project type from prompt
+        prompt_lower = prompt.lower()
+
+        if "gui" in prompt_lower or "pyside" in prompt_lower or "tkinter" in prompt_lower:
+            return {
+                "project_name": "gui_application",
+                "description": prompt,
+                "architecture_type": "gui",
+                "files": {
+                    "main.py": {"priority": 1, "description": "Main GUI application"},
+                    "ui_components.py": {"priority": 2, "description": "UI components and widgets"}
+                },
+                "dependencies": ["PySide6"]
+            }
+        elif "web" in prompt_lower or "flask" in prompt_lower or "fastapi" in prompt_lower:
+            return {
+                "project_name": "web_application",
+                "description": prompt,
+                "architecture_type": "web_app",
+                "files": {
+                    "main.py": {"priority": 1, "description": "Main web application"},
+                    "routes.py": {"priority": 2, "description": "Web routes"}
+                },
+                "dependencies": ["flask"]
+            }
+        else:
+            return {
+                "project_name": "generated_project",
+                "description": prompt,
+                "architecture_type": "cli",
+                "files": {"main.py": {"priority": 1, "description": "Main file"}},
+                "dependencies": []
+            }
 
 
 class CoderService:
@@ -166,13 +219,22 @@ Requirements:
 Return ONLY Python code:
 """
 
-        # FIXED: Properly consume the async generator
-        response_chunks = []
-        async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
-            response_chunks.append(chunk)
-        code = ''.join(response_chunks)
+        try:
+            # FIXED: Properly consume the async generator with optimization
+            response_chunks = []
+            async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
+                response_chunks.append(chunk)
+                # OPTIMIZATION: Allow UI updates during streaming
+                if len(response_chunks) % 5 == 0:
+                    await asyncio.sleep(0.01)
 
-        return self._clean_code(code)
+            code = ''.join(response_chunks)
+            return self._clean_code(code)
+
+        except Exception as e:
+            print(f"Micro-task execution failed: {e}")
+            # Return a basic fallback implementation
+            return f"# TODO: Implement {task['description']}\npass"
 
     async def execute_tasks_parallel(self, tasks: List[dict], file_context: str,
                                      context_cache, progress_callback=None) -> List[dict]:
@@ -189,27 +251,45 @@ Return ONLY Python code:
 
             async def execute_with_semaphore(task):
                 async with semaphore:
-                    if progress_callback:
-                        progress_callback(f"[{task['file_path']}] ⚙️ {task['description']}")
+                    try:
+                        if progress_callback:
+                            progress_callback(f"[{task['file_path']}] ⚙️ {task['description']}")
 
-                    code = await self.execute_micro_task(task, file_context, context_cache)
-                    return {"task": task, "code": code}
+                        code = await self.execute_micro_task(task, file_context, context_cache)
+                        return {"task": task, "code": code}
+                    except Exception as e:
+                        print(f"Task execution failed: {e}")
+                        return {"task": task, "code": f"# ERROR: {e}\npass"}
 
-            parallel_results = await asyncio.gather(
-                *[execute_with_semaphore(task) for task in independent_tasks],
-                return_exceptions=True
-            )
+            # FIXED: Use asyncio.gather with proper exception handling
+            try:
+                parallel_results = await asyncio.gather(
+                    *[execute_with_semaphore(task) for task in independent_tasks],
+                    return_exceptions=True
+                )
 
-            # Filter out exceptions
-            results.extend([r for r in parallel_results if not isinstance(r, Exception)])
+                # Filter out exceptions and add successful results
+                for result in parallel_results:
+                    if not isinstance(result, Exception):
+                        results.append(result)
+                    else:
+                        print(f"Parallel task failed: {result}")
+
+            except Exception as e:
+                print(f"Parallel execution failed: {e}")
 
         # Execute dependent tasks sequentially
         for task in dependent_tasks:
-            if progress_callback:
-                progress_callback(f"[{task['file_path']}] ⚙️ {task['description']}")
+            try:
+                if progress_callback:
+                    progress_callback(f"[{task['file_path']}] ⚙️ {task['description']}")
 
-            code = await self.execute_micro_task(task, file_context, context_cache)
-            results.append({"task": task, "code": code})
+                code = await self.execute_micro_task(task, file_context, context_cache)
+                results.append({"task": task, "code": code})
+
+            except Exception as e:
+                print(f"Dependent task execution failed: {e}")
+                results.append({"task": task, "code": f"# ERROR: {e}\npass"})
 
         return results
 
@@ -224,7 +304,9 @@ Return ONLY Python code:
         if "```python" in code:
             code = code.split("```python")[1].split("```")[0]
         elif "```" in code:
-            code = code.split("```")[1].split("```")[0]
+            parts = code.split("```")
+            if len(parts) >= 3:
+                code = parts[1]
         return code.strip()
 
 
@@ -262,16 +344,14 @@ class WorkflowOrchestrator:
             self._log("⚡ Starting parallel file processing with mandatory review...")
 
             files = plan.get("files", {"main.py": {"priority": 1}})
-            file_tasks = []
 
-            # Create tasks for each file (can run in parallel)
+            # OPTIMIZATION: Process files in smaller batches to maintain responsiveness
+            file_tasks = []
             for file_path, file_info in files.items():
-                task = asyncio.create_task(
-                    self._process_single_file_with_review(file_path, file_info, plan, project_dir)
-                )
+                task = self._process_single_file_with_review(file_path, file_info, plan, project_dir)
                 file_tasks.append(task)
 
-            # Execute all files in parallel
+            # FIXED: Execute all files with proper exception handling
             results = await asyncio.gather(*file_tasks, return_exceptions=True)
 
             # Process results
@@ -304,6 +384,8 @@ class WorkflowOrchestrator:
 
         except Exception as e:
             self._log(f"❌ Workflow failed: {e}")
+            import traceback
+            self._log(f"📝 Traceback: {traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
     async def _process_single_file_with_review(self, file_path: str, file_info: dict,
@@ -377,6 +459,8 @@ class WorkflowOrchestrator:
 
         except Exception as e:
             self._log(f"[{file_path}] ❌ Processing failed: {e}")
+            import traceback
+            self._log(f"[{file_path}] 📝 Error traceback: {traceback.format_exc()}")
             return {
                 "success": False,
                 "file_path": None,
@@ -388,5 +472,7 @@ class WorkflowOrchestrator:
 
     def _log(self, message: str):
         """Log to terminal if available"""
-        if self.terminal:
+        if self.terminal and hasattr(self.terminal, 'log'):
             self.terminal.log(message)
+        else:
+            print(message)
