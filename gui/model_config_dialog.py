@@ -105,7 +105,7 @@ class RoleConfigSection(QFrame):
                 outline: none;
             }
         """)
-        self.model_combo.currentTextChanged.connect(self.config_changed.emit)
+        self.model_combo.currentTextChanged.connect(lambda: self.config_changed.emit())
 
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo, 1)
@@ -157,7 +157,7 @@ class RoleConfigSection(QFrame):
             }
         """)
         self.temp_slider.valueChanged.connect(self._on_temperature_changed)
-        self.temp_slider.valueChanged.connect(self.config_changed.emit)
+        self.temp_slider.valueChanged.connect(lambda: self.config_changed.emit())
 
         layout.addWidget(self.temp_slider)
 

@@ -1,4 +1,4 @@
-# gui/main_window.py - Enhanced with Model Configuration Dialog
+# gui/main_window.py - Enhanced with Model Configuration Dialog - FIXED
 
 import asyncio
 import inspect
@@ -270,7 +270,7 @@ class AvAMainWindow(QMainWindow):
         dialog.exec()
 
     def _on_model_configuration_applied(self, new_config: dict):
-        """NEW: Handle when model configuration is applied"""
+        """NEW: Handle when model configuration is applied - FIXED"""
         # Update the sidebar display with new configuration
         if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
             assignments = self.ava_app.llm_client.get_role_assignments()
@@ -283,11 +283,13 @@ class AvAMainWindow(QMainWindow):
                     if model_config:
                         display_name = f"{model_config.provider}/{model_config.model}"
 
-                        if role.value == "planner":
+                        # FIXED: Handle both string and enum roles
+                        role_name = role if isinstance(role, str) else role.value
+                        if role_name == "planner":
                             config_summary['planner'] = display_name
-                        elif role.value == "coder":
+                        elif role_name == "coder":
                             config_summary['coder'] = display_name
-                        elif role.value == "assembler":
+                        elif role_name == "assembler":
                             config_summary['assembler'] = display_name
 
             # Update sidebar display
@@ -480,7 +482,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         self.chat_interface.update_specialists_status(specialists_text, specialists_status)
 
     def _update_model_config_display(self):
-        """NEW: Update model configuration display in sidebar"""
+        """NEW: Update model configuration display in sidebar - FIXED"""
         if not (self.ava_app and self.ava_app.llm_client):
             return
 
@@ -494,11 +496,13 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                     if model_config:
                         display_name = f"{model_config.provider}/{model_config.model}"
 
-                        if role.value == "planner":
+                        # FIXED: Handle both string and enum roles
+                        role_name = role if isinstance(role, str) else role.value
+                        if role_name == "planner":
                             config_summary['planner'] = display_name
-                        elif role.value == "coder":
+                        elif role_name == "coder":
                             config_summary['coder'] = display_name
-                        elif role.value == "assembler":
+                        elif role_name == "assembler":
                             config_summary['assembler'] = display_name
 
             self.sidebar.update_model_status_display(config_summary)
