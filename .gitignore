@@ -6,3 +6,10 @@ __pycache__/
 /rag_data/
 /logs/
 /generated_projects/
+/.idea/AvA_Reborn.iml
+/.idea/.gitignore
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/vcs.xml

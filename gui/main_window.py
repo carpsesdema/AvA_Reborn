@@ -249,6 +249,15 @@ class AvAMainWindow(QMainWindow):
         self.sidebar.temperature_changed.connect(self._on_temperature_changed)
         self.sidebar.model_changed.connect(self._on_model_changed)
 
+        # FIXED: Connect RAG panel buttons directly
+        if hasattr(self.sidebar, 'rag_panel'):
+            if hasattr(self.sidebar.rag_panel, 'scan_btn'):
+                self.sidebar.rag_panel.scan_btn.clicked.connect(self._handle_rag_scan_directory)
+            # If you reinstate the "Add Files" button in enhanced_sidebar.py, connect it here:
+            # if hasattr(self.sidebar.rag_panel, 'add_files_btn'):
+            #     self.sidebar.rag_panel.add_files_btn.clicked.connect(self._handle_rag_add_files)
+
+
     def handle_user_message(self, message: str):
         """
         Handle user messages - decide between casual chat vs workflow
@@ -447,6 +456,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             self._update_chat_llm_status()
 
     def _handle_sidebar_action(self, action: str):
+        """Handles actions from the ChatActionsPanel in the sidebar."""
         if not self.ava_app:
             print(f"AvAApp not available to handle action: {action}")
             return
@@ -462,16 +472,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                 self.ava_app.current_session = "New Session"
             self.update_project_display(
                 self.ava_app.current_project if hasattr(self.ava_app, 'current_project') else "Default Project")
-        elif action == "scan_directory":
-            if self.ava_app.rag_manager:
-                self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
-            else:
-                self.chat_interface.chat_display.add_assistant_message("RAG Manager not available for scanning.")
-        elif action == "add_files":
-            if self.ava_app.rag_manager:
-                self.ava_app.rag_manager.add_files_dialog(parent_widget=self)
-            else:
-                self.chat_interface.chat_display.add_assistant_message("RAG Manager not available for adding files.")
+        # Note: RAG actions like "scan_directory" are now handled by direct connections
         elif action == "force_gen":
             self.chat_interface.chat_display.add_assistant_message(
                 "Force code generation triggered (logic to be implemented).")
@@ -479,7 +480,24 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             self.chat_interface.chat_display.add_assistant_message(
                 "Checking for updates (feature not yet implemented).")
         else:
-            print(f"Unknown sidebar action: {action}")
+            print(f"Unknown sidebar action from ChatActionsPanel: {action}")
+
+    # NEW: Handler for RAG Scan Directory button
+    def _handle_rag_scan_directory(self):
+        if self.ava_app and self.ava_app.rag_manager:
+            self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
+            # Optional: Add feedback to the user in the chat or terminal
+            # self.chat_interface.chat_display.add_assistant_message("Opening RAG directory scan dialog...")
+        else:
+            self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to scan directory.")
+
+    # NEW: Handler for RAG Add Files button (if you reinstate it)
+    # def _handle_rag_add_files(self):
+    #     if self.ava_app and self.ava_app.rag_manager:
+    #         self.ava_app.rag_manager.add_files_dialog(parent_widget=self)
+    #     else:
+    #         self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to add files.")
+
 
     @Slot(str)
     def on_workflow_started(self, prompt: str):
