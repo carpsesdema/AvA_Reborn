@@ -88,85 +88,17 @@ class StyledPanel(QFrame):
             self.collapse_btn.setText("+" if self.is_collapsed else "−")
 
 
-class ProjectSessionPanel(StyledPanel):
-    project_changed = Signal(str)
-    session_changed = Signal(str)
+class ProjectControlPanel(StyledPanel):
+    """Panel for the New Project button"""
+    new_project_clicked = Signal()
 
     def __init__(self):
-        super().__init__(title="", collapsible=False)
+        super().__init__(title="Project Management", collapsible=False) # Can be collapsible if desired
         self._init_ui()
 
     def _init_ui(self):
-        # Compact tab buttons
-        tab_layout = QHBoxLayout()
-        tab_layout.setContentsMargins(0, 0, 0, 8)  # Less spacing
-        tab_layout.setSpacing(6)
-
-        self.projects_btn = QPushButton("Projects")
-        self.sessions_btn = QPushButton("Sessions")
-
-        for btn in [self.projects_btn, self.sessions_btn]:
-            btn.setMinimumHeight(28)  # Smaller height
-            btn.setCheckable(True)
-
-        self.projects_btn.setChecked(True)
-        self._update_tab_styles()
-
-        self.projects_btn.clicked.connect(self._switch_to_projects)
-        self.sessions_btn.clicked.connect(self._switch_to_sessions)
-
-        tab_layout.addWidget(self.projects_btn)
-        tab_layout.addWidget(self.sessions_btn)
-        self.add_layout(tab_layout)
-
-        # Compact projects section
-        projects_label = QLabel("Active Projects:")
-        projects_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))  # Smaller font
-        projects_label.setStyleSheet("color: #cccccc; margin: 2px 0;")
-        self.add_widget(projects_label)
-
-        # Compact project list
-        self.project_list = QListWidget()
-        self.project_list.setStyleSheet("""
-            QListWidget {
-                background: #1e1e1e; 
-                border: 1px solid #404040; 
-                border-radius: 4px; 
-                color: #cccccc; 
-                outline: none;
-                padding: 2px;
-                font-size: 11px;
-            }
-            QListWidget::item { 
-                padding: 6px 8px; 
-                border-bottom: 1px solid #2d2d30; 
-                border-radius: 3px; 
-                margin: 1px;
-                min-height: 16px;
-            }
-            QListWidget::item:selected { 
-                background: #00d7ff; 
-                color: #1e1e1e; 
-                font-weight: bold; 
-            }
-            QListWidget::item:hover { 
-                background: #2d2d30; 
-            }
-        """)
-
-        # Add simple text items
-        self.project_list.addItem("Default Project")
-        self.project_list.addItem("Web Scraper")
-        self.project_list.addItem("Discord Bot")
-        self.project_list.setCurrentRow(0)
-
-        # Much smaller list
-        self.project_list.setFixedHeight(80)
-        self.add_widget(self.project_list)
-
-        # Compact New Project button
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        self.new_project_btn.setMinimumHeight(32)  # Smaller button
+        self.new_project_btn.setMinimumHeight(32)
         self.new_project_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -187,74 +119,8 @@ class ProjectSessionPanel(StyledPanel):
                 background: #004578;
             }
         """)
+        self.new_project_btn.clicked.connect(self.new_project_clicked.emit)
         self.add_widget(self.new_project_btn)
-
-        # Compact sessions section
-        sessions_label = QLabel("Sessions (Current Project):")
-        sessions_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
-        sessions_label.setStyleSheet("color: #cccccc; margin: 8px 0 2px 0;")
-        self.add_widget(sessions_label)
-
-        # Compact progress bar
-        self.session_progress = QProgressBar()
-        self.session_progress.setValue(45)
-        self.session_progress.setFixedHeight(6)  # Thinner
-        self.session_progress.setStyleSheet("""
-            QProgressBar {
-                background: #2d2d30;
-                border: none;
-                border-radius: 3px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 3px;
-            }
-        """)
-        self.add_widget(self.session_progress)
-
-        # Compact session list
-        self.session_list = QListWidget()
-        self.session_list.setStyleSheet(self.project_list.styleSheet())
-        self.session_list.addItem("Main Chat")
-        self.session_list.addItem("Code Review")
-        self.session_list.addItem("Bug Fixes")
-        self.session_list.setCurrentRow(0)
-
-        # Small session list
-        self.session_list.setFixedHeight(65)
-        self.add_widget(self.session_list)
-
-    def _update_tab_styles(self):
-        active_style = """
-            QPushButton {
-                background: #00d7ff; color: #1e1e1e; border: 1px solid #00d7ff;
-                border-radius: 5px; padding: 6px 12px; font-weight: bold; font-size: 10px;
-            }
-        """
-        inactive_style = """
-            QPushButton {
-                background: #2d2d30; color: #cccccc; border: 1px solid #404040;
-                border-radius: 5px; padding: 6px 12px; font-weight: 500; font-size: 10px;
-            } QPushButton:hover { background: #3e3e42; color: white; }
-        """
-
-        if self.projects_btn.isChecked():
-            self.projects_btn.setStyleSheet(active_style)
-            self.sessions_btn.setStyleSheet(inactive_style)
-        else:
-            self.sessions_btn.setStyleSheet(active_style)
-            self.projects_btn.setStyleSheet(inactive_style)
-
-    def _switch_to_projects(self):
-        self.projects_btn.setChecked(True)
-        self.sessions_btn.setChecked(False)
-        self._update_tab_styles()
-
-    def _switch_to_sessions(self):
-        self.sessions_btn.setChecked(True)
-        self.projects_btn.setChecked(False)
-        self._update_tab_styles()
 
 
 class LLMConfigPanel(StyledPanel):
@@ -389,12 +255,15 @@ class LLMConfigPanel(StyledPanel):
 
 
 class KnowledgeBasePanel(StyledPanel):
+    # Signal for RAG actions
+    scan_directory_requested = Signal()
+    # add_files_requested = Signal() # If you bring back the add files button
+
     def __init__(self):
-        super().__init__("Knowledge Base (RAG)", collapsible=True, initially_collapsed=False) # Changed initially_collapsed
+        super().__init__("Knowledge Base (RAG)", collapsible=True, initially_collapsed=False)
         self._init_ui()
 
     def _init_ui(self):
-        # Compact buttons
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
         self.scan_btn.setMinimumHeight(26)
         self.scan_btn.setStyleSheet("""
@@ -404,15 +273,9 @@ class KnowledgeBasePanel(StyledPanel):
             }
             QPushButton:hover { background: #3e3e42; border-color: #00d7ff; }
         """)
+        self.scan_btn.clicked.connect(self.scan_directory_requested.emit) # Emit signal
         self.add_widget(self.scan_btn)
 
-        # REMOVED Add Files Button
-        # self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
-        # self.add_files_btn.setMinimumHeight(26)
-        # self.add_files_btn.setStyleSheet(self.scan_btn.styleSheet())
-        # self.add_widget(self.add_files_btn)
-
-        # Compact RAG status
         rag_status_layout = QHBoxLayout()
         rag_status_layout.setContentsMargins(0, 4, 0, 0)
 
@@ -432,7 +295,7 @@ class ChatActionsPanel(StyledPanel):
     action_triggered = Signal(str)
 
     def __init__(self):
-        super().__init__("Chat Actions", collapsible=True, initially_collapsed=False) # Changed initially_collapsed
+        super().__init__("Chat Actions", collapsible=True, initially_collapsed=False)
         self._init_ui()
 
     def _init_ui(self):
@@ -461,9 +324,12 @@ class ChatActionsPanel(StyledPanel):
 
 
 class AvALeftSidebar(QWidget):
+    # Signals from child panels
     model_changed = Signal(str, str)
     temperature_changed = Signal(float)
-    action_triggered = Signal(str)
+    action_triggered = Signal(str) # From ChatActionsPanel
+    new_project_requested = Signal() # From ProjectControlPanel
+    scan_directory_requested = Signal() # From KnowledgeBasePanel
 
     def __init__(self):
         super().__init__()
@@ -473,7 +339,7 @@ class AvALeftSidebar(QWidget):
 
     def _init_ui(self):
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(4, 4, 4, 4)  # Minimal margins
+        main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(0)
 
         scroll_area = QScrollArea()
@@ -497,15 +363,15 @@ class AvALeftSidebar(QWidget):
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(3)  # Minimal spacing
+        content_layout.setSpacing(3)
 
-        # Create compact panels
-        self.project_panel = ProjectSessionPanel()
+        # Create panels
+        self.project_control_panel = ProjectControlPanel() # New panel for "New Project"
         self.llm_panel = LLMConfigPanel()
         self.rag_panel = KnowledgeBasePanel()
         self.actions_panel = ChatActionsPanel()
 
-        content_layout.addWidget(self.project_panel)
+        content_layout.addWidget(self.project_control_panel) # Add new project panel
         content_layout.addWidget(self.llm_panel)
         content_layout.addWidget(self.rag_panel)
         content_layout.addWidget(self.actions_panel)
@@ -524,8 +390,11 @@ class AvALeftSidebar(QWidget):
         """)
 
     def _connect_signals(self):
+        # Connect signals from child panels to the sidebar's own signals
+        self.project_control_panel.new_project_clicked.connect(self.new_project_requested)
         self.llm_panel.model_changed.connect(self.model_changed)
         self.llm_panel.temperature_changed.connect(self.temperature_changed)
+        self.rag_panel.scan_directory_requested.connect(self.scan_directory_requested)
         self.actions_panel.action_triggered.connect(self.action_triggered)
 
     def get_current_models(self):

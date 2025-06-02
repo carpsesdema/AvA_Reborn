@@ -1,7 +1,7 @@
 # gui/main_window.py - Enhanced with Role-Based LLM Support
 
 import asyncio
-import inspect  # FIXED: Added missing import
+import inspect
 
 from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.components import ModernButton, StatusIndicator
-from gui.enhanced_sidebar import AvALeftSidebar
+from gui.enhanced_sidebar import AvALeftSidebar # Uses the updated sidebar
 
 # Import LLMRole for chat functionality
 try:
@@ -189,7 +189,7 @@ class ChatInterface(QWidget):
 
 class AvAMainWindow(QMainWindow):
     workflow_requested = Signal(str)
-    new_project_requested = Signal()
+    new_project_requested = Signal() # This signal is emitted to AvAApplication
 
     def __init__(self, ava_app=None, config=None):
         super().__init__()
@@ -238,24 +238,14 @@ class AvAMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _connect_signals(self):
-        # Connect to handle_user_message instead of directly to workflow_requested
         self.chat_interface.message_sent.connect(self.handle_user_message)
 
+        # Connect signals from the sidebar directly
+        self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
+        self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_directory)
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
-
-        if hasattr(self.sidebar, 'project_panel') and hasattr(self.sidebar.project_panel, 'new_project_btn'):
-            self.sidebar.project_panel.new_project_btn.clicked.connect(self.new_project_requested.emit)
-
         self.sidebar.temperature_changed.connect(self._on_temperature_changed)
         self.sidebar.model_changed.connect(self._on_model_changed)
-
-        # FIXED: Connect RAG panel buttons directly
-        if hasattr(self.sidebar, 'rag_panel'):
-            if hasattr(self.sidebar.rag_panel, 'scan_btn'):
-                self.sidebar.rag_panel.scan_btn.clicked.connect(self._handle_rag_scan_directory)
-            # If you reinstate the "Add Files" button in enhanced_sidebar.py, connect it here:
-            # if hasattr(self.sidebar.rag_panel, 'add_files_btn'):
-            #     self.sidebar.rag_panel.add_files_btn.clicked.connect(self._handle_rag_add_files)
 
 
     def handle_user_message(self, message: str):
@@ -341,8 +331,6 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             # Use CHAT role for casual conversation
             response_chunks = []
 
-            # Check if the LLM client supports role-based chat
-            # FIXED: Use inspect.signature instead of asyncio.signature
             if hasattr(self.ava_app.llm_client, 'stream_chat') and len(
                     inspect.signature(self.ava_app.llm_client.stream_chat).parameters) > 1:
                 # Enhanced LLM client with role support
@@ -472,7 +460,6 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                 self.ava_app.current_session = "New Session"
             self.update_project_display(
                 self.ava_app.current_project if hasattr(self.ava_app, 'current_project') else "Default Project")
-        # Note: RAG actions like "scan_directory" are now handled by direct connections
         elif action == "force_gen":
             self.chat_interface.chat_display.add_assistant_message(
                 "Force code generation triggered (logic to be implemented).")
@@ -482,21 +469,11 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         else:
             print(f"Unknown sidebar action from ChatActionsPanel: {action}")
 
-    # NEW: Handler for RAG Scan Directory button
     def _handle_rag_scan_directory(self):
         if self.ava_app and self.ava_app.rag_manager:
             self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
-            # Optional: Add feedback to the user in the chat or terminal
-            # self.chat_interface.chat_display.add_assistant_message("Opening RAG directory scan dialog...")
         else:
             self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to scan directory.")
-
-    # NEW: Handler for RAG Add Files button (if you reinstate it)
-    # def _handle_rag_add_files(self):
-    #     if self.ava_app and self.ava_app.rag_manager:
-    #         self.ava_app.rag_manager.add_files_dialog(parent_widget=self)
-    #     else:
-    #         self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to add files.")
 
 
     @Slot(str)
@@ -554,9 +531,12 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             from pathlib import Path
             project_name = Path(project_name_or_path).name
 
-        session_name = "Main Chat"
-        if self.ava_app:
-            session_name = self.ava_app.current_session if hasattr(self.ava_app, 'current_session') else "Main Chat"
+        session_name = "Main Chat" # Default session name
+        if self.ava_app and hasattr(self.ava_app, 'current_session'):
+             # Check if AvAApplication exists and has current_session
+            current_session_val = getattr(self.ava_app, 'current_session', None)
+            if current_session_val: # Ensure it's not None or empty
+                session_name = current_session_val
 
         # Enhanced title with AI specialist info
         if self.ava_app and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
@@ -567,5 +547,5 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         else:
             self.setWindowTitle(f"AvA [{project_name}] - Session: {session_name}")
 
-        if hasattr(self.sidebar, 'project_panel'):
-            pass
+        # The project_panel was removed from sidebar, so no need to update it here.
+        # CodeViewerWindow will handle displaying project files.
