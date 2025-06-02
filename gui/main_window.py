@@ -1,15 +1,10 @@
 # gui/main_window.py - Professional Main Window
 
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLineEdit, QLabel, QFrame, QScrollArea,
-    QGroupBox, QSlider, QComboBox, QProgressBar, QListWidget, QListWidgetItem,
-    QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QCheckBox, QSpinBox
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
 )
-from PySide6.QtCore import Qt, Signal, Slot, QTimer, QPropertyAnimation, QEasingCurve, QRect
-from PySide6.QtGui import QFont, QPalette, QColor, QPixmap, QIcon, QPainter, QLinearGradient
 
-from gui.components import ModernButton, ModernPanel, StatusIndicator
 from gui.panels import LLMConfigPanel, ProjectPanel, RAGPanel, ChatActionsPanel, ChatInterface
 
 

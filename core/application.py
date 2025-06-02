@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from windows.chat_window import ChatWindow
 from windows.terminal_window import LLMTerminalWindow
+from windows.code_viewer import CodeViewerWindow  # FIXED: Added missing import
 from core.workflow_engine import WorkflowEngine
 from core.llm_client import LLMClient
 
@@ -126,7 +127,7 @@ class AvAApplication(QObject):
         self.terminal_window = LLMTerminalWindow()
         self.logger.info("Terminal window initialized")
 
-        # Code viewer (file browser/editor)
+        # Code viewer (file browser/editor) - FIXED: Now properly instantiated
         self.code_viewer = CodeViewerWindow()
         self.logger.info("Code viewer initialized")
 
@@ -153,6 +154,10 @@ class AvAApplication(QObject):
         self.workflow_started.connect(self._on_workflow_started)
         self.workflow_completed.connect(self._on_workflow_completed)
         self.error_occurred.connect(self._on_error_occurred)
+
+        # Connect code viewer to workflow for auto-opening generated files
+        if hasattr(self.workflow_engine, 'file_generated'):
+            self.workflow_engine.file_generated.connect(self.code_viewer.auto_open_file)
 
     def _setup_window_behaviors(self):
         """Setup window behaviors and properties"""
@@ -256,6 +261,11 @@ class AvAApplication(QObject):
         # Update UI
         if result.get("success", False):
             self.chat_window.status_label.setText("✅ Workflow completed successfully!")
+
+            # Load the generated project in code viewer
+            if "project_dir" in result:
+                self.code_viewer.load_project(result["project_dir"])
+
             # Open code viewer to show results
             self._open_code_viewer()
         else:

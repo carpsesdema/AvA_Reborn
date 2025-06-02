@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QPushButton, QLabel, QFrame
 )
-from PySide6.QtCore import Qt, pyqtSignal
+from PySide6.QtCore import Qt, Signal  # FIXED: Changed from pyqtSignal to Signal
 from PySide6.QtGui import QFont
 
 
@@ -14,7 +14,7 @@ class ChatWindow(QMainWindow):
     Does NOT handle workflow, LLM calls, or other windows
     """
 
-    workflow_requested = pyqtSignal(str)
+    workflow_requested = Signal(str)  # FIXED: Changed from pyqtSignal to Signal
 
     def __init__(self):
         super().__init__()
