@@ -1,4 +1,4 @@
-# core/workflow_engine.py - Replace your existing file with this
+# core/workflow_engine.py - Enhanced with RAG Integration
 
 import json
 from pathlib import Path
@@ -22,11 +22,12 @@ class WorkflowEngine(QObject):
     file_generated = Signal(str)
     project_loaded = Signal(str)
 
-    def __init__(self, llm_client, terminal_window, code_viewer):
+    def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
         self.llm_client = llm_client
         self.terminal = terminal_window
         self.code_viewer = code_viewer
+        self.rag_manager = rag_manager  # NEW: RAG integration
         self.output_dir = Path("./generated_projects")
         self.output_dir.mkdir(exist_ok=True)
 
@@ -44,6 +45,12 @@ class WorkflowEngine(QObject):
 
         self.terminal.log("🚀 Starting AvA development workflow...")
         self.terminal.log(f"📝 Build request: {user_prompt}")
+
+        # NEW: Check RAG status
+        if self.rag_manager and self.rag_manager.is_ready:
+            self.terminal.log("🧠 RAG system ready - will enhance code generation with knowledge base")
+        else:
+            self.terminal.log("⚠️  RAG system not ready - proceeding without context enhancement")
 
         self.workflow_started.emit(user_prompt)
 
@@ -106,8 +113,22 @@ class WorkflowEngine(QObject):
             self.workflow_completed.emit(error_result)
 
     def _create_plan(self, user_prompt: str) -> dict:
+        # NEW: Get RAG context for planning
+        rag_context = ""
+        if self.rag_manager and self.rag_manager.is_ready:
+            self.terminal.log("  -> Querying RAG for planning context...")
+            rag_context = self.rag_manager.get_context_for_code_generation(
+                f"project planning architecture {user_prompt}", "python"
+            )
+            if rag_context:
+                self.terminal.log(f"  -> RAG context retrieved ({len(rag_context)} chars)")
+            else:
+                self.terminal.log("  -> No relevant RAG context found")
+
         plan_prompt = f"""
 Act as a software architect. Create a detailed plan for: {user_prompt}
+
+{f"Reference Context from Knowledge Base:\n{rag_context}\n" if rag_context else ""}
 
 Return ONLY a JSON structure:
 {{
@@ -158,12 +179,20 @@ Keep it simple but functional - maximum 5 files for a working prototype.
         files_sorted = sorted(plan["files_needed"], key=lambda x: x.get("priority", 999))
 
         for file_info in files_sorted:
+            # NEW: Get file-specific RAG context
+            rag_context = ""
+            if self.rag_manager and self.rag_manager.is_ready:
+                file_query = f"{file_info['purpose']} {file_info['path']} python implementation"
+                rag_context = self.rag_manager.get_context_for_code_generation(file_query, "python")
+
             tasks_prompt = f"""
 Break down this file into atomic micro-tasks for code generation:
 
 File: {file_info['path']}
 Purpose: {file_info['purpose']}
 Project Context: {user_prompt}
+
+{f"Reference Examples from Knowledge Base:\n{rag_context}\n" if rag_context else ""}
 
 Return ONLY a JSON array of micro-tasks:
 [
@@ -173,6 +202,9 @@ Return ONLY a JSON array of micro-tasks:
 """
 
             self.terminal.log(f"  -> Creating micro-tasks for {file_info['path']}")
+            if rag_context:
+                self.terminal.log(f"    -> Using RAG context ({len(rag_context)} chars)")
+
             response = self.llm_client.chat(tasks_prompt)
 
             try:
@@ -183,17 +215,20 @@ Return ONLY a JSON array of micro-tasks:
                     for task in file_tasks:
                         task["file_path"] = file_info["path"]
                         task["file_purpose"] = file_info["purpose"]
+                        task["rag_context"] = rag_context  # Store for later use
                     micro_tasks.extend(file_tasks)
                     self.terminal.log(f"    -> Added {len(file_tasks)} micro-tasks")
                 else:
                     raise ValueError("No JSON array found")
             except Exception as e:
                 self.terminal.log(f"    -> Micro-task parsing failed: {e}")
+                # Fallback task
                 micro_tasks.append({
                     "id": f"implement_{file_info['path']}",
                     "file_path": file_info["path"],
                     "type": "complete_file",
-                    "description": f"Implement complete {file_info['path']}"
+                    "description": f"Implement complete {file_info['path']}",
+                    "rag_context": rag_context
                 })
 
         return micro_tasks
@@ -224,6 +259,9 @@ Return ONLY a JSON array of micro-tasks:
             for task in file_tasks:
                 self.terminal.log(f"  -> Executing: {task['description']}")
 
+                # NEW: Include RAG context in code generation
+                rag_context = task.get("rag_context", "")
+
                 code_prompt = f"""
 Generate Python code for this micro-task:
 
@@ -232,10 +270,15 @@ File: {file_path}
 Context: {code_snippets[file_path] if code_snippets[file_path] else 'First task for this file'}
 Project: {plan['description']}
 
+{f"Reference Examples and Best Practices:\n{rag_context}\n" if rag_context else ""}
+
 Return ONLY Python code, no explanations:
 """
 
                 self.terminal.log(f"    -> Calling Code LLM...")
+                if rag_context:
+                    self.terminal.log(f"    -> Enhanced with RAG context")
+
                 code_response = self.llm_client.chat(code_prompt)
                 code = self._clean_code_response(code_response)
                 code_snippets[file_path] += f"\n# {task['description']}\n{code}\n"
@@ -263,11 +306,19 @@ Return ONLY Python code, no explanations:
         }
 
     def _assemble_final_file(self, file_path: str, code_content: str, plan: dict) -> str:
+        # NEW: Get RAG context for assembly
+        rag_context = ""
+        if self.rag_manager and self.rag_manager.is_ready:
+            assembly_query = f"python file structure organization {file_path} best practices"
+            rag_context = self.rag_manager.get_context_for_code_generation(assembly_query, "python")
+
         assemble_prompt = f"""
 Assemble this code into a complete, working Python file:
 
 File: {file_path}
 Code snippets: {code_content}
+
+{f"Best Practices Reference:\n{rag_context}\n" if rag_context else ""}
 
 Requirements:
 - Organize imports at the top
@@ -280,6 +331,9 @@ Return ONLY the complete Python file content:
 """
 
         self.terminal.log(f"  -> Final assembly pass...")
+        if rag_context:
+            self.terminal.log(f"  -> Using RAG best practices")
+
         final_code = self.llm_client.chat(assemble_prompt)
         return self._clean_code_response(final_code)
 

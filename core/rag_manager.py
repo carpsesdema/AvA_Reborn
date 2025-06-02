@@ -42,53 +42,75 @@ class RAGManager(QObject):
 
         # State
         self.is_ready = False
-        self.current_status = "Initializing RAG..."
+        self.current_status = "RAG Not Initialized" # Default status
 
-        if RAG_AVAILABLE:
-            self._initialize_rag_services()
-        else:
+        if not RAG_AVAILABLE:
             self.logger.error("RAG services not available - RAG functionality disabled")
-            self.status_changed.emit("RAG: Dependencies Missing", "#ef4444")
+            # We can't emit here directly if the event loop isn't running yet for QObject
+            # The status will be updated after async_initialize is called.
 
-    def _initialize_rag_services(self):
-        """Initialize all RAG services"""
+    async def async_initialize(self):
+        """Asynchronously initialize RAG services. Called after event loop is running."""
+        if not RAG_AVAILABLE:
+            self.status_changed.emit("RAG: Dependencies Missing", "#ef4444")
+            self.current_status = "RAG: Dependencies Missing"
+            return
+
+        self.current_status = "Initializing RAG..."
+        self.status_changed.emit(self.current_status, "#ffb900") # Amber
         try:
             self.logger.info("Initializing RAG services...")
 
-            # Initialize vector DB service
+            # Initialize vector DB service (synchronous)
             self.vector_db_service = VectorDBService(index_dimension=384)  # MiniLM default
 
-            # Initialize upload service (handles embeddings)
+            # Initialize upload service (partially synchronous, with async internal init)
             self.upload_service = UploadService()
+            # Now explicitly await its internal async initialization
+            if not await self.upload_service.async_internal_init():
+                 self.logger.error("UploadService embedder failed to initialize.")
+                 self.status_changed.emit("RAG: Embedder Load Fail", "#ef4444") # Red
+                 self.current_status = "RAG: Embedder Load Fail"
+                 return
 
-            # Initialize chunking service
+            # Initialize chunking service (synchronous)
             self.chunking_service = ChunkingService(chunk_size=1000, chunk_overlap=150)
 
-            # Start async initialization
+            # Now that UploadService's embedder is loading/loaded, wait for it to be fully ready
+            # This task is now created when the event loop is definitely running.
             asyncio.create_task(self._wait_for_embedder_ready())
+            self.current_status = "RAG: Initializing embedder..."
+            self.status_changed.emit(self.current_status, "#ffb900") # Amber
 
-            self.status_changed.emit("RAG: Initializing embedder...", "#ffb900")
 
         except Exception as e:
-            self.logger.error(f"Failed to initialize RAG services: {e}")
-            self.status_changed.emit("RAG: Init Failed", "#ef4444")
+            self.logger.error(f"Failed to initialize RAG services: {e}", exc_info=True)
+            self.current_status = "RAG: Init Failed"
+            self.status_changed.emit(self.current_status, "#ef4444") # Red
 
     async def _wait_for_embedder_ready(self):
         """Wait for embedder to be ready and update status"""
         try:
             if self.upload_service:
+                # The wait_for_embedder_ready should ideally be on UploadService itself
                 ready = await self.upload_service.wait_for_embedder_ready(timeout_seconds=60)
                 if ready:
                     self.is_ready = True
-                    self.status_changed.emit("RAG: Ready", "#4ade80")
+                    self.current_status = "RAG: Ready"
+                    self.status_changed.emit(self.current_status, "#4ade80") # Green
                     self.logger.info("RAG system fully initialized and ready")
                 else:
-                    self.status_changed.emit("RAG: Embedder Timeout", "#ef4444")
+                    self.current_status = "RAG: Embedder Timeout"
+                    self.status_changed.emit(self.current_status, "#ef4444") # Red
+                    self.logger.error("RAG embedder timed out.")
             else:
-                self.status_changed.emit("RAG: Service Error", "#ef4444")
+                self.current_status = "RAG: Service Error"
+                self.status_changed.emit(self.current_status, "#ef4444") # Red
+                self.logger.error("RAG Upload Service not available for waiting.")
         except Exception as e:
-            self.logger.error(f"RAG initialization error: {e}")
-            self.status_changed.emit("RAG: Error", "#ef4444")
+            self.logger.error(f"RAG _wait_for_embedder_ready error: {e}", exc_info=True)
+            self.current_status = "RAG: Error"
+            self.status_changed.emit(self.current_status, "#ef4444") # Red
 
     def scan_directory_dialog(self, parent_widget=None) -> bool:
         """Open directory selection dialog and scan for RAG"""

@@ -1,71 +1,109 @@
-# core/application.py - Updated to use enhanced main window
-
-# main.py - FIXED VERSION
+# main.py - REVISED APPROACH
 
 import sys
+import asyncio
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
+import qasync
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gui.main_window import AvAMainWindow
 from core.application import AvAApplication
 
 
-def main():
-    """Main entry point"""
+async def startup_ava(app: QApplication, app_instance_container: list):
+    """
+    Coroutine to initialize the AvA application.
+    This will be scheduled onto the qasync event loop.
+    """
+    print("startup_ava: Coroutine started.")
+    ava_app = AvAApplication()
+    app_instance_container.append(ava_app)  # Store the instance
 
+    # Connect the fully_initialized_signal for status printing
+    def on_fully_initialized():
+        print("AvAApplication fully initialized (async components complete).")
+        # Ensure ava_app is accessible, it should be from the closure
+        if app_instance_container:
+            current_ava_app = app_instance_container[0]
+            status = current_ava_app.get_status()
+            print(f"Final Status - Models available: {status['llm_models']}")
+            rag_status_info = status.get('rag', {})
+            rag_ready = rag_status_info.get('ready', False)
+            rag_available = rag_status_info.get('available', False)
+            rag_text = rag_status_info.get('status_text', 'Status Unknown')
+
+            if rag_available:
+                print(f"Final Status - RAG available: {rag_ready} ({rag_text})")
+            else:
+                print(f"Final Status - RAG not available: {rag_text}")
+
+            # Update main window title example (if needed)
+            if current_ava_app.main_window:
+                project_name = current_ava_app.current_project
+                session_name = current_ava_app.current_session
+                chat_model = current_ava_app.current_config.get("chat_model", "N/A")
+                # Example of updating title, customize as needed
+                # current_ava_app.main_window.setWindowTitle(f"AvA [{project_name}] - Session: {session_name} (LLM: {chat_model})")
+
+    ava_app.fully_initialized_signal.connect(on_fully_initialized)
+
+    # Call initialize. This method is now designed to:
+    # 1. Perform synchronous UI setup.
+    # 2. Use QTimer.singleShot(0, ...) to schedule its async_initialize_components.
+    # This ensures that asyncio.create_task within async_initialize_components
+    # (or further down the call chain like in RAGManager) has a running event loop.
+    ava_app.initialize()
+    print("startup_ava: AvAApplication.initialize() called. Async parts are scheduled via QTimer.")
+
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("AvA")
     app.setApplicationDisplayName("AvA - AI Development Assistant")
     app.setApplicationVersion("2.0")
 
+    # Set up qasync event loop
+    # This QEventLoop will be the one asyncio.get_running_loop() returns
+    # once app.exec() starts processing events.
+    qasync_loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(qasync_loop)
+
+    ava_app_instance_container = []  # To hold the AvAApplication instance
+
     try:
-        # Create AvA application (backend)
-        ava_app = AvAApplication()
+        # Schedule the startup coroutine.
+        # asyncio.ensure_future (or create_task) will add it to the asyncio loop.
+        # qasync's QEventLoop will ensure it gets processed when the Qt loop runs.
+        # This task will run, call ava_app.initialize(), which then uses QTimer
+        # to schedule the next async part.
+        startup_task = asyncio.ensure_future(startup_ava(app, ava_app_instance_container))
 
-        # Initialize AvA backend
-        ava_app.initialize()
+        print("main.py: QApplication.exec() is about to be called.")
+        # Start the Qt event loop. This will also drive the asyncio event loop via qasync.
+        exit_code = app.exec()
+        print(f"main.py: QApplication.exec() finished with code {exit_code}.")
 
-        # Connect the UI to the AvA application
-        _connect_ui_to_backend(ava_app.main_window, ava_app)
+        # Optional: Graceful shutdown
+        if ava_app_instance_container:
+            ava_app_instance = ava_app_instance_container[0]
+            if hasattr(ava_app_instance, 'shutdown'):
+                print("main.py: Calling AvAApplication.shutdown().")
+                ava_app_instance.shutdown()  # Assuming shutdown is synchronous for simplicity here
 
-        print("AvA launched successfully!")
-        print("Available models:", ava_app.llm_client.get_available_models() if ava_app.llm_client else "None")
-
-        return app.exec()
+        sys.exit(exit_code)
 
     except Exception as e:
         print(f"Failed to launch AvA: {e}")
         import traceback
+
         traceback.print_exc()
-        return 1
-
-
-def _connect_ui_to_backend(main_window, ava_app):
-    """Connect the UI to the AvA backend"""
-
-    # Connect sidebar actions to backend windows
-    def handle_sidebar_action(action):
-        if action == "view_log" or action == "open_terminal":
-            ava_app._open_terminal()
-        elif action == "view_code" or action == "open_code_viewer":
-            ava_app._open_code_viewer()
-        elif action == "new_session":
-            print("New session requested")
-        elif action == "force_gen":
-            print("Force code generation requested")
-        elif action == "check_updates":
-            print("Update check requested")
-
-    main_window.sidebar.action_triggered.connect(handle_sidebar_action)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        sys.exit(1)
 
 # core/application_enhanced.py - Enhanced application class for new UI
+# NOTE: This is just a comment placeholder for the context of combined.txt.
+# The actual content of this file is expected to be the full version you have.
 from core.application import AvAApplication as BaseAvAApplication
 from PySide6.QtCore import Signal
 
@@ -129,7 +167,8 @@ class AvAApplicationEnhanced(BaseAvAApplication):
 
 
 # gui/components_enhanced.py - Enhanced components for new UI
-
+# NOTE: This is just a comment placeholder for the context of combined.txt.
+# The actual content of this file is expected to be the full version you have.
 from PySide6.QtWidgets import QPushButton, QFrame, QVBoxLayout, QLabel, QProgressBar
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFont, QPainter, QLinearGradient, QColor
@@ -225,8 +264,3 @@ class GlowingProgressBar(QProgressBar):
                 box-shadow: 0 0 10px #00d7ff;
             }
         """)
-
-
-if __name__ == "__main__":
-    # Run the enhanced version
-    sys.exit(main())
