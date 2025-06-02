@@ -1,6 +1,7 @@
 # gui/main_window.py - Enhanced with Role-Based LLM Support
 
 import asyncio
+import inspect  # FIXED: Added missing import
 
 from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
@@ -332,8 +333,9 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             response_chunks = []
 
             # Check if the LLM client supports role-based chat
+            # FIXED: Use inspect.signature instead of asyncio.signature
             if hasattr(self.ava_app.llm_client, 'stream_chat') and len(
-                    asyncio.signature(self.ava_app.llm_client.stream_chat).parameters) > 1:
+                    inspect.signature(self.ava_app.llm_client.stream_chat).parameters) > 1:
                 # Enhanced LLM client with role support
                 async for chunk in self.ava_app.llm_client.stream_chat(prompt, LLMRole.CHAT):
                     response_chunks.append(chunk)
