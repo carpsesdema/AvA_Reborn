@@ -12,7 +12,8 @@ from core.workflow_engine import WorkflowEngine
 # Import the components
 from gui.main_window import AvAMainWindow
 from windows.code_viewer import CodeViewerWindow
-from windows.terminal_window import LLMTerminalWindow
+# FIXED: Import the enhanced terminal instead of the simple one
+from gui.terminals import TerminalWindow
 
 # Try to import RAG manager - gracefully handle if not available
 try:
@@ -101,8 +102,9 @@ class AvAApplication(QObject):
 
         self.main_window = AvAMainWindow(ava_app=self)
         self.logger.info("[OK] Main window initialized (sync part)")
-        self.terminal_window = LLMTerminalWindow()
-        self.logger.info("[OK] Terminal window initialized (sync part)")
+        # FIXED: Use the enhanced terminal with progress tracking
+        self.terminal_window = TerminalWindow()
+        self.logger.info("[OK] Enhanced terminal window initialized (sync part)")
         self.code_viewer = CodeViewerWindow()
         self.logger.info("[OK] Code viewer initialized (sync part)")
 
@@ -194,9 +196,12 @@ class AvAApplication(QObject):
                 self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
                 self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
 
-            # NEW: Connect workflow progress signals to terminal
-            if self.terminal_window:
+            # FIXED: Now this should work with the enhanced terminal
+            if self.terminal_window and hasattr(self.terminal_window, 'update_workflow_progress'):
                 self.workflow_engine.workflow_progress.connect(self.terminal_window.update_workflow_progress)
+                self.logger.info("[OK] Workflow progress connected to terminal")
+            else:
+                self.logger.warning("[WARNING] Terminal doesn't support workflow progress updates")
 
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
@@ -206,7 +211,7 @@ class AvAApplication(QObject):
         if self.main_window:
             self.main_window.setWindowTitle(f"AvA - AI Development Assistant")
         if self.terminal_window:
-            self.terminal_window.setWindowTitle("AvA - LLM Workflow Terminal")
+            self.terminal_window.setWindowTitle("AvA - Enhanced Workflow Terminal")
         if self.code_viewer:
             self.code_viewer.setWindowTitle("AvA - Code Viewer")
         self._position_windows()
@@ -321,10 +326,16 @@ class AvAApplication(QObject):
             self.active_workflows[workflow_id]["error"] = str(e)
 
     def _open_terminal(self):
-        if self.terminal_window: self.terminal_window.show(); self.terminal_window.raise_(); self.terminal_window.activateWindow()
+        if self.terminal_window:
+            self.terminal_window.show()
+            self.terminal_window.raise_()
+            self.terminal_window.activateWindow()
 
     def _open_code_viewer(self):
-        if self.code_viewer: self.code_viewer.show(); self.code_viewer.raise_(); self.code_viewer.activateWindow()
+        if self.code_viewer:
+            self.code_viewer.show()
+            self.code_viewer.raise_()
+            self.code_viewer.activateWindow()
 
     def _on_file_generated(self, file_path: str):
         self.logger.info(f"File generated: {file_path}")
@@ -374,21 +385,198 @@ class AvAApplication(QObject):
             self.main_window._update_initial_ui_status()
 
     def create_new_project_dialog(self):
+        """ENHANCED: Allow creating new directories or selecting existing ones"""
         self.logger.info("Request to create a new project received.")
-        if self.terminal_window: self.terminal_window.log("✨ New Project creation requested.")
-        from PySide6.QtWidgets import QFileDialog
-        if self.main_window:
-            project_dir = QFileDialog.getExistingDirectory(self.main_window, "Create or Select Project Directory",
-                                                           str(self.workspace_dir))
+        if self.terminal_window:
+            self.terminal_window.log("✨ New Project creation requested.")
+
+        from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+        if not self.main_window:
+            return
+
+        # First, ask user if they want to create new or select existing
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+
+        class ProjectDialog(QDialog):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.setWindowTitle("New Project")
+                self.setModal(True)
+                self.result_action = None
+
+                layout = QVBoxLayout()
+
+                # Title
+                title = QLabel("Create or Select Project")
+                title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00d7ff; margin: 10px;")
+                layout.addWidget(title)
+
+                # Description
+                desc = QLabel("Choose how to set up your project:")
+                desc.setStyleSheet("color: #cccccc; margin: 10px;")
+                layout.addWidget(desc)
+
+                # Buttons
+                button_layout = QHBoxLayout()
+
+                self.create_btn = QPushButton("📁 Create New Directory")
+                self.create_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #0078d4;
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        padding: 10px 15px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover { background: #106ebe; }
+                """)
+                self.create_btn.clicked.connect(lambda: self.set_result("create"))
+
+                self.select_btn = QPushButton("📂 Select Existing Directory")
+                self.select_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #2d2d30;
+                        color: #cccccc;
+                        border: 1px solid #404040;
+                        border-radius: 6px;
+                        padding: 10px 15px;
+                    }
+                    QPushButton:hover { background: #3e3e42; }
+                """)
+                self.select_btn.clicked.connect(lambda: self.set_result("select"))
+
+                self.cancel_btn = QPushButton("Cancel")
+                self.cancel_btn.setStyleSheet(self.select_btn.styleSheet())
+                self.cancel_btn.clicked.connect(self.reject)
+
+                button_layout.addWidget(self.create_btn)
+                button_layout.addWidget(self.select_btn)
+                button_layout.addWidget(self.cancel_btn)
+
+                layout.addLayout(button_layout)
+                self.setLayout(layout)
+
+                # Style the dialog
+                self.setStyleSheet("""
+                    QDialog {
+                        background: #1e1e1e;
+                        border: 2px solid #00d7ff;
+                        border-radius: 8px;
+                    }
+                """)
+
+            def set_result(self, action):
+                self.result_action = action
+                self.accept()
+
+        dialog = ProjectDialog(self.main_window)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self.logger.info("New project creation cancelled by user.")
+            return
+
+        action = dialog.result_action
+        project_path = None
+
+        if action == "create":
+            # Create new directory workflow
+            parent_dir = QFileDialog.getExistingDirectory(
+                self.main_window,
+                "Select Parent Directory for New Project",
+                str(self.workspace_dir)
+            )
+
+            if not parent_dir:
+                return
+
+            # Ask for project name
+            project_name, ok = QInputDialog.getText(
+                self.main_window,
+                "New Project Name",
+                "Enter project name:",
+                text="my_new_project"
+            )
+
+            if not ok or not project_name.strip():
+                return
+
+            # Clean project name (make it filesystem-safe)
+            import re
+            clean_name = re.sub(r'[<>:"/\\|?*]', '_', project_name.strip())
+            clean_name = clean_name.replace(' ', '_')
+
+            project_path = Path(parent_dir) / clean_name
+
+            # Create the directory
+            try:
+                project_path.mkdir(parents=True, exist_ok=True)
+                self.logger.info(f"Created new project directory: {project_path}")
+                if self.terminal_window:
+                    self.terminal_window.log(f"📁 Created new project directory: {project_path.name}")
+
+                # Create a basic README file
+                readme_path = project_path / "README.md"
+                readme_content = f"""# {clean_name}
+
+Created with AvA - AI Development Assistant
+
+## Project Description
+This project was created on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.
+
+## Getting Started
+1. Open this project in AvA's Code Viewer
+2. Use the chat interface to describe what you want to build
+3. Let AvA generate the code for you!
+
+## Files
+- This README.md file
+- Additional files will be generated by AvA based on your requirements
+"""
+                readme_path.write_text(readme_content, encoding='utf-8')
+                self.logger.info(f"Created README.md in new project")
+
+            except Exception as e:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Error",
+                    f"Failed to create project directory:\n{e}"
+                )
+                self.logger.error(f"Failed to create project directory: {e}")
+                return
+
+        elif action == "select":
+            # Select existing directory workflow
+            project_dir = QFileDialog.getExistingDirectory(
+                self.main_window,
+                "Select Existing Project Directory",
+                str(self.workspace_dir)
+            )
+
             if project_dir:
                 project_path = Path(project_dir)
-                self.current_project = project_path.name
-                self.logger.info(f"New project selected/created at: {project_path}")
-                if hasattr(self.main_window, 'update_project_display'): self.main_window.update_project_display(
-                    self.current_project)
-                self.project_loaded.emit(str(project_path))  # Ensure this signal is connected if used
             else:
-                self.logger.info("New project creation cancelled by user.")
+                return
+
+        if project_path and project_path.exists():
+            self.current_project = project_path.name
+            self.logger.info(f"Project set to: {project_path}")
+
+            if hasattr(self.main_window, 'update_project_display'):
+                self.main_window.update_project_display(self.current_project)
+
+            self.project_loaded.emit(str(project_path))
+
+            if self.terminal_window:
+                self.terminal_window.log(f"🎯 Project set: {self.current_project}")
+                self.terminal_window.log(f"📍 Location: {project_path}")
+
+            # Automatically open code viewer with the project
+            if self.code_viewer:
+                self.code_viewer.load_project(str(project_path))
+                self._open_code_viewer()
+        else:
+            self.logger.error(f"Project path does not exist: {project_path}")
 
     def shutdown(self):
         self.logger.info("Shutting down AvA Application...")

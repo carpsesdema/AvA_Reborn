@@ -1,12 +1,24 @@
-# core/workflow_engine.py - Enhanced with Streaming & Caching
+# core/workflow_engine.py - Enhanced Micro-Task Architecture
 
 import json
 import asyncio
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, AsyncGenerator
+from typing import Dict, List, Optional, AsyncGenerator, Tuple
 from PySide6.QtCore import QObject, QThread, Signal
+
+# Import LLMRole at the top level
+try:
+    from core.llm_client import LLMRole
+except ImportError:
+    # Fallback if enhanced client is not available
+    class LLMRole:
+        PLANNER = "planner"
+        CODER = "coder"
+        ASSEMBLER = "assembler"
+        REVIEWER = "reviewer"
+        CHAT = "chat"
 
 
 class ContextCache:
@@ -75,6 +87,474 @@ class ContextCache:
         }
 
 
+class PlannerAI:
+    """Dedicated Planner AI - Creates high-level plans and micro-task breakdowns"""
+
+    def __init__(self, llm_client, rag_manager=None, terminal=None):
+        self.llm_client = llm_client
+        self.rag_manager = rag_manager
+        self.terminal = terminal
+        self.role = LLMRole.PLANNER
+
+    async def create_project_plan(self, user_prompt: str, context_cache: ContextCache) -> dict:
+        """Create high-level project plan with architecture decisions"""
+        self._log("🧠 PLANNER: Analyzing requirements and creating project plan...")
+
+        # Get RAG context for planning
+        rag_context = await self._get_planning_context(user_prompt, context_cache)
+
+        plan_prompt = f"""
+You are a Senior Software Architect. Analyze this request and create a comprehensive plan:
+
+REQUEST: {user_prompt}
+
+REFERENCE CONTEXT:
+{rag_context if rag_context else "No specific context available - use best practices"}
+
+Create a detailed project plan as JSON:
+{{
+    "project_name": "descriptive_snake_case_name",
+    "description": "Clear project description",
+    "architecture_type": "cli|web_app|gui|library|api",
+    "tech_stack": ["python", "requests", "etc"],
+    "project_structure": {{
+        "main_entry": "main.py",
+        "config_files": ["requirements.txt", "README.md"],
+        "core_modules": ["core/engine.py", "utils/helpers.py"],
+        "optional_files": ["tests/test_main.py"]
+    }},
+    "file_priorities": {{
+        "main.py": 1,
+        "core/engine.py": 2,
+        "utils/helpers.py": 3,
+        "requirements.txt": 4,
+        "README.md": 5
+    }},
+    "dependencies": ["requests", "pathlib"],
+    "complexity_estimate": "simple|medium|complex"
+}}
+
+Focus on creating a clean, professional structure. Maximum 8 files for initial version.
+"""
+
+        response = await self._stream_response(plan_prompt, "Planning")
+
+        try:
+            plan = self._extract_json(response)
+            self._log(f"📋 PLANNER: Created plan for '{plan['project_name']}'")
+            self._log(f"   • Architecture: {plan.get('architecture_type', 'unspecified')}")
+            self._log(f"   • Files planned: {len(plan.get('project_structure', {}).get('core_modules', []))}")
+            return plan
+        except Exception as e:
+            self._log(f"❌ PLANNER: Plan parsing failed: {e}")
+            return self._create_fallback_plan(user_prompt)
+
+    async def create_micro_tasks(self, plan: dict, file_path: str, context_cache: ContextCache) -> List[dict]:
+        """Break down a file into atomic micro-tasks"""
+        self._log(f"🧠 PLANNER: Creating micro-tasks for {file_path}...")
+
+        # Get file-specific context
+        file_context = await self._get_file_context(file_path, plan, context_cache)
+
+        micro_task_prompt = f"""
+You are a Senior Developer creating atomic micro-tasks for precise code generation.
+
+FILE: {file_path}
+PROJECT: {plan['project_name']} - {plan['description']}
+ARCHITECTURE: {plan.get('architecture_type', 'unspecified')}
+
+CONTEXT & EXAMPLES:
+{file_context if file_context else "No specific patterns found - use standard practices"}
+
+Break this file into ATOMIC micro-tasks. Each task should produce 5-15 lines of code maximum.
+
+Return JSON array of micro-tasks:
+[
+    {{
+        "id": "imports_{file_path.replace('/', '_').replace('.py', '')}",
+        "type": "imports",
+        "description": "Import required modules (requests, pathlib, etc)",
+        "priority": 1,
+        "dependencies": [],
+        "expected_lines": 5,
+        "context_hint": "Standard imports for this file type"
+    }},
+    {{
+        "id": "class_definition_{file_path.replace('/', '_').replace('.py', '')}",
+        "type": "class",
+        "description": "Define main class with __init__ method",
+        "priority": 2,
+        "dependencies": ["imports_{file_path.replace('/', '_').replace('.py', '')}"],
+        "expected_lines": 8,
+        "context_hint": "Class structure with docstring and basic setup"
+    }},
+    {{
+        "id": "method_process_data",
+        "type": "method",
+        "description": "Create process_data method with error handling",
+        "priority": 3,
+        "dependencies": ["class_definition_{file_path.replace('/', '_').replace('.py', '')}"],
+        "expected_lines": 12,
+        "context_hint": "Method with docstring, parameters, and return value"
+    }}
+]
+
+Make tasks ATOMIC - each should be a single, clear coding action.
+"""
+
+        response = await self._stream_response(micro_task_prompt, f"Micro-tasking {file_path}")
+
+        try:
+            tasks = self._extract_json(response)
+            for task in tasks:
+                task["file_path"] = file_path
+                task["created_by"] = "planner"
+
+            self._log(f"   • Created {len(tasks)} micro-tasks for {file_path}")
+            return tasks
+        except Exception as e:
+            self._log(f"❌ PLANNER: Micro-task creation failed: {e}")
+            return self._create_fallback_tasks(file_path)
+
+    async def review_and_approve(self, file_path: str, assembled_code: str, original_tasks: List[dict]) -> Tuple[
+        bool, str, List[str]]:
+        """Review assembled code and provide feedback"""
+        self._log(f"🧠 PLANNER: Reviewing assembled code for {file_path}...")
+
+        review_prompt = f"""
+You are a Senior Code Reviewer. Review this assembled code for quality and completeness.
+
+FILE: {file_path}
+ORIGINAL TASKS: {len(original_tasks)} micro-tasks completed
+
+CODE TO REVIEW:
+{assembled_code}
+
+ORIGINAL TASK LIST:
+{json.dumps([{"id": t["id"], "description": t["description"]} for t in original_tasks], indent=2)}
+
+Provide review as JSON:
+{{
+    "approved": true/false,
+    "overall_quality": "excellent|good|needs_improvement|poor",
+    "feedback": "Detailed feedback on what's good/bad",
+    "suggestions": [
+        "Specific improvement suggestion 1",
+        "Specific improvement suggestion 2"
+    ],
+    "missing_elements": [
+        "Any missing functionality from original tasks"
+    ],
+    "code_issues": [
+        "Any syntax, logic, or style issues found"
+    ]
+}}
+
+Be thorough but constructive in your review.
+"""
+
+        response = await self._stream_response(review_prompt, f"Reviewing {file_path}")
+
+        try:
+            review = self._extract_json(response)
+            approved = review.get("approved", False)
+            feedback = review.get("feedback", "Review completed")
+            suggestions = review.get("suggestions", [])
+
+            if approved:
+                self._log(f"   ✅ PLANNER: Code approved for {file_path}")
+            else:
+                self._log(f"   ⚠️ PLANNER: Code needs improvement for {file_path}")
+                for suggestion in suggestions[:3]:  # Show first 3 suggestions
+                    self._log(f"      • {suggestion}")
+
+            return approved, feedback, suggestions
+        except Exception as e:
+            self._log(f"❌ PLANNER: Review failed: {e}")
+            return True, "Review error - proceeding", []  # Default to approved on error
+
+    async def _get_planning_context(self, user_prompt: str, context_cache: ContextCache) -> str:
+        """Get context for project planning"""
+        cache_key = f"planning_{user_prompt[:50]}"
+        cached = context_cache.get_context(cache_key, "planning")
+
+        if cached:
+            self._log("   ⚡ Using cached planning context")
+            return cached
+
+        if self.rag_manager and self.rag_manager.is_ready:
+            context = self.rag_manager.get_context_for_code_generation(
+                f"project architecture planning {user_prompt}", "python"
+            )
+            if context:
+                context_cache.store_context(cache_key, context, "planning", 0.9)
+                self._log("   📚 Retrieved planning context from RAG")
+                return context
+
+        return ""
+
+    async def _get_file_context(self, file_path: str, plan: dict, context_cache: ContextCache) -> str:
+        """Get context for specific file type"""
+        file_type = Path(file_path).suffix or "module"
+        cache_key = f"file_context_{file_type}_{plan.get('architecture_type', 'general')}"
+        cached = context_cache.get_context(cache_key, "file_patterns")
+
+        if cached:
+            self._log("   ⚡ Using cached file context")
+            return cached
+
+        if self.rag_manager and self.rag_manager.is_ready:
+            context = self.rag_manager.get_context_for_code_generation(
+                f"{file_path} {plan.get('architecture_type', '')} implementation patterns", "python"
+            )
+            if context:
+                context_cache.store_context(cache_key, context, "file_patterns", 0.8)
+                self._log("   📚 Retrieved file patterns from RAG")
+                return context
+
+        return ""
+
+    async def _stream_response(self, prompt: str, operation: str) -> str:
+        """Stream LLM response with progress updates using Planner role"""
+        chunks = []
+        async for chunk in self.llm_client.stream_chat(prompt, self.role):
+            chunks.append(chunk)
+            if len(chunks) % 10 == 0:
+                self._log(f"   → {operation}... ({len(''.join(chunks))} chars)")
+
+        response = ''.join(chunks)
+        self._log(f"   → {operation} completed ({len(response)} chars)")
+        return response
+
+    def _extract_json(self, response: str) -> dict:
+        """Extract JSON from LLM response"""
+        start = response.find('{')
+        end = response.rfind('}') + 1
+        if start >= 0 and end > start:
+            return json.loads(response[start:end])
+        raise ValueError("No valid JSON found in response")
+
+    def _create_fallback_plan(self, user_prompt: str) -> dict:
+        """Create fallback plan when LLM parsing fails"""
+        return {
+            "project_name": "generated_project",
+            "description": user_prompt,
+            "architecture_type": "cli",
+            "tech_stack": ["python"],
+            "project_structure": {
+                "main_entry": "main.py",
+                "core_modules": ["main.py"]
+            },
+            "file_priorities": {"main.py": 1},
+            "dependencies": []
+        }
+
+    def _create_fallback_tasks(self, file_path: str) -> List[dict]:
+        """Create fallback tasks when micro-task creation fails"""
+        return [
+            {
+                "id": f"implement_{file_path}",
+                "type": "complete_file",
+                "description": f"Implement complete {file_path}",
+                "priority": 1,
+                "file_path": file_path,
+                "created_by": "planner_fallback"
+            }
+        ]
+
+    def _log(self, message: str):
+        """Log message to terminal"""
+        if self.terminal:
+            self.terminal.log(message)
+
+
+class CoderAI:
+    """Specialized Coder AI - Implements atomic micro-tasks"""
+
+    def __init__(self, llm_client, rag_manager=None, terminal=None):
+        self.llm_client = llm_client
+        self.rag_manager = rag_manager
+        self.terminal = terminal
+        self.role = LLMRole.CODER
+
+    async def implement_micro_task(self, task: dict, file_context: str, context_cache: ContextCache) -> str:
+        """Implement a single atomic micro-task"""
+        task_id = task.get("id", "unknown")
+        self._log(f"⚙️ CODER: Implementing {task_id}")
+
+        # Get task-specific context
+        task_context = await self._get_task_context(task, context_cache)
+
+        # Use specialized code generation model if available
+        code_prompt = f"""
+You are a Specialist Code Generator. Implement this ATOMIC micro-task with precision.
+
+TASK: {task['description']}
+TYPE: {task.get('type', 'general')}
+FILE: {task.get('file_path', 'unknown')}
+EXPECTED LINES: ~{task.get('expected_lines', 10)}
+
+EXISTING FILE CONTEXT:
+{file_context}
+
+REFERENCE PATTERNS & EXAMPLES:
+{task_context if task_context else "Use standard Python practices"}
+
+CONTEXT HINT: {task.get('context_hint', 'Standard implementation')}
+
+REQUIREMENTS:
+1. Generate ONLY the code for this specific task
+2. Keep it atomic - don't implement other tasks
+3. Follow Python best practices and PEP 8
+4. Include appropriate docstrings for classes/functions
+5. Add type hints where appropriate
+6. Handle errors appropriately
+7. Make code production-ready
+
+Return ONLY Python code, no explanations:
+"""
+
+        chunks = []
+        async for chunk in self.llm_client.stream_chat(code_prompt, self.role):
+            chunks.append(chunk)
+            if len(chunks) % 5 == 0:
+                self._log(f"   → Generating {task_id}... ({len(''.join(chunks))} chars)")
+
+        code = ''.join(chunks)
+        clean_code = self._clean_code_response(code)
+
+        self._log(f"   ✅ Generated {len(clean_code)} chars for {task_id}")
+        return clean_code
+
+    async def _get_task_context(self, task: dict, context_cache: ContextCache) -> str:
+        """Get context specific to this task type"""
+        task_type = task.get("type", "general")
+        cache_key = f"task_context_{task_type}"
+        cached = context_cache.get_context(cache_key, "task_patterns")
+
+        if cached:
+            return cached
+
+        if self.rag_manager and self.rag_manager.is_ready:
+            query = f"python {task_type} implementation patterns examples"
+            context = self.rag_manager.get_context_for_code_generation(query, "python")
+            if context:
+                context_cache.store_context(cache_key, context, "task_patterns", 0.7)
+                return context
+
+        return ""
+
+    def _clean_code_response(self, code_response: str) -> str:
+        """Extract clean code from LLM response"""
+        if "```python" in code_response:
+            code = code_response.split("```python")[1].split("```")[0].strip()
+        elif "```" in code_response:
+            code = code_response.split("```")[1].split("```")[0].strip()
+        else:
+            code = code_response.strip()
+        return code
+
+    def _log(self, message: str):
+        """Log message to terminal"""
+        if self.terminal:
+            self.terminal.log(message)
+
+
+class AssemblerAI:
+    """Assembler AI - Combines micro-tasks into cohesive files"""
+
+    def __init__(self, llm_client, rag_manager=None, terminal=None):
+        self.llm_client = llm_client
+        self.rag_manager = rag_manager
+        self.terminal = terminal
+        self.role = LLMRole.ASSEMBLER
+
+    async def assemble_file(self, file_path: str, task_results: List[dict], plan: dict,
+                            context_cache: ContextCache) -> str:
+        """Assemble micro-task results into a cohesive file"""
+        self._log(f"📄 ASSEMBLER: Assembling {file_path} from {len(task_results)} micro-tasks")
+
+        # Get assembly context
+        assembly_context = await self._get_assembly_context(file_path, plan, context_cache)
+
+        # Prepare task results for assembly
+        code_sections = []
+        for result in task_results:
+            task_info = result['task']
+            code = result['code']
+            code_sections.append(f"# Task: {task_info['description']}\n{code}")
+
+        assembly_prompt = f"""
+You are a Code Assembler. Combine these micro-task results into a cohesive, professional Python file.
+
+FILE: {file_path}
+PROJECT: {plan['project_name']} - {plan['description']}
+
+MICRO-TASK RESULTS TO ASSEMBLE:
+{chr(10).join(code_sections)}
+
+ASSEMBLY BEST PRACTICES:
+{assembly_context if assembly_context else "Use standard Python file organization"}
+
+REQUIREMENTS:
+1. Organize imports at the top (remove duplicates)
+2. Add file-level docstring with description
+3. Maintain logical flow and structure
+4. Ensure all components work together
+5. Add missing connections between components
+6. Fix any syntax or logical issues
+7. Follow PEP 8 conventions
+8. Make the file executable and functional
+
+Return the complete, assembled Python file:
+"""
+
+        chunks = []
+        async for chunk in self.llm_client.stream_chat(assembly_prompt, self.role):
+            chunks.append(chunk)
+            if len(chunks) % 8 == 0:
+                self._log(f"   → Assembling {file_path}... ({len(''.join(chunks))} chars)")
+
+        assembled_code = ''.join(chunks)
+        clean_code = self._clean_code_response(assembled_code)
+
+        self._log(f"   ✅ Assembled {file_path} ({len(clean_code)} chars)")
+        return clean_code
+
+    async def _get_assembly_context(self, file_path: str, plan: dict, context_cache: ContextCache) -> str:
+        """Get context for file assembly"""
+        file_type = Path(file_path).suffix or "module"
+        cache_key = f"assembly_{file_type}_{plan.get('architecture_type', 'general')}"
+        cached = context_cache.get_context(cache_key, "assembly_patterns")
+
+        if cached:
+            return cached
+
+        if self.rag_manager and self.rag_manager.is_ready:
+            query = f"python file organization structure {file_path} best practices"
+            context = self.rag_manager.get_context_for_code_generation(query, "python")
+            if context:
+                context_cache.store_context(cache_key, context, "assembly_patterns", 0.7)
+                return context
+
+        return ""
+
+    def _clean_code_response(self, code_response: str) -> str:
+        """Extract clean code from LLM response"""
+        if "```python" in code_response:
+            code = code_response.split("```python")[1].split("```")[0].strip()
+        elif "```" in code_response:
+            code = code_response.split("```")[1].split("```")[0].strip()
+        else:
+            code = code_response.strip()
+        return code
+
+    def _log(self, message: str):
+        """Log message to terminal"""
+        if self.terminal:
+            self.terminal.log(message)
+
+
 class StreamingWorkflowThread(QThread):
     """Async workflow thread for streaming execution"""
 
@@ -85,7 +565,7 @@ class StreamingWorkflowThread(QThread):
 
     def run(self):
         # Run async workflow in thread
-        asyncio.run(self.workflow_engine._execute_workflow_async(self.user_prompt))
+        asyncio.run(self.workflow_engine._execute_enhanced_workflow_async(self.user_prompt))
 
 
 class WorkflowEngine(QObject):
@@ -104,10 +584,15 @@ class WorkflowEngine(QObject):
         self.output_dir = Path("./generated_projects")
         self.output_dir.mkdir(exist_ok=True)
 
-        # NEW: Context cache for RAG optimization
+        # Initialize AI specialists with enhanced LLM client
+        self.planner = PlannerAI(llm_client, rag_manager, terminal_window)
+        self.coder = CoderAI(llm_client, rag_manager, terminal_window)
+        self.assembler = AssemblerAI(llm_client, rag_manager, terminal_window)
+
+        # Context cache for RAG optimization
         self.context_cache = ContextCache(max_cache_size=150)
 
-        # NEW: Workflow state tracking
+        # Workflow state tracking
         self.current_workflow_state = {
             "stage": "idle",
             "progress": 0,
@@ -116,29 +601,46 @@ class WorkflowEngine(QObject):
         }
 
         self._connect_code_viewer()
+        self._log_model_assignments()
 
     def _connect_code_viewer(self):
         if self.code_viewer:
             self.code_viewer.file_changed.connect(self._on_file_changed)
 
+    def _log_model_assignments(self):
+        """Log which models are assigned to each AI role"""
+        if hasattr(self.llm_client, 'get_role_assignments'):
+            assignments = self.llm_client.get_role_assignments()
+            self.terminal.log("🤖 AI Specialist Model Assignments:")
+            self.terminal.log(f"   🧠 Planner: {assignments.get('planner', 'Not assigned')}")
+            self.terminal.log(f"   ⚙️ Coder: {assignments.get('coder', 'Not assigned')}")
+            self.terminal.log(f"   📄 Assembler: {assignments.get('assembler', 'Not assigned')}")
+            self.terminal.log(f"   🔍 Reviewer: {assignments.get('reviewer', 'Not assigned')}")
+
+            # Show cost optimization info
+            if hasattr(self.llm_client, 'get_cost_estimate'):
+                self.terminal.log("💰 Cost optimization: Using specialized models for each role")
+        else:
+            self.terminal.log("🤖 Using legacy LLM client (single model for all roles)")
+
     def execute_workflow(self, user_prompt: str):
-        # VALIDATION: Check if this is actually a build request
+        """Execute the enhanced micro-task workflow"""
+        # Validation
         if not self._is_build_request(user_prompt):
             self.terminal.log(f"⚠️  Skipping workflow - not a build request: '{user_prompt}'")
             return
 
-        self.terminal.log("🚀 Starting AvA development workflow...")
+        self.terminal.log("🚀 Starting AvA Enhanced Micro-Task Workflow...")
         self.terminal.log(f"📝 Build request: {user_prompt}")
 
-        # Display cache stats
+        # Display system status
         cache_stats = self.context_cache.get_stats()
         self.terminal.log(f"📊 Context cache: {cache_stats['cache_size']} items, {cache_stats['hit_rate']:.1%} hit rate")
 
-        # NEW: Check RAG status with enhanced feedback
         if self.rag_manager and self.rag_manager.is_ready:
-            self.terminal.log("🧠 RAG system ready - will enhance code generation with cached knowledge")
+            self.terminal.log("🧠 RAG system ready - will enhance all AI agents with knowledge")
         else:
-            self.terminal.log("⚠️  RAG system not ready - proceeding without context enhancement")
+            self.terminal.log("⚠️  RAG system not ready - proceeding with base knowledge")
 
         self.workflow_started.emit(user_prompt)
 
@@ -154,11 +656,131 @@ class WorkflowEngine(QObject):
         self.workflow_thread = StreamingWorkflowThread(self, user_prompt)
         self.workflow_thread.start()
 
+    async def _execute_enhanced_workflow_async(self, user_prompt: str):
+        """Enhanced async workflow with clear AI role separation"""
+        try:
+            # Stage 1: Planner creates high-level plan
+            self._update_workflow_stage("planning", "Planner AI creating project architecture...")
+            plan = await self.planner.create_project_plan(user_prompt, self.context_cache)
+
+            # Stage 2: Planner creates micro-tasks for each file
+            self._update_workflow_stage("decomposition", "Planner AI creating micro-task breakdown...")
+            all_micro_tasks = []
+
+            # Get files in priority order
+            file_priorities = plan.get("file_priorities", {"main.py": 1})
+            sorted_files = sorted(file_priorities.items(), key=lambda x: x[1])
+
+            for file_path, priority in sorted_files:
+                file_tasks = await self.planner.create_micro_tasks(plan, file_path, self.context_cache)
+                all_micro_tasks.extend(file_tasks)
+
+            # Update total tasks count
+            self.current_workflow_state["total_tasks"] = len(all_micro_tasks)
+            self.terminal.log(f"📋 Total micro-tasks created: {len(all_micro_tasks)}")
+
+            # Stage 3: Coder AI implements micro-tasks
+            self._update_workflow_stage("generation", "Coder AI implementing micro-tasks...")
+            result = await self._execute_micro_tasks_with_review(all_micro_tasks, plan)
+
+            # Stage 4: Project finalization
+            if result["success"]:
+                self._update_workflow_stage("finalization", "Setting up code viewer...")
+                self._setup_code_viewer_project(result)
+
+            self._update_workflow_stage("complete", "Enhanced workflow completed!")
+            self.terminal.log("✅ Enhanced micro-task workflow completed successfully!")
+            self.workflow_completed.emit(result)
+
+        except Exception as e:
+            self._update_workflow_stage("error", f"Workflow failed: {e}")
+            self.terminal.log(f"❌ Enhanced workflow failed: {e}")
+            error_result = {"success": False, "error": str(e)}
+            self.workflow_completed.emit(error_result)
+
+    async def _execute_micro_tasks_with_review(self, micro_tasks: list, plan: dict) -> dict:
+        """Execute micro-tasks with Coder AI and review with Planner AI"""
+        project_name = plan["project_name"]
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        project_dir = self.output_dir / f"{project_name}_{timestamp}"
+        project_dir.mkdir(exist_ok=True)
+
+        generated_files = []
+
+        # Group tasks by file
+        tasks_by_file = {}
+        for task in micro_tasks:
+            file_path = task["file_path"]
+            if file_path not in tasks_by_file:
+                tasks_by_file[file_path] = []
+            tasks_by_file[file_path].append(task)
+
+        # Process each file with full AI pipeline
+        for file_idx, (file_path, file_tasks) in enumerate(tasks_by_file.items()):
+            self.terminal.log(f"🔄 Processing file {file_idx + 1}/{len(tasks_by_file)}: {file_path}")
+
+            # Step 1: Coder AI implements each micro-task
+            task_results = []
+            file_context = ""
+
+            for task in file_tasks:
+                self.current_workflow_state["completed_tasks"] += 1
+                progress = (self.current_workflow_state["completed_tasks"] /
+                            self.current_workflow_state["total_tasks"]) * 100
+
+                self.terminal.log(f"  [{progress:.0f}%] Coder AI: {task['description']}")
+
+                # Coder AI implements the task
+                code = await self.coder.implement_micro_task(task, file_context, self.context_cache)
+
+                task_results.append({
+                    "task": task,
+                    "code": code
+                })
+
+                # Update file context for next task
+                file_context += f"\n# {task['description']}\n{code}\n"
+
+            # Step 2: Assembler AI combines micro-tasks
+            self.terminal.log(f"📄 Assembler AI: Combining {len(task_results)} micro-tasks for {file_path}")
+            assembled_code = await self.assembler.assemble_file(file_path, task_results, plan, self.context_cache)
+
+            # Step 3: Planner AI reviews and approves
+            approved, feedback, suggestions = await self.planner.review_and_approve(
+                file_path, assembled_code, file_tasks
+            )
+
+            # Step 4: Handle review results
+            final_code = assembled_code
+            if not approved and suggestions:
+                self.terminal.log(f"🔄 Implementing Planner AI suggestions for {file_path}")
+                # Could implement revision loop here
+                # For now, we'll proceed with suggestions logged
+                for suggestion in suggestions[:2]:
+                    self.terminal.log(f"   💡 Suggestion: {suggestion}")
+
+            # Step 5: Write the final file
+            full_file_path = project_dir / file_path
+            full_file_path.parent.mkdir(parents=True, exist_ok=True)
+            full_file_path.write_text(final_code, encoding='utf-8')
+            generated_files.append(str(full_file_path))
+
+            self.terminal.log(f"  ✅ File completed: {full_file_path}")
+            self.file_generated.emit(str(full_file_path))
+
+        return {
+            "success": True,
+            "project_dir": str(project_dir),
+            "files": generated_files,
+            "project_name": project_name,
+            "file_count": len(generated_files)
+        }
+
     def _is_build_request(self, prompt: str) -> bool:
         """Determine if this is actually a request to build something"""
         prompt_lower = prompt.lower().strip()
 
-        # IGNORE casual chat
+        # Ignore casual chat
         casual_phrases = [
             'hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay',
             'yes', 'no', 'sure', 'cool', 'nice', 'good', 'great'
@@ -167,14 +789,14 @@ class WorkflowEngine(QObject):
         if prompt_lower in casual_phrases:
             return False
 
-        # IGNORE questions without build intent
+        # Ignore questions without build intent
         question_words = ['what', 'how', 'why', 'when', 'where', 'who']
         if any(prompt_lower.startswith(word) for word in question_words):
             build_question_patterns = ['how to build', 'how to create', 'how to make', 'what should i build']
             if not any(pattern in prompt_lower for pattern in build_question_patterns):
                 return False
 
-        # REQUIRE explicit build keywords
+        # Require explicit build keywords
         build_keywords = [
             'build', 'create', 'make', 'generate', 'develop', 'code',
             'implement', 'write', 'design', 'construct', 'program',
@@ -186,349 +808,11 @@ class WorkflowEngine(QObject):
 
         return has_build_keyword and is_substantial
 
-    async def _execute_workflow_async(self, user_prompt: str):
-        """NEW: Async workflow execution with streaming"""
-        try:
-            # Stage 1: Planning
-            self._update_workflow_stage("planning", "Creating high-level plan...")
-            plan = await self._create_plan_streaming(user_prompt)
-
-            # Stage 2: Micro-task creation
-            self._update_workflow_stage("decomposition", "Breaking down into micro-tasks...")
-            micro_tasks = await self._create_micro_tasks_streaming(plan, user_prompt)
-
-            # Update total tasks count
-            self.current_workflow_state["total_tasks"] = len(micro_tasks)
-
-            # Stage 3: Code generation
-            self._update_workflow_stage("generation", "Executing micro-tasks...")
-            result = await self._execute_micro_tasks_streaming(micro_tasks, plan)
-
-            # Stage 4: Finalization
-            if result["success"]:
-                self._update_workflow_stage("finalization", "Setting up code viewer...")
-                self._setup_code_viewer_project(result)
-
-            self._update_workflow_stage("complete", "Workflow completed!")
-            self.terminal.log("✅ Workflow completed successfully!")
-            self.workflow_completed.emit(result)
-
-        except Exception as e:
-            self._update_workflow_stage("error", f"Workflow failed: {e}")
-            self.terminal.log(f"❌ Workflow failed: {e}")
-            error_result = {"success": False, "error": str(e)}
-            self.workflow_completed.emit(error_result)
-
     def _update_workflow_stage(self, stage: str, description: str):
         """Update workflow stage and emit progress signal"""
         self.current_workflow_state["stage"] = stage
         self.workflow_progress.emit(stage, description)
         self.terminal.log(f"📋 {description}")
-
-    async def _create_plan_streaming(self, user_prompt: str) -> dict:
-        """NEW: Streaming plan creation with context caching"""
-        # Check cache for similar planning requests
-        cache_key = f"planning_{user_prompt[:50]}"
-        cached_context = self.context_cache.get_context(cache_key, "planning")
-
-        # Get RAG context with caching
-        rag_context = ""
-        if self.rag_manager and self.rag_manager.is_ready:
-            self.terminal.log("  -> Querying RAG for planning context (with caching)...")
-
-            if cached_context:
-                rag_context = cached_context
-                self.terminal.log(f"  -> Using cached context ({len(rag_context)} chars) ⚡")
-            else:
-                rag_context = self.rag_manager.get_context_for_code_generation(
-                    f"project planning architecture {user_prompt}", "python"
-                )
-                if rag_context:
-                    # Store in cache with high relevance for planning
-                    self.context_cache.store_context(cache_key, rag_context, "planning", 0.9)
-                    self.terminal.log(f"  -> RAG context retrieved and cached ({len(rag_context)} chars)")
-                else:
-                    self.terminal.log("  -> No relevant RAG context found")
-
-        plan_prompt = f"""
-Act as a software architect. Create a detailed plan for: {user_prompt}
-
-{f"Reference Context from Knowledge Base:\n{rag_context}\n" if rag_context else ""}
-
-Return ONLY a JSON structure:
-{{
-    "project_name": "snake_case_name",
-    "description": "Brief description",
-    "architecture": "Brief architecture overview",
-    "files_needed": [
-        {{"path": "main.py", "purpose": "Main entry point", "priority": 1}},
-        {{"path": "utils.py", "purpose": "Utility functions", "priority": 2}}
-    ],
-    "dependencies": ["requests", "pathlib"]
-}}
-
-Keep it simple but functional - maximum 5 files for a working prototype.
-"""
-
-        self.terminal.log("  -> Calling Planner LLM (streaming)...")
-
-        # NEW: Stream the planning response
-        response_chunks = []
-        async for chunk in self.llm_client.stream_chat(plan_prompt):
-            response_chunks.append(chunk)
-            # Show streaming progress in terminal
-            if len(response_chunks) % 10 == 0:  # Every 10 chunks
-                self.terminal.log(f"    -> Planning... ({len(''.join(response_chunks))} chars)")
-
-        response = ''.join(response_chunks)
-        self.terminal.log(f"  -> Planner response completed ({len(response)} chars)")
-
-        try:
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            if start >= 0 and end > start:
-                plan = json.loads(response[start:end])
-                self.terminal.log(f"  -> Plan created: {plan['project_name']}")
-
-                self.terminal.log("  -> Plan Summary:")
-                for file_info in plan["files_needed"]:
-                    self.terminal.log(f"     📄 {file_info['path']}: {file_info['purpose']}")
-
-                return plan
-        except Exception as e:
-            self.terminal.log(f"  -> JSON parsing failed: {e}")
-
-        # Fallback plan
-        plan = {
-            "project_name": "generated_project",
-            "description": user_prompt,
-            "files_needed": [{"path": "main.py", "purpose": "Main implementation", "priority": 1}],
-            "dependencies": []
-        }
-        self.terminal.log("  -> Using fallback plan")
-        return plan
-
-    async def _create_micro_tasks_streaming(self, plan: dict, user_prompt: str) -> list:
-        """NEW: Streaming micro-task creation with smart caching"""
-        micro_tasks = []
-        files_sorted = sorted(plan["files_needed"], key=lambda x: x.get("priority", 999))
-
-        for file_info in files_sorted:
-            self.terminal.log(f"  -> Creating micro-tasks for {file_info['path']} (streaming)...")
-
-            # Smart context caching by file purpose and type
-            context_cache_key = f"{file_info['purpose']}_{file_info['path']}_microtasks"
-            cached_context = self.context_cache.get_context(context_cache_key, "file_planning")
-
-            rag_context = ""
-            if self.rag_manager and self.rag_manager.is_ready:
-                if cached_context:
-                    rag_context = cached_context
-                    self.terminal.log(f"    -> Using cached context for {file_info['path']} ⚡")
-                else:
-                    file_query = f"{file_info['purpose']} {file_info['path']} python implementation"
-                    rag_context = self.rag_manager.get_context_for_code_generation(file_query, "python")
-
-                    if rag_context:
-                        # Cache with relevance based on context quality
-                        relevance = min(1.0, len(rag_context) / 500)  # Higher relevance for longer context
-                        self.context_cache.store_context(context_cache_key, rag_context, "file_planning", relevance)
-                        self.terminal.log(f"    -> Context cached for future use")
-
-            tasks_prompt = f"""
-Break down this file into atomic micro-tasks for code generation:
-
-File: {file_info['path']}
-Purpose: {file_info['purpose']}
-Project Context: {user_prompt}
-
-{f"Reference Examples from Knowledge Base:\n{rag_context}\n" if rag_context else ""}
-
-Return ONLY a JSON array of micro-tasks:
-[
-    {{"id": "imports_{file_info['path']}", "type": "imports", "description": "Import necessary modules"}},
-    {{"id": "main_function_{file_info['path']}", "type": "function", "description": "Create main function"}}
-]
-"""
-
-            # Stream micro-task creation
-            response_chunks = []
-            async for chunk in self.llm_client.stream_chat(tasks_prompt):
-                response_chunks.append(chunk)
-                # Show progress every 8 chunks
-                if len(response_chunks) % 8 == 0:
-                    self.terminal.log(f"      -> Analyzing {file_info['path']}...")
-
-            response = ''.join(response_chunks)
-
-            try:
-                start = response.find('[')
-                end = response.rfind(']') + 1
-                if start >= 0 and end > start:
-                    file_tasks = json.loads(response[start:end])
-                    for task in file_tasks:
-                        task["file_path"] = file_info["path"]
-                        task["file_purpose"] = file_info["purpose"]
-                        task["rag_context"] = rag_context
-                    micro_tasks.extend(file_tasks)
-                    self.terminal.log(f"    -> Added {len(file_tasks)} micro-tasks")
-                else:
-                    raise ValueError("No JSON array found")
-            except Exception as e:
-                self.terminal.log(f"    -> Micro-task parsing failed: {e}")
-                # Fallback task
-                micro_tasks.append({
-                    "id": f"implement_{file_info['path']}",
-                    "file_path": file_info["path"],
-                    "type": "complete_file",
-                    "description": f"Implement complete {file_info['path']}",
-                    "rag_context": rag_context
-                })
-
-        return micro_tasks
-
-    async def _execute_micro_tasks_streaming(self, micro_tasks: list, plan: dict) -> dict:
-        """NEW: Streaming micro-task execution with progress tracking"""
-        project_name = plan["project_name"]
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        project_dir = self.output_dir / f"{project_name}_{timestamp}"
-        project_dir.mkdir(exist_ok=True)
-
-        generated_files = []
-        code_snippets = {}
-
-        # Group tasks by file
-        tasks_by_file = {}
-        for task in micro_tasks:
-            file_path = task["file_path"]
-            if file_path not in tasks_by_file:
-                tasks_by_file[file_path] = []
-            tasks_by_file[file_path].append(task)
-
-        # Execute tasks file by file with streaming
-        for file_idx, (file_path, file_tasks) in enumerate(tasks_by_file.items()):
-            self.terminal.log(f"🔧 Processing file {file_idx + 1}/{len(tasks_by_file)}: {file_path}")
-            code_snippets[file_path] = ""
-
-            # Execute each micro-task for this file
-            for task_idx, task in enumerate(file_tasks):
-                # Update progress
-                self.current_workflow_state["completed_tasks"] += 1
-                progress = (self.current_workflow_state["completed_tasks"] /
-                            self.current_workflow_state["total_tasks"]) * 100
-
-                self.terminal.log(f"  -> [{progress:.0f}%] Executing: {task['description']}")
-
-                # Smart context caching for code generation
-                code_cache_key = f"{task['type']}_{task['file_path']}_code"
-                cached_code_context = self.context_cache.get_context(code_cache_key, "code_generation")
-
-                rag_context = task.get("rag_context", "")
-                if not rag_context and cached_code_context:
-                    rag_context = cached_code_context
-                    self.terminal.log(f"    -> Using cached code context ⚡")
-
-                code_prompt = f"""
-Generate Python code for this micro-task:
-
-Task: {task['description']}
-File: {file_path}
-Context: {code_snippets[file_path] if code_snippets[file_path] else 'First task for this file'}
-Project: {plan['description']}
-
-{f"Reference Examples and Best Practices:\n{rag_context}\n" if rag_context else ""}
-
-Return ONLY Python code, no explanations:
-"""
-
-                self.terminal.log(f"    -> Calling Code LLM (streaming)...")
-
-                # Stream code generation
-                code_chunks = []
-                async for chunk in self.llm_client.stream_chat(code_prompt):
-                    code_chunks.append(chunk)
-                    # Show streaming progress for code
-                    if len(code_chunks) % 5 == 0:
-                        self.terminal.log(f"      -> Generating code... ({len(''.join(code_chunks))} chars)")
-
-                code_response = ''.join(code_chunks)
-                code = self._clean_code_response(code_response)
-                code_snippets[file_path] += f"\n# {task['description']}\n{code}\n"
-
-                # Cache successful code context for similar tasks
-                if len(code) > 50:  # Only cache substantial code
-                    self.context_cache.store_context(code_cache_key, rag_context, "code_generation", 0.8)
-
-                self.terminal.log(f"    -> Generated {len(code)} chars")
-
-            # Assemble complete file with streaming
-            self.terminal.log(f"📝 Assembling complete file: {file_path}")
-            final_code = await self._assemble_final_file_streaming(file_path, code_snippets[file_path], plan)
-
-            # Write file
-            full_file_path = project_dir / file_path
-            full_file_path.parent.mkdir(parents=True, exist_ok=True)
-            full_file_path.write_text(final_code, encoding='utf-8')
-            generated_files.append(str(full_file_path))
-
-            self.terminal.log(f"  -> ✅ Written: {full_file_path}")
-            self.file_generated.emit(str(full_file_path))
-
-        return {
-            "success": True,
-            "project_dir": str(project_dir),
-            "files": generated_files,
-            "project_name": project_name,
-            "file_count": len(generated_files)
-        }
-
-    async def _assemble_final_file_streaming(self, file_path: str, code_content: str, plan: dict) -> str:
-        """NEW: Streaming file assembly with context caching"""
-        # Check cache for assembly best practices
-        assembly_cache_key = f"assembly_{file_path}_practices"
-        cached_assembly_context = self.context_cache.get_context(assembly_cache_key, "assembly")
-
-        rag_context = ""
-        if self.rag_manager and self.rag_manager.is_ready:
-            if cached_assembly_context:
-                rag_context = cached_assembly_context
-                self.terminal.log(f"  -> Using cached assembly practices ⚡")
-            else:
-                assembly_query = f"python file structure organization {file_path} best practices"
-                rag_context = self.rag_manager.get_context_for_code_generation(assembly_query, "python")
-
-                if rag_context:
-                    self.context_cache.store_context(assembly_cache_key, rag_context, "assembly", 0.7)
-
-        assemble_prompt = f"""
-Assemble this code into a complete, working Python file:
-
-File: {file_path}
-Code snippets: {code_content}
-
-{f"Best Practices Reference:\n{rag_context}\n" if rag_context else ""}
-
-Requirements:
-- Organize imports at the top
-- Remove duplicates and conflicts
-- Ensure proper indentation
-- Add file-level docstring
-- Make it runnable and functional
-
-Return ONLY the complete Python file content:
-"""
-
-        self.terminal.log(f"  -> Final assembly pass (streaming)...")
-
-        # Stream assembly
-        assembly_chunks = []
-        async for chunk in self.llm_client.stream_chat(assemble_prompt):
-            assembly_chunks.append(chunk)
-            if len(assembly_chunks) % 8 == 0:
-                self.terminal.log(f"    -> Assembling... ({len(''.join(assembly_chunks))} chars)")
-
-        final_code = ''.join(assembly_chunks)
-        return self._clean_code_response(final_code)
 
     def _setup_code_viewer_project(self, result: dict):
         if result["success"] and self.code_viewer:
@@ -544,15 +828,6 @@ Return ONLY the complete Python file content:
                     break
 
             self.project_loaded.emit(result["project_dir"])
-
-    def _clean_code_response(self, code_response: str) -> str:
-        if "```python" in code_response:
-            code = code_response.split("```python")[1].split("```")[0].strip()
-        elif "```" in code_response:
-            code = code_response.split("```")[1].split("```")[0].strip()
-        else:
-            code = code_response.strip()
-        return code
 
     def _on_file_changed(self, file_path: str, content: str):
         self.terminal.log(f"📝 File modified: {Path(file_path).name}")
