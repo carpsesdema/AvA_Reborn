@@ -1,4 +1,4 @@
-# core/workflow_engine.py - Updated with Modular Services
+# core/workflow_engine.py - Updated with Modular Services - ASYNC GENERATOR FIXED
 
 import asyncio
 from pathlib import Path
@@ -7,8 +7,9 @@ from typing import Dict
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core.workflow_services import (
-    PlannerService, CoderService, AssemblerService, WorkflowOrchestrator
+    PlannerService, CoderService, WorkflowOrchestrator
 )
+from core.assembler_service import AssemblerService  # Import the separate assembler
 
 
 # Keep the existing ContextCache class
@@ -107,13 +108,13 @@ class WorkflowEngine(QObject):
         # Initialize modular AI services
         self.planner_service = PlannerService(llm_client, rag_manager)
         self.coder_service = CoderService(llm_client, rag_manager)
-        self.assembler_service = AssemblerService(llm_client, rag_manager)
+        self.assembler_service = AssemblerService(llm_client, rag_manager)  # Use separate assembler
 
-        # Create orchestrator
+        # Create orchestrator with the separate assembler
         self.orchestrator = WorkflowOrchestrator(
             self.planner_service,
             self.coder_service,
-            self.assembler_service,
+            self.assembler_service,  # Pass the separate assembler
             terminal_window
         )
 
@@ -184,7 +185,7 @@ class WorkflowEngine(QObject):
         self.workflow_thread.start()
 
     async def _execute_enhanced_workflow_async(self, user_prompt: str):
-        """Enhanced async workflow with modular services"""
+        """Enhanced async workflow with modular services - FIXED ASYNC GENERATOR ISSUE"""
         try:
             # Update workflow stage
             self._update_workflow_stage("planning", "Initializing modular services...")
@@ -205,6 +206,10 @@ class WorkflowEngine(QObject):
         except Exception as e:
             self._update_workflow_stage("error", f"Workflow failed: {e}")
             self.terminal.log(f"❌ Enhanced workflow failed: {e}")
+            # Log the full traceback for debugging
+            import traceback
+            self.terminal.log(f"❌ Full error traceback: {traceback.format_exc()}")
+
             error_result = {"success": False, "error": str(e)}
             self.workflow_completed.emit(error_result)
 
@@ -273,7 +278,7 @@ class WorkflowEngine(QObject):
             "services": {
                 "planner": "ModularPlannerService",
                 "coder": "ParallelCoderService",
-                "assembler": "ModularAssemblerService",
+                "assembler": "RobustAssemblerService",
                 "orchestrator": "ParallelWorkflowOrchestrator"
             }
         }

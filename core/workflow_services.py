@@ -1,13 +1,14 @@
-# core/workflow_services.py - Updated with Robust Assembler
+# core/workflow_services.py - FIXED ASYNC GENERATOR ISSUE
 
 import asyncio
 import json
+import hashlib
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
-from typing import List, Tuple
 
-from core.assembler_service import AssemblerService  # Import our new robust assembler
 from core.llm_client import LLMRole
+from core.assembler_service import AssemblerService
 
 
 class PlannerService:
@@ -43,8 +44,11 @@ Return JSON:
 Maximum 6 files for clean workflow.
 """
 
-        response = await self.llm_client.stream_chat(plan_prompt, LLMRole.PLANNER)
-        response_text = ''.join([chunk async for chunk in response])
+        # FIXED: Properly consume the async generator
+        response_chunks = []
+        async for chunk in self.llm_client.stream_chat(plan_prompt, LLMRole.PLANNER):
+            response_chunks.append(chunk)
+        response_text = ''.join(response_chunks)
 
         try:
             plan = self._extract_json(response_text)
@@ -85,8 +89,11 @@ Return JSON array:
 Keep tasks ATOMIC and independent.
 """
 
-        response = await self.llm_client.stream_chat(task_prompt, LLMRole.PLANNER)
-        response_text = ''.join([chunk async for chunk in response])
+        # FIXED: Properly consume the async generator
+        response_chunks = []
+        async for chunk in self.llm_client.stream_chat(task_prompt, LLMRole.PLANNER):
+            response_chunks.append(chunk)
+        response_text = ''.join(response_chunks)
 
         try:
             tasks = self._extract_json(response_text)
@@ -159,9 +166,11 @@ Requirements:
 Return ONLY Python code:
 """
 
-        response = await self.llm_client.stream_chat(code_prompt, LLMRole.CODER)
-        code_chunks = [chunk async for chunk in response]
-        code = ''.join(code_chunks)
+        # FIXED: Properly consume the async generator
+        response_chunks = []
+        async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
+            response_chunks.append(chunk)
+        code = ''.join(response_chunks)
 
         return self._clean_code(code)
 
@@ -226,7 +235,7 @@ class WorkflowOrchestrator:
                  assembler: AssemblerService, terminal=None):
         self.planner = planner
         self.coder = coder
-        self.assembler = assembler  # Now using the robust AssemblerService
+        self.assembler = assembler
         self.terminal = terminal
 
         # Context cache for RAG optimization
