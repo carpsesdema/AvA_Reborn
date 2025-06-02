@@ -49,13 +49,9 @@ async def startup_ava(app: QApplication, app_instance_container: list):
 
     ava_app.fully_initialized_signal.connect(on_fully_initialized)
 
-    # Call initialize. This method is now designed to:
-    # 1. Perform synchronous UI setup.
-    # 2. Use QTimer.singleShot(0, ...) to schedule its async_initialize_components.
-    # This ensures that asyncio.create_task within async_initialize_components
-    # (or further down the call chain like in RAGManager) has a running event loop.
-    ava_app.initialize()
-    print("startup_ava: AvAApplication.initialize() called. Async parts are scheduled via QTimer.")
+    # Call the now asynchronous initialize method
+    await ava_app.initialize() # MODIFIED: await the async method
+    print("startup_ava: AvAApplication.initialize() (async) called. Async components are now scheduled.")
 
 
 if __name__ == "__main__":
@@ -76,8 +72,6 @@ if __name__ == "__main__":
         # Schedule the startup coroutine.
         # asyncio.ensure_future (or create_task) will add it to the asyncio loop.
         # qasync's QEventLoop will ensure it gets processed when the Qt loop runs.
-        # This task will run, call ava_app.initialize(), which then uses QTimer
-        # to schedule the next async part.
         startup_task = asyncio.ensure_future(startup_ava(app, ava_app_instance_container))
 
         print("main.py: QApplication.exec() is about to be called.")
