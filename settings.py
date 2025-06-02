@@ -6,7 +6,7 @@ load_dotenv()
 class Settings:
     # LLM API keys and endpoints (loaded from .env)
     PLANNER_LLM = os.getenv("PLANNER_LLM_MODEL", "planner-llm")
-    CODER_LLM = os.getenv("CODER_LLM_MODEL", "codellama-13b")
+    CODER_LLM = os.getenv("CODER_LLM_MODEL", "qwen2.5-coder:14b")
     RAG_INDEX_PATH = os.getenv("RAG_INDEX_PATH", "./rag_index.db")
     CACHE_ENABLED = True
     # UI prefs
