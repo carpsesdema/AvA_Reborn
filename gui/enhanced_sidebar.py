@@ -1,4 +1,4 @@
-# gui/enhanced_sidebar.py - Simple Clean Fix
+# gui/enhanced_sidebar.py - Compact Layout with Everything Visible
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
@@ -12,7 +12,7 @@ from gui.components import ModernButton, StatusIndicator
 
 
 class StyledPanel(QFrame):
-    """Base panel with clean styling"""
+    """Compact panel with clean styling"""
 
     def __init__(self, title="", collapsible=False, initially_collapsed=False):
         super().__init__()
@@ -26,13 +26,13 @@ class StyledPanel(QFrame):
                     stop:0 #2a2a2e, stop:1 #252526);
                 border: 2px solid #00d7ff;
                 border-radius: 8px;
-                margin: 3px;
+                margin: 2px;
             }
         """)
 
         self.main_layout = QVBoxLayout()
-        self.main_layout.setContentsMargins(12, 10, 12, 12)
-        self.main_layout.setSpacing(10)
+        self.main_layout.setContentsMargins(8, 6, 8, 8)  # Reduced padding
+        self.main_layout.setSpacing(6)  # Reduced spacing
 
         if title:
             self._create_header(title)
@@ -40,7 +40,7 @@ class StyledPanel(QFrame):
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.setSpacing(8)
+        self.content_layout.setSpacing(6)
 
         self.main_layout.addWidget(self.content_widget)
         self.setLayout(self.main_layout)
@@ -50,10 +50,10 @@ class StyledPanel(QFrame):
 
     def _create_header(self, title):
         header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 8)
+        header_layout.setContentsMargins(0, 0, 0, 4)
 
         self.title_label = QLabel(title)
-        self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))  # Smaller font
         self.title_label.setStyleSheet("color: #00d7ff; background: transparent;")
 
         header_layout.addWidget(self.title_label)
@@ -61,11 +61,11 @@ class StyledPanel(QFrame):
 
         if self.collapsible:
             self.collapse_btn = QPushButton("+" if self.is_collapsed else "−")
-            self.collapse_btn.setFixedSize(20, 20)
+            self.collapse_btn.setFixedSize(18, 18)  # Smaller button
             self.collapse_btn.setStyleSheet("""
                 QPushButton {
                     background: #00d7ff; color: #1e1e1e; border: none;
-                    border-radius: 10px; font-weight: bold; font-size: 12px;
+                    border-radius: 9px; font-weight: bold; font-size: 11px;
                 } QPushButton:hover { background: #40e0ff; }
             """)
             self.collapse_btn.clicked.connect(self._toggle_collapse)
@@ -97,17 +97,16 @@ class ProjectSessionPanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
-        # Tab buttons - cleaner layout
+        # Compact tab buttons
         tab_layout = QHBoxLayout()
-        tab_layout.setContentsMargins(0, 0, 0, 15)
-        tab_layout.setSpacing(8)
+        tab_layout.setContentsMargins(0, 0, 0, 8)  # Less spacing
+        tab_layout.setSpacing(6)
 
         self.projects_btn = QPushButton("Projects")
         self.sessions_btn = QPushButton("Sessions")
 
-        # Better tab styling
         for btn in [self.projects_btn, self.sessions_btn]:
-            btn.setMinimumHeight(32)
+            btn.setMinimumHeight(28)  # Smaller height
             btn.setCheckable(True)
 
         self.projects_btn.setChecked(True)
@@ -120,30 +119,30 @@ class ProjectSessionPanel(StyledPanel):
         tab_layout.addWidget(self.sessions_btn)
         self.add_layout(tab_layout)
 
-        # Projects section
+        # Compact projects section
         projects_label = QLabel("Active Projects:")
-        projects_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
-        projects_label.setStyleSheet("color: #cccccc; margin: 5px 0;")
+        projects_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))  # Smaller font
+        projects_label.setStyleSheet("color: #cccccc; margin: 2px 0;")
         self.add_widget(projects_label)
 
-        # Simple project list - no custom widgets
+        # Compact project list
         self.project_list = QListWidget()
         self.project_list.setStyleSheet("""
             QListWidget {
                 background: #1e1e1e; 
                 border: 1px solid #404040; 
-                border-radius: 6px; 
+                border-radius: 4px; 
                 color: #cccccc; 
                 outline: none;
-                padding: 4px;
-                font-size: 12px;
+                padding: 2px;
+                font-size: 11px;
             }
             QListWidget::item { 
-                padding: 10px 12px; 
+                padding: 6px 8px; 
                 border-bottom: 1px solid #2d2d30; 
-                border-radius: 4px; 
+                border-radius: 3px; 
                 margin: 1px;
-                min-height: 20px;
+                min-height: 16px;
             }
             QListWidget::item:selected { 
                 background: #00d7ff; 
@@ -161,23 +160,23 @@ class ProjectSessionPanel(StyledPanel):
         self.project_list.addItem("Discord Bot")
         self.project_list.setCurrentRow(0)
 
-        self.project_list.setMinimumHeight(120)
-        self.project_list.setMaximumHeight(140)
+        # Much smaller list
+        self.project_list.setFixedHeight(80)
         self.add_widget(self.project_list)
 
-        # Bigger, better New Project button
+        # Compact New Project button
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        self.new_project_btn.setMinimumHeight(40)
+        self.new_project_btn.setMinimumHeight(32)  # Smaller button
         self.new_project_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #0078d4, stop:1 #005a9e);
                 border: 1px solid #004578;
-                border-radius: 6px;
+                border-radius: 5px;
                 color: white;
-                padding: 10px 15px;
+                padding: 6px 12px;
                 font-weight: bold;
-                font-size: 12px;
+                font-size: 11px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -190,36 +189,31 @@ class ProjectSessionPanel(StyledPanel):
         """)
         self.add_widget(self.new_project_btn)
 
-        # Spacer
-        spacer = QWidget()
-        spacer.setFixedHeight(15)
-        self.add_widget(spacer)
-
-        # Sessions section
+        # Compact sessions section
         sessions_label = QLabel("Sessions (Current Project):")
-        sessions_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
-        sessions_label.setStyleSheet("color: #cccccc; margin: 5px 0;")
+        sessions_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        sessions_label.setStyleSheet("color: #cccccc; margin: 8px 0 2px 0;")
         self.add_widget(sessions_label)
 
-        # Simple progress bar
+        # Compact progress bar
         self.session_progress = QProgressBar()
         self.session_progress.setValue(45)
-        self.session_progress.setFixedHeight(8)
+        self.session_progress.setFixedHeight(6)  # Thinner
         self.session_progress.setStyleSheet("""
             QProgressBar {
                 background: #2d2d30;
                 border: none;
-                border-radius: 4px;
+                border-radius: 3px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 4px;
+                border-radius: 3px;
             }
         """)
         self.add_widget(self.session_progress)
 
-        # Simple session list
+        # Compact session list
         self.session_list = QListWidget()
         self.session_list.setStyleSheet(self.project_list.styleSheet())
         self.session_list.addItem("Main Chat")
@@ -227,21 +221,21 @@ class ProjectSessionPanel(StyledPanel):
         self.session_list.addItem("Bug Fixes")
         self.session_list.setCurrentRow(0)
 
-        self.session_list.setMinimumHeight(80)
-        self.session_list.setMaximumHeight(100)
+        # Small session list
+        self.session_list.setFixedHeight(65)
         self.add_widget(self.session_list)
 
     def _update_tab_styles(self):
         active_style = """
             QPushButton {
                 background: #00d7ff; color: #1e1e1e; border: 1px solid #00d7ff;
-                border-radius: 6px; padding: 8px 16px; font-weight: bold; font-size: 11px;
+                border-radius: 5px; padding: 6px 12px; font-weight: bold; font-size: 10px;
             }
         """
         inactive_style = """
             QPushButton {
                 background: #2d2d30; color: #cccccc; border: 1px solid #404040;
-                border-radius: 6px; padding: 8px 16px; font-weight: 500; font-size: 11px;
+                border-radius: 5px; padding: 6px 12px; font-weight: 500; font-size: 10px;
             } QPushButton:hover { background: #3e3e42; color: white; }
         """
 
@@ -272,14 +266,14 @@ class LLMConfigPanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
-        # Chat LLM
+        # Compact Chat LLM
         chat_layout = QHBoxLayout()
-        chat_layout.setSpacing(8)
+        chat_layout.setSpacing(6)
 
         chat_label = QLabel("Chat LLM:")
-        chat_label.setFont(QFont("Segoe UI", 9))
+        chat_label.setFont(QFont("Segoe UI", 8))
         chat_label.setStyleSheet("color: #cccccc;")
-        chat_label.setMinimumWidth(70)
+        chat_label.setMinimumWidth(60)
 
         self.chat_combo = QComboBox()
         self.chat_combo.addItems([
@@ -290,14 +284,15 @@ class LLMConfigPanel(StyledPanel):
         ])
         self.chat_combo.setStyleSheet("""
             QComboBox {
-                background: #1e1e1e; border: 1px solid #404040; border-radius: 4px;
-                padding: 6px 10px; color: #cccccc; min-width: 120px; font-size: 9px;
+                background: #1e1e1e; border: 1px solid #404040; border-radius: 3px;
+                padding: 4px 8px; color: #cccccc; min-width: 100px; font-size: 8px;
+                min-height: 20px;
             }
             QComboBox:hover { border-color: #00d7ff; }
-            QComboBox::drop-down { border: none; width: 20px; }
+            QComboBox::drop-down { border: none; width: 16px; }
             QComboBox::down-arrow {
-                image: none; border-left: 4px solid transparent; border-right: 4px solid transparent;
-                border-top: 4px solid #cccccc; margin-right: 6px;
+                image: none; border-left: 3px solid transparent; border-right: 3px solid transparent;
+                border-top: 3px solid #cccccc; margin-right: 4px;
             }
             QComboBox QAbstractItemView {
                 background: #2d2d30; border: 1px solid #00d7ff;
@@ -312,14 +307,14 @@ class LLMConfigPanel(StyledPanel):
         chat_layout.addWidget(chat_status)
         self.add_layout(chat_layout)
 
-        # Code LLM
+        # Compact Code LLM
         code_label = QLabel("Specialized LLM (Code Gen):")
-        code_label.setFont(QFont("Segoe UI", 9))
-        code_label.setStyleSheet("color: #cccccc; margin: 8px 0 4px 0;")
+        code_label.setFont(QFont("Segoe UI", 8))
+        code_label.setStyleSheet("color: #cccccc; margin: 4px 0 2px 0;")
         self.add_widget(code_label)
 
         code_layout = QHBoxLayout()
-        code_layout.setSpacing(8)
+        code_layout.setSpacing(6)
 
         self.code_combo = QComboBox()
         self.code_combo.addItems([
@@ -336,16 +331,16 @@ class LLMConfigPanel(StyledPanel):
         code_layout.addWidget(code_status)
         self.add_layout(code_layout)
 
-        # Temperature
+        # Compact Temperature
         temp_header = QHBoxLayout()
-        temp_header.setContentsMargins(0, 12, 0, 4)
+        temp_header.setContentsMargins(0, 6, 0, 2)
 
         temp_label = QLabel("Temperature (Chat):")
-        temp_label.setFont(QFont("Segoe UI", 9))
+        temp_label.setFont(QFont("Segoe UI", 8))
         temp_label.setStyleSheet("color: #cccccc;")
 
         self.temp_value = QLabel("0.70")
-        self.temp_value.setStyleSheet("color: #00d7ff; font-weight: bold;")
+        self.temp_value.setStyleSheet("color: #00d7ff; font-weight: bold; font-size: 8px;")
 
         temp_header.addWidget(temp_label)
         temp_header.addStretch()
@@ -355,30 +350,36 @@ class LLMConfigPanel(StyledPanel):
         self.temp_slider = QSlider(Qt.Orientation.Horizontal)
         self.temp_slider.setRange(0, 100)
         self.temp_slider.setValue(70)
+        self.temp_slider.setFixedHeight(20)  # Smaller slider
         self.temp_slider.setStyleSheet("""
             QSlider::groove:horizontal {
-                border: 1px solid #404040; height: 6px; background: #1e1e1e; border-radius: 3px;
+                border: 1px solid #404040; height: 4px; background: #1e1e1e; border-radius: 2px;
             }
             QSlider::handle:horizontal {
-                background: #00d7ff; border: 2px solid #00d7ff; width: 16px; height: 16px;
-                border-radius: 8px; margin: -6px 0;
+                background: #00d7ff; border: 1px solid #00d7ff; width: 12px; height: 12px;
+                border-radius: 6px; margin: -4px 0;
             }
             QSlider::handle:horizontal:hover { background: #40e0ff; border-color: #40e0ff; }
             QSlider::sub-page:horizontal {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 3px;
+                border-radius: 2px;
             }
         """)
         self.temp_slider.valueChanged.connect(self._on_temperature_changed)
         self.add_widget(self.temp_slider)
 
-        # Persona button
-        spacer = QWidget()
-        spacer.setFixedHeight(8)
-        self.add_widget(spacer)
-
+        # Compact Persona button
         self.persona_btn = ModernButton("🎭 Configure Persona", button_type="secondary")
-        self.persona_btn.setMinimumHeight(32)
+        self.persona_btn.setMinimumHeight(26)  # Smaller button
+        self.persona_btn.setStyleSheet("""
+            QPushButton {
+                background: #2d2d30; border: 1px solid #404040; border-radius: 4px;
+                color: #cccccc; padding: 4px 8px; font-weight: 500; font-size: 9px;
+                min-height: 26px;
+            }
+            QPushButton:hover { background: #3e3e42; border-color: #00d7ff; color: white; }
+            QPushButton:pressed { background: #1e1e1e; }
+        """)
         self.add_widget(self.persona_btn)
 
     def _on_temperature_changed(self, value):
@@ -393,27 +394,33 @@ class KnowledgeBasePanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
+        # Compact buttons
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
-        self.scan_btn.setMinimumHeight(32)
+        self.scan_btn.setMinimumHeight(26)
+        self.scan_btn.setStyleSheet("""
+            QPushButton {
+                background: #2d2d30; border: 1px solid #404040; border-radius: 4px;
+                color: #cccccc; padding: 4px 8px; font-weight: 500; font-size: 9px;
+            }
+            QPushButton:hover { background: #3e3e42; border-color: #00d7ff; }
+        """)
         self.add_widget(self.scan_btn)
 
-        spacer = QWidget()
-        spacer.setFixedHeight(6)
-        self.add_widget(spacer)
-
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
-        self.add_files_btn.setMinimumHeight(32)
+        self.add_files_btn.setMinimumHeight(26)
+        self.add_files_btn.setStyleSheet(self.scan_btn.styleSheet())
         self.add_widget(self.add_files_btn)
 
+        # Compact RAG status
         rag_status_layout = QHBoxLayout()
-        rag_status_layout.setContentsMargins(0, 8, 0, 0)
+        rag_status_layout.setContentsMargins(0, 4, 0, 0)
 
         rag_label = QLabel("RAG:")
-        rag_label.setFont(QFont("Segoe UI", 9))
+        rag_label.setFont(QFont("Segoe UI", 8))
         rag_label.setStyleSheet("color: #cccccc;")
 
         self.rag_status_display_label = QLabel("Initializing embedder...")
-        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 9px;")
+        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 8px;")
 
         rag_status_layout.addWidget(rag_label)
         rag_status_layout.addWidget(self.rag_status_display_label, 1)
@@ -438,16 +445,18 @@ class ChatActionsPanel(StyledPanel):
             ("🔄 Check for Updates", "check_updates")
         ]
 
-        for i, (text, action) in enumerate(buttons):
+        for text, action in buttons:
             btn = ModernButton(text, button_type="secondary")
-            btn.setMinimumHeight(30)
+            btn.setMinimumHeight(24)  # Smaller buttons
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: #2d2d30; border: 1px solid #404040; border-radius: 4px;
+                    color: #cccccc; padding: 3px 6px; font-weight: 500; font-size: 8px;
+                }
+                QPushButton:hover { background: #3e3e42; border-color: #00d7ff; }
+            """)
             btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
             self.add_widget(btn)
-
-            if i < len(buttons) - 1:
-                spacer = QWidget()
-                spacer.setFixedHeight(3)
-                self.add_widget(spacer)
 
 
 class AvALeftSidebar(QWidget):
@@ -463,8 +472,8 @@ class AvALeftSidebar(QWidget):
 
     def _init_ui(self):
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(6, 6, 6, 6)
-        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(4, 4, 4, 4)  # Minimal margins
+        main_layout.setSpacing(0)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -473,10 +482,10 @@ class AvALeftSidebar(QWidget):
         scroll_area.setStyleSheet("""
             QScrollArea { background: transparent; border: none; }
             QScrollBar:vertical {
-                background: #2d2d30; width: 8px; border-radius: 4px; margin: 0px;
+                background: #2d2d30; width: 6px; border-radius: 3px; margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #404040; border-radius: 4px; min-height: 20px;
+                background: #404040; border-radius: 3px; min-height: 15px;
             }
             QScrollBar::handle:vertical:hover { background: #00d7ff; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -487,9 +496,9 @@ class AvALeftSidebar(QWidget):
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(6)
+        content_layout.setSpacing(3)  # Minimal spacing
 
-        # Create panels
+        # Create compact panels
         self.project_panel = ProjectSessionPanel()
         self.llm_panel = LLMConfigPanel()
         self.rag_panel = KnowledgeBasePanel()
@@ -528,4 +537,4 @@ class AvALeftSidebar(QWidget):
     def update_sidebar_rag_status(self, status_text: str, color_hex: str):
         if hasattr(self.rag_panel, 'rag_status_display_label'):
             self.rag_panel.rag_status_display_label.setText(status_text)
-            self.rag_panel.rag_status_display_label.setStyleSheet(f"color: {color_hex}; font-size: 9px;")
+            self.rag_panel.rag_status_display_label.setStyleSheet(f"color: {color_hex}; font-size: 8px;")
