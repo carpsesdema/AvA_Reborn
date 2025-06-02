@@ -62,19 +62,19 @@ class StyledPanel(QFrame):
                     stop:0 #2a2a2e, stop:1 #252526);
                 border: 2px solid #00d7ff;
                 border-radius: 8px;
-                margin: 4px 2px;
+                margin: 2px 2px; /* MODIFIED: Reduced top/bottom margin */
             }
         """)
 
         self.main_layout = QVBoxLayout()
-        self.main_layout.setContentsMargins(12, 8, 12, 12)
-        self.main_layout.setSpacing(8)
+        self.main_layout.setContentsMargins(10, 6, 10, 8) # MODIFIED: Reduced internal padding
+        self.main_layout.setSpacing(6) # MODIFIED: Reduced internal spacing
 
         if title:
             self._create_header(title)
 
         self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(6)
+        self.content_layout.setSpacing(6) # MODIFIED: Consistent spacing for content
         self.main_layout.addLayout(self.content_layout)
 
         self.setLayout(self.main_layout)
@@ -146,7 +146,7 @@ class ProjectSessionPanel(StyledPanel):
     session_changed = Signal(str)
 
     def __init__(self):
-        super().__init__()
+        super().__init__() # Title is managed by tab-like buttons now
         self._init_ui()
 
     def _init_ui(self):
@@ -234,12 +234,12 @@ class ProjectSessionPanel(StyledPanel):
 
         # Add sample projects
         self._add_sample_projects()
-        self.project_list.setMaximumHeight(100)
+        self.project_list.setMaximumHeight(90) # MODIFIED: Slightly reduced
         self.add_widget(self.project_list)
 
         # New Project button
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        self.new_project_btn.setMinimumHeight(32)
+        self.new_project_btn.setMinimumHeight(30) # MODIFIED: Slightly reduced
         self.add_widget(self.new_project_btn)
 
         # Sessions section
@@ -270,7 +270,7 @@ class ProjectSessionPanel(StyledPanel):
         self.session_list = QListWidget()
         self.session_list.setStyleSheet(self.project_list.styleSheet())
         self._add_sample_sessions()
-        self.session_list.setMaximumHeight(80)
+        self.session_list.setMaximumHeight(70) # MODIFIED: Slightly reduced
         self.add_widget(self.session_list)
 
     def _add_sample_projects(self):
@@ -396,7 +396,7 @@ class LLMConfigPanel(StyledPanel):
         chat_label = QLabel("Chat LLM:")
         chat_label.setFont(QFont("Segoe UI", 9))
         chat_label.setStyleSheet("color: #cccccc; background: transparent;")
-        chat_label.setMinimumWidth(80)
+        chat_label.setMinimumWidth(70) # MODIFIED: Slightly reduced
 
         self.chat_combo = QComboBox()
         self.chat_combo.addItems([
@@ -520,7 +520,7 @@ class LLMConfigPanel(StyledPanel):
 
         # Configure Persona Button
         self.persona_btn = ModernButton("🎭 Configure Persona", button_type="secondary")
-        self.persona_btn.setMinimumHeight(30)
+        self.persona_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
         self.add_widget(self.persona_btn)
 
     def _on_temperature_changed(self, value):
@@ -540,12 +540,12 @@ class KnowledgeBasePanel(StyledPanel):
     def _init_ui(self):
         # Scan Directory button
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
-        self.scan_btn.setMinimumHeight(30)
+        self.scan_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
         self.add_widget(self.scan_btn)
 
         # Add Files button
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
-        self.add_files_btn.setMinimumHeight(30)
+        self.add_files_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
         self.add_widget(self.add_files_btn)
 
         # RAG Status
@@ -556,11 +556,12 @@ class KnowledgeBasePanel(StyledPanel):
         rag_status_label.setFont(QFont("Segoe UI", 9))
         rag_status_label.setStyleSheet("color: #cccccc; background: transparent;")
 
-        rag_status_text = QLabel("Initializing embedder...")
-        rag_status_text.setStyleSheet("color: #ffb900; font-size: 9px; background: transparent;")
+        # MODIFIED: Made this an instance variable
+        self.rag_status_display_label = QLabel("Initializing embedder...")
+        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 9px; background: transparent;")
 
         rag_status_layout.addWidget(rag_status_label)
-        rag_status_layout.addWidget(rag_status_text, 1)
+        rag_status_layout.addWidget(self.rag_status_display_label, 1)
         self.add_layout(rag_status_layout)
 
 
@@ -578,8 +579,8 @@ class ChatActionsPanel(StyledPanel):
         buttons = [
             ("💬 New Session", "new_session"),
             ("📊 View LLM Log", "view_log"),
-            ("📟 Open Terminal", "open_terminal"),  # ADDED: Terminal button
-            ("📄 Open Code Viewer", "open_code_viewer"),  # ADDED: Code viewer button
+            ("📟 Open Terminal", "open_terminal"),
+            ("📄 Open Code Viewer", "open_code_viewer"),
             ("⚡ View Generated Code", "view_code"),
             ("🔨 Force Code Gen", "force_gen"),
             ("🔄 Check for Updates", "check_updates")
@@ -587,19 +588,20 @@ class ChatActionsPanel(StyledPanel):
 
         for text, action in buttons:
             btn = ModernButton(text, button_type="secondary")
-            btn.setMinimumHeight(30)
+            btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
             btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
             self.add_widget(btn)
 
 
-class AvALeftSidebar(QWidget):
+class AvALeftSidebar(QWidget): # This class is in enhanced_sidebar.py
     """Complete left sidebar containing all panels"""
 
     # Aggregate signals from all panels
-    workflow_requested = Signal(str)
+    workflow_requested = Signal(str) # This seems unused here, workflow is usually from chat input
     model_changed = Signal(str, str)
     temperature_changed = Signal(float)
     action_triggered = Signal(str)
+    # new_project_sidebar_action = Signal() # This was from the internal sidebar, handle via project_panel.new_project_btn
 
     def __init__(self):
         super().__init__()
@@ -610,8 +612,8 @@ class AvALeftSidebar(QWidget):
     def _init_ui(self):
         # Main layout
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(6, 6, 6, 6) # MODIFIED: Reduced outer margins
+        main_layout.setSpacing(0) # MODIFIED: Reduced spacing, panels have their own margins
 
         # Create scrollable area for panels
         scroll_area = QScrollArea()
@@ -627,6 +629,7 @@ class AvALeftSidebar(QWidget):
                 background: #2d2d30;
                 width: 8px;
                 border-radius: 4px;
+                margin: 0px; /* MODIFIED */
             }
             QScrollBar::handle:vertical {
                 background: #404040;
@@ -636,13 +639,24 @@ class AvALeftSidebar(QWidget):
             QScrollBar::handle:vertical:hover {
                 background: #00d7ff;
             }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px; /* MODIFIED */
+                border: none;
+                background: none;
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+                 background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                 background: none;
+            }
         """)
 
         # Content widget for scroll area
         content_widget = QWidget()
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
+        content_layout.setSpacing(6) # MODIFIED: Spacing between panels
 
         # Create all panels
         self.project_panel = ProjectSessionPanel()
@@ -677,6 +691,7 @@ class AvALeftSidebar(QWidget):
         self.llm_panel.model_changed.connect(self.model_changed)
         self.llm_panel.temperature_changed.connect(self.temperature_changed)
         self.actions_panel.action_triggered.connect(self.action_triggered)
+        # Note: The new_project_btn signal is connected in AvAMainWindow directly to project_panel.new_project_btn
 
     def get_current_models(self):
         """Get currently selected models"""
