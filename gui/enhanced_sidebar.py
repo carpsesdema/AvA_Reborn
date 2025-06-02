@@ -1,4 +1,4 @@
-# gui/enhanced_sidebar.py - Compact Layout with Everything Visible
+# gui/enhanced_sidebar.py - Updated with Model Configuration Button
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
@@ -93,7 +93,7 @@ class ProjectControlPanel(StyledPanel):
     new_project_clicked = Signal()
 
     def __init__(self):
-        super().__init__(title="Project Management", collapsible=False) # Can be collapsible if desired
+        super().__init__(title="Project Management", collapsible=False)
         self._init_ui()
 
     def _init_ui(self):
@@ -123,141 +123,90 @@ class ProjectControlPanel(StyledPanel):
         self.add_widget(self.new_project_btn)
 
 
-class LLMConfigPanel(StyledPanel):
-    model_changed = Signal(str, str)
-    temperature_changed = Signal(float)
+class ModelConfigPanel(StyledPanel):
+    """NEW: Panel for Model Configuration"""
+    model_config_requested = Signal()
 
     def __init__(self):
-        super().__init__("LLM Configuration", collapsible=True, initially_collapsed=False)
+        super().__init__("AI Model Configuration", collapsible=False)
         self._init_ui()
 
     def _init_ui(self):
-        # Compact Chat LLM
-        chat_layout = QHBoxLayout()
-        chat_layout.setSpacing(6)
+        # Model status display
+        self.model_status_layout = QVBoxLayout()
+        self.model_status_layout.setSpacing(4)
 
-        chat_label = QLabel("Chat LLM:")
-        chat_label.setFont(QFont("Segoe UI", 8))
-        chat_label.setStyleSheet("color: #cccccc;")
-        chat_label.setMinimumWidth(60)
+        # Current model assignments (compact display)
+        self.planner_status = QLabel("🧠 Planner: Not configured")
+        self.planner_status.setStyleSheet("color: #888; font-size: 8px;")
 
-        self.chat_combo = QComboBox()
-        self.chat_combo.addItems([
-            "Gemini: gemini-2.5-pro-preview",
-            "OpenAI: gpt-4o",
-            "Anthropic: claude-3.5-sonnet",
-            "DeepSeek: deepseek-chat"
-        ])
-        self.chat_combo.setStyleSheet("""
-            QComboBox {
-                background: #1e1e1e; border: 1px solid #404040; border-radius: 3px;
-                padding: 4px 8px; color: #cccccc; min-width: 100px; font-size: 8px;
-                min-height: 20px;
-            }
-            QComboBox:hover { border-color: #00d7ff; }
-            QComboBox::drop-down { border: none; width: 16px; }
-            QComboBox::down-arrow {
-                image: none; border-left: 3px solid transparent; border-right: 3px solid transparent;
-                border-top: 3px solid #cccccc; margin-right: 4px;
-            }
-            QComboBox QAbstractItemView {
-                background: #2d2d30; border: 1px solid #00d7ff;
-                selection-background-color: #00d7ff; selection-color: #1e1e1e; color: #cccccc;
-            }
-        """)
+        self.coder_status = QLabel("⚙️ Coder: Not configured")
+        self.coder_status.setStyleSheet("color: #888; font-size: 8px;")
 
-        chat_status = StatusIndicator("ready")
+        self.assembler_status = QLabel("📄 Assembler: Not configured")
+        self.assembler_status.setStyleSheet("color: #888; font-size: 8px;")
 
-        chat_layout.addWidget(chat_label)
-        chat_layout.addWidget(self.chat_combo, 1)
-        chat_layout.addWidget(chat_status)
-        self.add_layout(chat_layout)
+        self.model_status_layout.addWidget(self.planner_status)
+        self.model_status_layout.addWidget(self.coder_status)
+        self.model_status_layout.addWidget(self.assembler_status)
 
-        # Compact Code LLM
-        code_label = QLabel("Specialized LLM (Code Gen):")
-        code_label.setFont(QFont("Segoe UI", 8))
-        code_label.setStyleSheet("color: #cccccc; margin: 4px 0 2px 0;")
-        self.add_widget(code_label)
+        self.add_layout(self.model_status_layout)
 
-        code_layout = QHBoxLayout()
-        code_layout.setSpacing(6)
-
-        self.code_combo = QComboBox()
-        self.code_combo.addItems([
-            "Ollama (Gen): qwen2.5-coder",
-            "OpenAI: gpt-4o",
-            "Anthropic: claude-3.5-sonnet",
-            "DeepSeek: deepseek-coder-v2"
-        ])
-        self.code_combo.setStyleSheet(self.chat_combo.styleSheet())
-
-        code_status = StatusIndicator("ready")
-
-        code_layout.addWidget(self.code_combo, 1)
-        code_layout.addWidget(code_status)
-        self.add_layout(code_layout)
-
-        # Compact Temperature
-        temp_header = QHBoxLayout()
-        temp_header.setContentsMargins(0, 6, 0, 2)
-
-        temp_label = QLabel("Temperature (Chat):")
-        temp_label.setFont(QFont("Segoe UI", 8))
-        temp_label.setStyleSheet("color: #cccccc;")
-
-        self.temp_value = QLabel("0.70")
-        self.temp_value.setStyleSheet("color: #00d7ff; font-weight: bold; font-size: 8px;")
-
-        temp_header.addWidget(temp_label)
-        temp_header.addStretch()
-        temp_header.addWidget(self.temp_value)
-        self.add_layout(temp_header)
-
-        self.temp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.temp_slider.setRange(0, 100)
-        self.temp_slider.setValue(70)
-        self.temp_slider.setFixedHeight(20)  # Smaller slider
-        self.temp_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #404040; height: 4px; background: #1e1e1e; border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #00d7ff; border: 1px solid #00d7ff; width: 12px; height: 12px;
-                border-radius: 6px; margin: -4px 0;
-            }
-            QSlider::handle:horizontal:hover { background: #40e0ff; border-color: #40e0ff; }
-            QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 2px;
-            }
-        """)
-        self.temp_slider.valueChanged.connect(self._on_temperature_changed)
-        self.add_widget(self.temp_slider)
-
-        # Compact Persona button
-        self.persona_btn = ModernButton("🎭 Configure Persona", button_type="secondary")
-        self.persona_btn.setMinimumHeight(26)  # Smaller button
-        self.persona_btn.setStyleSheet("""
+        # Configuration button
+        self.config_button = ModernButton("⚙️ Configure Models", button_type="accent")
+        self.config_button.setMinimumHeight(32)
+        self.config_button.setStyleSheet("""
             QPushButton {
-                background: #2d2d30; border: 1px solid #404040; border-radius: 4px;
-                color: #cccccc; padding: 4px 8px; font-weight: 500; font-size: 9px;
-                min-height: 26px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #00d7ff, stop:1 #0078d4);
+                border: 1px solid #0078d4;
+                border-radius: 5px;
+                color: #1e1e1e;
+                padding: 6px 12px;
+                font-weight: bold;
+                font-size: 11px;
             }
-            QPushButton:hover { background: #3e3e42; border-color: #00d7ff; color: white; }
-            QPushButton:pressed { background: #1e1e1e; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #40e0ff, stop:1 #0078d4);
+            }
+            QPushButton:pressed {
+                background: #0078d4;
+            }
         """)
-        self.add_widget(self.persona_btn)
+        self.config_button.clicked.connect(self.model_config_requested.emit)
+        self.add_widget(self.config_button)
 
-    def _on_temperature_changed(self, value):
-        temp_val = value / 100.0
-        self.temp_value.setText(f"{temp_val:.2f}")
-        self.temperature_changed.emit(temp_val)
+    def update_model_status(self, config_summary: dict):
+        """Update the display with current model assignments"""
+        planner = config_summary.get('planner', 'Not configured')
+        coder = config_summary.get('coder', 'Not configured')
+        assembler = config_summary.get('assembler', 'Not configured')
+
+        # Truncate long model names for display
+        def truncate_model(name):
+            if len(name) > 20:
+                return name[:17] + "..."
+            return name
+
+        self.planner_status.setText(f"🧠 Planner: {truncate_model(planner)}")
+        self.coder_status.setText(f"⚙️ Coder: {truncate_model(coder)}")
+        self.assembler_status.setText(f"📄 Assembler: {truncate_model(assembler)}")
+
+        # Update colors based on configuration status
+        color = "#4ade80" if "Not configured" not in planner else "#888"
+        self.planner_status.setStyleSheet(f"color: {color}; font-size: 8px;")
+
+        color = "#4ade80" if "Not configured" not in coder else "#888"
+        self.coder_status.setStyleSheet(f"color: {color}; font-size: 8px;")
+
+        color = "#4ade80" if "Not configured" not in assembler else "#888"
+        self.assembler_status.setStyleSheet(f"color: {color}; font-size: 8px;")
 
 
 class KnowledgeBasePanel(StyledPanel):
     # Signal for RAG actions
     scan_directory_requested = Signal()
-    # add_files_requested = Signal() # If you bring back the add files button
 
     def __init__(self):
         super().__init__("Knowledge Base (RAG)", collapsible=True, initially_collapsed=False)
@@ -273,7 +222,7 @@ class KnowledgeBasePanel(StyledPanel):
             }
             QPushButton:hover { background: #3e3e42; border-color: #00d7ff; }
         """)
-        self.scan_btn.clicked.connect(self.scan_directory_requested.emit) # Emit signal
+        self.scan_btn.clicked.connect(self.scan_directory_requested.emit)
         self.add_widget(self.scan_btn)
 
         rag_status_layout = QHBoxLayout()
@@ -311,7 +260,7 @@ class ChatActionsPanel(StyledPanel):
 
         for text, action in buttons:
             btn = ModernButton(text, button_type="secondary")
-            btn.setMinimumHeight(24)  # Smaller buttons
+            btn.setMinimumHeight(24)
             btn.setStyleSheet("""
                 QPushButton {
                     background: #2d2d30; border: 1px solid #404040; border-radius: 4px;
@@ -325,11 +274,10 @@ class ChatActionsPanel(StyledPanel):
 
 class AvALeftSidebar(QWidget):
     # Signals from child panels
-    model_changed = Signal(str, str)
-    temperature_changed = Signal(float)
-    action_triggered = Signal(str) # From ChatActionsPanel
-    new_project_requested = Signal() # From ProjectControlPanel
-    scan_directory_requested = Signal() # From KnowledgeBasePanel
+    action_triggered = Signal(str)
+    new_project_requested = Signal()
+    scan_directory_requested = Signal()
+    model_config_requested = Signal()  # NEW: Signal for model configuration
 
     def __init__(self):
         super().__init__()
@@ -366,13 +314,13 @@ class AvALeftSidebar(QWidget):
         content_layout.setSpacing(3)
 
         # Create panels
-        self.project_control_panel = ProjectControlPanel() # New panel for "New Project"
-        self.llm_panel = LLMConfigPanel()
+        self.project_control_panel = ProjectControlPanel()
+        self.model_config_panel = ModelConfigPanel()  # NEW: Model configuration panel
         self.rag_panel = KnowledgeBasePanel()
         self.actions_panel = ChatActionsPanel()
 
-        content_layout.addWidget(self.project_control_panel) # Add new project panel
-        content_layout.addWidget(self.llm_panel)
+        content_layout.addWidget(self.project_control_panel)
+        content_layout.addWidget(self.model_config_panel)  # Add model config panel
         content_layout.addWidget(self.rag_panel)
         content_layout.addWidget(self.actions_panel)
         content_layout.addStretch()
@@ -392,19 +340,16 @@ class AvALeftSidebar(QWidget):
     def _connect_signals(self):
         # Connect signals from child panels to the sidebar's own signals
         self.project_control_panel.new_project_clicked.connect(self.new_project_requested)
-        self.llm_panel.model_changed.connect(self.model_changed)
-        self.llm_panel.temperature_changed.connect(self.temperature_changed)
+        self.model_config_panel.model_config_requested.connect(self.model_config_requested)  # NEW
         self.rag_panel.scan_directory_requested.connect(self.scan_directory_requested)
         self.actions_panel.action_triggered.connect(self.action_triggered)
 
-    def get_current_models(self):
-        return {
-            "chat_model": self.llm_panel.chat_combo.currentText(),
-            "code_model": self.llm_panel.code_combo.currentText(),
-            "temperature": self.llm_panel.temp_slider.value() / 100.0
-        }
-
     def update_sidebar_rag_status(self, status_text: str, color_hex: str):
+        """Update RAG status display in sidebar"""
         if hasattr(self.rag_panel, 'rag_status_display_label'):
             self.rag_panel.rag_status_display_label.setText(status_text)
             self.rag_panel.rag_status_display_label.setStyleSheet(f"color: {color_hex}; font-size: 8px;")
+
+    def update_model_status_display(self, config_summary: dict):
+        """NEW: Update model configuration status display"""
+        self.model_config_panel.update_model_status(config_summary)

@@ -1,4 +1,4 @@
-# gui/main_window.py - Enhanced with Role-Based LLM Support
+# gui/main_window.py - Enhanced with Model Configuration Dialog
 
 import asyncio
 import inspect
@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
 )
 
 from gui.components import ModernButton, StatusIndicator
-from gui.enhanced_sidebar import AvALeftSidebar # Uses the updated sidebar
+from gui.enhanced_sidebar import AvALeftSidebar
+from gui.model_config_dialog import ModelConfigurationDialog  # NEW IMPORT
 
 # Import LLMRole for chat functionality
 try:
@@ -122,7 +123,7 @@ class ChatInterface(QWidget):
         status_bar_layout.addWidget(self.llm_status_indicator)
         status_bar_layout.addWidget(self.llm_status_text)
 
-        # AI Specialists Status (new)
+        # AI Specialists Status (enhanced)
         self.specialists_status_indicator = StatusIndicator("offline")
         self.specialists_status_text = QLabel("AI Specialists: Initializing...")
         self.specialists_status_text.setStyleSheet("color: #888; font-size: 11px; margin-left: 5px;")
@@ -155,7 +156,7 @@ class ChatInterface(QWidget):
         self.llm_status_indicator.update_status(indicator_status)
 
     def update_specialists_status(self, text: str, indicator_status: str = "ready"):
-        """NEW: Update AI specialists status"""
+        """Update AI specialists status"""
         self.specialists_status_text.setText(text)
         self.specialists_status_indicator.update_status(indicator_status)
 
@@ -189,7 +190,7 @@ class ChatInterface(QWidget):
 
 class AvAMainWindow(QMainWindow):
     workflow_requested = Signal(str)
-    new_project_requested = Signal() # This signal is emitted to AvAApplication
+    new_project_requested = Signal()
 
     def __init__(self, ava_app=None, config=None):
         super().__init__()
@@ -244,14 +245,64 @@ class AvAMainWindow(QMainWindow):
         self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_directory)
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
-        self.sidebar.temperature_changed.connect(self._on_temperature_changed)
-        self.sidebar.model_changed.connect(self._on_model_changed)
 
+        # NEW: Connect model configuration signal
+        self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
+
+    def _open_model_config_dialog(self):
+        """NEW: Open the model configuration dialog"""
+        if not self.ava_app or not self.ava_app.llm_client:
+            self.chat_interface.chat_display.add_assistant_message(
+                "⚠️ LLM client is not available. Cannot configure models."
+            )
+            return
+
+        # Create and show the model configuration dialog
+        dialog = ModelConfigurationDialog(
+            llm_client=self.ava_app.llm_client,
+            parent=self
+        )
+
+        # Connect the configuration applied signal
+        dialog.configuration_applied.connect(self._on_model_configuration_applied)
+
+        # Show the dialog
+        dialog.exec()
+
+    def _on_model_configuration_applied(self, new_config: dict):
+        """NEW: Handle when model configuration is applied"""
+        # Update the sidebar display with new configuration
+        if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+            assignments = self.ava_app.llm_client.get_role_assignments()
+
+            # Create display summary
+            config_summary = {}
+            for role, model_key in assignments.items():
+                if model_key and hasattr(self.ava_app.llm_client, 'models'):
+                    model_config = self.ava_app.llm_client.models.get(model_key)
+                    if model_config:
+                        display_name = f"{model_config.provider}/{model_config.model}"
+
+                        if role.value == "planner":
+                            config_summary['planner'] = display_name
+                        elif role.value == "coder":
+                            config_summary['coder'] = display_name
+                        elif role.value == "assembler":
+                            config_summary['assembler'] = display_name
+
+            # Update sidebar display
+            self.sidebar.update_model_status_display(config_summary)
+
+        # Update specialist status in chat interface
+        self._update_specialists_status()
+
+        # Add confirmation message to chat
+        self.chat_interface.chat_display.add_assistant_message(
+            "✅ Model configuration updated! Your AI specialists are now ready with their optimized models."
+        )
 
     def handle_user_message(self, message: str):
-        """
-        Handle user messages - decide between casual chat vs workflow
-        """
+        """Handle user messages - decide between casual chat vs workflow"""
         if self._is_build_request(message):
             # This is a build request - send to workflow
             self.workflow_requested.emit(message)
@@ -260,9 +311,7 @@ class AvAMainWindow(QMainWindow):
             self._handle_casual_chat(message)
 
     def _is_build_request(self, prompt: str) -> bool:
-        """
-        Determine if this is a build request
-        """
+        """Determine if this is a build request"""
         prompt_lower = prompt.lower().strip()
 
         # IGNORE casual chat
@@ -294,9 +343,7 @@ class AvAMainWindow(QMainWindow):
         return has_build_keyword and is_substantial
 
     def _handle_casual_chat(self, message: str):
-        """
-        Handle casual chat directly with LLM using CHAT role
-        """
+        """Handle casual chat directly with LLM using CHAT role"""
         if not self.ava_app or not self.ava_app.llm_client:
             self.chat_interface.chat_display.add_assistant_message(
                 "Sorry, LLM client is not available right now."
@@ -324,9 +371,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         asyncio.create_task(self._async_casual_chat(chat_prompt))
 
     async def _async_casual_chat(self, prompt: str):
-        """
-        Async casual chat handler with role-based LLM
-        """
+        """Async casual chat handler with role-based LLM"""
         try:
             # Use CHAT role for casual conversation
             response_chunks = []
@@ -363,6 +408,9 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         # Update AI specialists status
         self._update_specialists_status()
 
+        # Update model configuration display
+        self._update_model_config_display()
+
         # Update RAG status
         rag_text = "RAG: Unknown"
         rag_color_key_for_indicator = "offline"
@@ -394,15 +442,18 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         llm_model_text = "LLM: Unknown"
         llm_indicator_status = "offline"
 
-        if self.ava_app and self.ava_app.current_config:
-            chat_model_name = self.ava_app.current_config.get("chat_model", "LLM").split(':')[-1].strip()
-            current_temp = self.ava_app.current_config.get("temperature", 0.0)
-            llm_model_text = f"Chat: {chat_model_name} (T: {current_temp:.2f})"
+        if self.ava_app and self.ava_app.llm_client:
+            if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+                assignments = self.ava_app.llm_client.get_role_assignments()
+                chat_model_key = assignments.get('chat', 'Unknown')
 
-            if self.ava_app.llm_client and self.ava_app.llm_client.get_available_models():
-                available_models = self.ava_app.llm_client.get_available_models()
-                if available_models != ["No LLM services available"]:
-                    llm_indicator_status = "ready"
+                if chat_model_key and hasattr(self.ava_app.llm_client, 'models'):
+                    model_config = self.ava_app.llm_client.models.get(chat_model_key)
+                    if model_config:
+                        chat_model_name = model_config.model
+                        current_temp = model_config.temperature
+                        llm_model_text = f"Chat: {chat_model_name} (T: {current_temp:.2f})"
+                        llm_indicator_status = "ready"
 
         self.chat_interface.update_llm_status(llm_model_text, llm_indicator_status)
 
@@ -428,20 +479,29 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
 
         self.chat_interface.update_specialists_status(specialists_text, specialists_status)
 
-    def _on_temperature_changed(self, temp: float):
-        if self.ava_app:
-            self.ava_app.update_configuration({"temperature": temp})
-            self._update_chat_llm_status()
+    def _update_model_config_display(self):
+        """NEW: Update model configuration display in sidebar"""
+        if not (self.ava_app and self.ava_app.llm_client):
+            return
 
-    def _on_model_changed(self, model_type: str, model_name: str):
-        if self.ava_app:
-            new_config = {}
-            if model_type == "chat":
-                new_config["chat_model"] = model_name
-            elif model_type == "code":
-                new_config["code_model"] = model_name
-            self.ava_app.update_configuration(new_config)
-            self._update_chat_llm_status()
+        if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+            assignments = self.ava_app.llm_client.get_role_assignments()
+
+            config_summary = {}
+            for role, model_key in assignments.items():
+                if model_key and hasattr(self.ava_app.llm_client, 'models'):
+                    model_config = self.ava_app.llm_client.models.get(model_key)
+                    if model_config:
+                        display_name = f"{model_config.provider}/{model_config.model}"
+
+                        if role.value == "planner":
+                            config_summary['planner'] = display_name
+                        elif role.value == "coder":
+                            config_summary['coder'] = display_name
+                        elif role.value == "assembler":
+                            config_summary['assembler'] = display_name
+
+            self.sidebar.update_model_status_display(config_summary)
 
     def _handle_sidebar_action(self, action: str):
         """Handles actions from the ChatActionsPanel in the sidebar."""
@@ -474,7 +534,6 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
         else:
             self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to scan directory.")
-
 
     @Slot(str)
     def on_workflow_started(self, prompt: str):
@@ -531,11 +590,11 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             from pathlib import Path
             project_name = Path(project_name_or_path).name
 
-        session_name = "Main Chat" # Default session name
+        session_name = "Main Chat"  # Default session name
         if self.ava_app and hasattr(self.ava_app, 'current_session'):
-             # Check if AvAApplication exists and has current_session
+            # Check if AvAApplication exists and has current_session
             current_session_val = getattr(self.ava_app, 'current_session', None)
-            if current_session_val: # Ensure it's not None or empty
+            if current_session_val:  # Ensure it's not None or empty
                 session_name = current_session_val
 
         # Enhanced title with AI specialist info
@@ -546,6 +605,3 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             self.setWindowTitle(f"AvA Enhanced [{project_name}] - Session: {session_name} (P:{planner} C:{coder})")
         else:
             self.setWindowTitle(f"AvA [{project_name}] - Session: {session_name}")
-
-        # The project_panel was removed from sidebar, so no need to update it here.
-        # CodeViewerWindow will handle displaying project files.
