@@ -1,4 +1,4 @@
-# gui/panels.py - Updated panels matching your design
+# gui/enhanced_sidebar.py - Complete Left Sidebar matching your design
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
@@ -9,42 +9,6 @@ from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
 
 from gui.components import ModernButton, StatusIndicator
-
-
-# Add ModernPanel for compatibility
-class ModernPanel(QFrame):
-    """Professional panel with subtle borders and shadows"""
-
-    def __init__(self, title=""):
-        super().__init__()
-        self.setFrameStyle(QFrame.Shape.Box)
-        self.setStyleSheet("""
-            ModernPanel {
-                background: #252526;
-                border: 1px solid #3e3e42;
-                border-radius: 8px;
-                margin: 2px;
-            }
-        """)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 8, 12, 12)
-        layout.setSpacing(8)
-
-        if title:
-            title_label = QLabel(title)
-            title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-            title_label.setStyleSheet("color: #0078d4; margin-bottom: 4px;")
-            layout.addWidget(title_label)
-
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(6)
-        layout.addLayout(self.content_layout)
-
-        self.setLayout(layout)
-
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
 
 
 class StyledPanel(QFrame):
@@ -578,8 +542,6 @@ class ChatActionsPanel(StyledPanel):
         buttons = [
             ("💬 New Session", "new_session"),
             ("📊 View LLM Log", "view_log"),
-            ("📟 Open Terminal", "open_terminal"),  # ADDED: Terminal button
-            ("📄 Open Code Viewer", "open_code_viewer"),  # ADDED: Code viewer button
             ("⚡ View Generated Code", "view_code"),
             ("🔨 Force Code Gen", "force_gen"),
             ("🔄 Check for Updates", "check_updates")
