@@ -1,6 +1,6 @@
 # core/application.py - Updated to use enhanced main window
 
-# main.py - Fixed import for updated main window
+# main.py - FIXED VERSION
 
 import sys
 from pathlib import Path
@@ -9,12 +9,12 @@ from PySide6.QtWidgets import QApplication
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gui.main_window import AvAMainWindow  # FIXED: Correct import
+from gui.main_window import AvAMainWindow
 from core.application import AvAApplication
 
 
 def main():
-    """Clean main entry point with enhanced UI"""
+    """Main entry point"""
 
     app = QApplication(sys.argv)
     app.setApplicationName("AvA")
@@ -25,19 +25,13 @@ def main():
         # Create AvA application (backend)
         ava_app = AvAApplication()
 
-        # Create main window (frontend) - FIXED: Use correct class name
-        main_window = AvAMainWindow(ava_app=ava_app)
-
         # Initialize AvA backend
         ava_app.initialize()
 
-        # Connect the new UI to the AvA application
-        _connect_ui_to_backend(main_window, ava_app)
+        # Connect the UI to the AvA application
+        _connect_ui_to_backend(ava_app.main_window, ava_app)
 
-        # Show the main window
-        main_window.show()
-
-        print("AvA Enhanced UI launched successfully!")
+        print("AvA launched successfully!")
         print("Available models:", ava_app.llm_client.get_available_models() if ava_app.llm_client else "None")
 
         return app.exec()
@@ -50,21 +44,13 @@ def main():
 
 
 def _connect_ui_to_backend(main_window, ava_app):
-    """Connect the enhanced UI to the AvA backend"""
-
-    # Connect workflow requests from UI to backend
-    main_window.workflow_requested.connect(ava_app._handle_workflow_request)
-
-    # Connect backend signals to UI updates
-    ava_app.workflow_started.connect(main_window.on_workflow_started)
-    ava_app.workflow_completed.connect(main_window.on_workflow_completed)
-    ava_app.error_occurred.connect(main_window.on_error_occurred)
+    """Connect the UI to the AvA backend"""
 
     # Connect sidebar actions to backend windows
     def handle_sidebar_action(action):
-        if action == "view_log":
+        if action == "view_log" or action == "open_terminal":
             ava_app._open_terminal()
-        elif action == "view_code":
+        elif action == "view_code" or action == "open_code_viewer":
             ava_app._open_code_viewer()
         elif action == "new_session":
             print("New session requested")
@@ -74,10 +60,6 @@ def _connect_ui_to_backend(main_window, ava_app):
             print("Update check requested")
 
     main_window.sidebar.action_triggered.connect(handle_sidebar_action)
-
-    # Connect button actions from chat interface
-    main_window.chat_interface.terminal_btn.clicked.connect(ava_app._open_terminal)
-    main_window.chat_interface.code_btn.clicked.connect(ava_app._open_code_viewer)
 
 
 if __name__ == "__main__":
