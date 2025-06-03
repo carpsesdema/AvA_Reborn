@@ -71,10 +71,14 @@ class ChatDisplay(QTextEdit):
             color = "#3fb950"  # Green for AvA's responses
             bg = "#252526"
 
+        # Sanitize message for HTML
+        import html
+        escaped_message = html.escape(message)
+
         return f"""
         <div style="margin: 8px 0; padding: 8px 12px; background: {bg}; border-radius: 8px; border-left: 3px solid {color};">
             <div style="font-weight: bold; color: {color}; margin-bottom: 4px;">{sender}:</div>
-            <div style="color: #cccccc; line-height: 1.4;">{message}</div>
+            <div style="color: #cccccc; line-height: 1.4; white-space: pre-wrap;">{escaped_message}</div>
         </div>
         """
 
@@ -377,7 +381,7 @@ class AvAMainWindow(QMainWindow):
     def on_ai_feedback_received(self, from_ai: str, to_ai: str, content: str):
         """Handle AI feedback messages"""
         if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-            self.feedback_panel.add_ai_collaboration_message(from_ai, to_ai, content)
+            self.feedback_panel.add_ai_collaboration_message(from_ai, content, to_ai)  # Corrected order
 
     @Slot(str, int)
     def on_iteration_completed(self, file_path: str, iteration_number: int):
@@ -396,7 +400,7 @@ class AvAMainWindow(QMainWindow):
     def on_quality_check_completed(self, file_path: str, approved: bool, feedback: str):
         """Handle quality check completion"""
         if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-            self.feedback_panel.show_file_completed(file_path, approved, 1)
+            self.feedback_panel.show_file_completed(file_path, approved, 1)  # Iteration number might need to be tracked
 
     def _open_model_config_dialog(self):
         """Open the model configuration dialog"""
@@ -406,48 +410,29 @@ class AvAMainWindow(QMainWindow):
             )
             return
 
-        # Create and show the model configuration dialog
-        dialog = ModelConfigurationDialog(
-            llm_client=self.ava_app.llm_client,
-            parent=self
-        )
-
-        # Connect the configuration applied signal
+        dialog = ModelConfigurationDialog(llm_client=self.ava_app.llm_client, parent=self)
         dialog.configuration_applied.connect(self._on_model_configuration_applied)
-
-        # Show the dialog
         dialog.exec()
 
     def _on_model_configuration_applied(self, new_config: dict):
         """Handle when model configuration is applied"""
-        # Update the sidebar display with new configuration
         if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
-
-            # Create display summary
+            assignments = self.ava_app.llm_client.get_role_assignments()  # Returns Dict[str, str]
             config_summary = {}
-            for role, model_key in assignments.items():
-                if model_key and hasattr(self.ava_app.llm_client, 'models'):
-                    model_config = self.ava_app.llm_client.models.get(model_key)
+            for role_str_key, model_name_key in assignments.items():  # role_str_key is "planner", "coder" etc.
+                if model_name_key and hasattr(self.ava_app.llm_client, 'models'):
+                    model_config = self.ava_app.llm_client.models.get(model_name_key)
                     if model_config:
                         display_name = f"{model_config.provider}/{model_config.model}"
-
-                        # Handle both string and enum roles
-                        role_name = role if isinstance(role, str) else role.value
-                        if role_name == "planner":
+                        # Use the string key directly
+                        if role_str_key == LLMRole.PLANNER.value:  # Compare with enum's value
                             config_summary['planner'] = display_name
-                        elif role_name == "coder":
+                        elif role_str_key == LLMRole.CODER.value:
                             config_summary['coder'] = display_name
-                        elif role_name == "assembler":
+                        elif role_str_key == LLMRole.ASSEMBLER.value:
                             config_summary['assembler'] = display_name
-
-            # Update sidebar display
             self.sidebar.update_model_status_display(config_summary)
-
-        # Update specialist status in chat interface
         self._update_specialists_status()
-
-        # Add confirmation message to chat
         self.chat_interface.chat_display.add_assistant_message(
             "✅ Model configuration updated! Your AI specialists are now ready with their optimized models."
         )
@@ -455,131 +440,69 @@ class AvAMainWindow(QMainWindow):
     def handle_user_message(self, message: str):
         """Handle user messages - decide between casual chat vs workflow"""
         if self._is_build_request(message):
-            # Update feedback panel to show workflow starting
             if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
                 self.feedback_panel.clear_display()
                 self.feedback_panel.update_workflow_stage("initializing", "Starting enhanced workflow...")
-
-            # This is a build request - send to workflow
             self.workflow_requested.emit(message)
         else:
-            # This is casual chat - handle directly
             self._handle_casual_chat(message)
 
     def _is_build_request(self, prompt: str) -> bool:
-        """Determine if this is a build request"""
         prompt_lower = prompt.lower().strip()
-
-        # IGNORE casual chat
-        casual_phrases = [
-            'hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay',
-            'yes', 'no', 'sure', 'cool', 'nice', 'good', 'great'
-        ]
-
-        if prompt_lower in casual_phrases:
-            return False
-
-        # IGNORE questions without build intent
+        casual_phrases = ['hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay', 'yes', 'no', 'sure', 'cool',
+                          'nice', 'good', 'great']
+        if prompt_lower in casual_phrases: return False
         question_words = ['what', 'how', 'why', 'when', 'where', 'who']
         if any(prompt_lower.startswith(word) for word in question_words):
             build_question_patterns = ['how to build', 'how to create', 'how to make', 'what should i build']
-            if not any(pattern in prompt_lower for pattern in build_question_patterns):
-                return False
-
-        # REQUIRE explicit build keywords
-        build_keywords = [
-            'build', 'create', 'make', 'generate', 'develop', 'code',
-            'implement', 'write', 'design', 'construct', 'program',
-            'application', 'app', 'website', 'tool', 'script', 'project'
-        ]
-
+            if not any(pattern in prompt_lower for pattern in build_question_patterns): return False
+        build_keywords = ['build', 'create', 'make', 'generate', 'develop', 'code', 'implement', 'write', 'design',
+                          'construct', 'program', 'application', 'app', 'website', 'tool', 'script', 'project']
         has_build_keyword = any(keyword in prompt_lower for keyword in build_keywords)
         is_substantial = len(prompt.split()) >= 3
-
         return has_build_keyword and is_substantial
 
     def _handle_casual_chat(self, message: str):
-        """Handle casual chat directly with LLM using CHAT role"""
         if not self.ava_app or not self.ava_app.llm_client:
-            self.chat_interface.chat_display.add_assistant_message(
-                "Sorry, LLM client is not available right now."
-            )
+            self.chat_interface.chat_display.add_assistant_message("Sorry, LLM client is not available right now.")
             return
-
-        # Update status to show we're chatting
         self.chat_interface.update_llm_status("LLM: Chatting...", "working")
-
-        # Create casual chat prompt with enhanced context
-        enhanced_features = ""
-        if FEEDBACK_PANEL_AVAILABLE:
-            enhanced_features = "I also have real-time AI collaboration monitoring and user feedback controls. "
-
+        enhanced_features = "I also have real-time AI collaboration monitoring and user feedback controls. " if FEEDBACK_PANEL_AVAILABLE else ""
         chat_prompt = f"""
-You are AvA, a friendly AI development assistant with specialized AI agents. The user said: "{message}"
-
-Respond naturally and helpfully. If they're just greeting you or making casual conversation, 
-respond warmly. If they ask about your capabilities, mention:
-- You have specialized AI agents: Planner AI, Coder AI, and Assembler AI
-- You can build applications using a micro-task workflow with project awareness
-- {enhanced_features}You have access to a knowledge base for code examples and best practices
-- You can work with multiple programming languages and provide iterative improvements
-
-Keep responses conversational and under 2-3 sentences unless they ask for detailed information.
+You are AvA, a friendly AI development assistant with specialized AI agents. User said: "{message}"
+Respond naturally. Capabilities: Planner, Coder, Assembler AIs; micro-task workflow; {enhanced_features}knowledge base; iterative improvements.
+Keep responses conversational and brief unless asked for details.
 """
-
-        # Handle chat asynchronously to avoid blocking UI
         asyncio.create_task(self._async_casual_chat(chat_prompt))
 
     async def _async_casual_chat(self, prompt: str):
-        """Async casual chat handler with role-based LLM"""
         try:
-            # Use CHAT role for casual conversation
             response_chunks = []
-
-            if hasattr(self.ava_app.llm_client, 'stream_chat') and len(
-                    inspect.signature(self.ava_app.llm_client.stream_chat).parameters) > 1:
-                # Enhanced LLM client with role support
-                async for chunk in self.ava_app.llm_client.stream_chat(prompt, LLMRole.CHAT):
+            # Use CHAT role for casual conversation
+            llm_client = self.ava_app.llm_client
+            if hasattr(llm_client, 'stream_chat') and 'role' in inspect.signature(llm_client.stream_chat).parameters:
+                async for chunk in llm_client.stream_chat(prompt, LLMRole.CHAT):  # Pass the enum member
                     response_chunks.append(chunk)
-            else:
-                # Fallback to old LLM client
-                async for chunk in self.ava_app.llm_client.stream_chat(prompt):
+            else:  # Fallback for older client signature
+                async for chunk in llm_client.stream_chat(prompt):
                     response_chunks.append(chunk)
-
             response = ''.join(response_chunks).strip()
-
-            # Add to chat display
             self.chat_interface.chat_display.add_assistant_message(response)
-
-            # Reset status
             self._update_chat_llm_status()
-
         except Exception as e:
-            self.chat_interface.chat_display.add_assistant_message(
-                f"Sorry, I encountered an error: {e}"
-            )
+            self.chat_interface.chat_display.add_assistant_message(f"Sorry, I encountered an error: {e}")
             self.chat_interface.update_llm_status("LLM: Error", "error")
 
     def _update_initial_ui_status(self):
-        """Update initial UI status with enhanced information"""
-        # Update main LLM status
         self._update_chat_llm_status()
-
-        # Update AI specialists status
         self._update_specialists_status()
-
-        # Update model configuration display
         self._update_model_config_display()
-
-        # Update RAG status
         rag_text = "RAG: Unknown"
         rag_color_key_for_indicator = "offline"
-
         if self.ava_app:
             app_status = self.ava_app.get_status()
             rag_info = app_status.get("rag", {})
             rag_text = rag_info.get("status_text", "RAG: Unknown")
-
             if rag_info.get("ready"):
                 rag_color_key_for_indicator = "success"
             elif not rag_info.get("available", True):
@@ -588,21 +511,13 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                 rag_color_key_for_indicator = "working"
             elif "Error" in rag_text or "Fail" in rag_text or "Missing" in rag_text:
                 rag_color_key_for_indicator = "error"
-
         self.update_rag_status_display(rag_text, rag_color_key_for_indicator)
-
-        # Update project display
         project_name_to_display = "Default Project"
-        if self.ava_app and hasattr(self.ava_app, 'current_project'):
-            project_name_to_display = self.ava_app.current_project
+        if self.ava_app and hasattr(self.ava_app,
+                                    'current_project'): project_name_to_display = self.ava_app.current_project
         self.update_project_display(project_name_to_display)
-
-        # NEW: Update feedback panel with initial state if available
         if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-            # Set initial feedback panel state
             self.feedback_panel.update_workflow_stage("idle", "Ready for enhanced AI collaboration")
-
-            # Update available files if enhanced workflow is active
             if (self.ava_app and hasattr(self.ava_app, 'use_enhanced_workflow') and
                     self.ava_app.use_enhanced_workflow and hasattr(self.ava_app, 'project_state_manager')):
                 if self.ava_app.project_state_manager:
@@ -610,201 +525,155 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                     self.feedback_panel.update_available_files(available_files)
 
     def _update_chat_llm_status(self):
-        """Update chat LLM status display"""
         llm_model_text = "LLM: Unknown"
         llm_indicator_status = "offline"
-
-        if self.ava_app and self.ava_app.llm_client:
-            if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-                assignments = self.ava_app.llm_client.get_role_assignments()
-                chat_model_key = assignments.get('chat', 'Unknown')
-
-                if chat_model_key and hasattr(self.ava_app.llm_client, 'models'):
-                    model_config = self.ava_app.llm_client.models.get(chat_model_key)
-                    if model_config:
-                        chat_model_name = model_config.model
-                        current_temp = model_config.temperature
-                        llm_model_text = f"Chat: {chat_model_name} (T: {current_temp:.2f})"
-                        llm_indicator_status = "ready"
-
+        if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+            assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str, str]
+            chat_model_key = assignments.get(LLMRole.CHAT.value)  # Use .value for string key lookup
+            if chat_model_key and hasattr(self.ava_app.llm_client, 'models'):
+                model_config = self.ava_app.llm_client.models.get(chat_model_key)
+                if model_config:
+                    chat_model_name = model_config.model
+                    current_temp = model_config.temperature
+                    llm_model_text = f"Chat: {chat_model_name} (T: {current_temp:.2f})"
+                    llm_indicator_status = "ready"
         self.chat_interface.update_llm_status(llm_model_text, llm_indicator_status)
 
     def _update_specialists_status(self):
-        """Update AI specialists status display"""
         specialists_text = "AI Specialists: Unknown"
         specialists_status = "offline"
+        if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+            assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str, str]
+            planner_model_key = assignments.get(LLMRole.PLANNER.value, 'N/A')
+            coder_model_key = assignments.get(LLMRole.CODER.value, 'N/A')
 
-        if self.ava_app and self.ava_app.llm_client:
-            if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-                # Enhanced LLM client with role assignments
-                assignments = self.ava_app.llm_client.get_role_assignments()
-                planner_model = assignments.get('planner', 'N/A').split('_')[-1] if assignments.get(
-                    'planner') else 'N/A'
-                coder_model = assignments.get('coder', 'N/A').split('_')[-1] if assignments.get('coder') else 'N/A'
+            def get_short_name(model_key_str):
+                if model_key_str == 'N/A' or not hasattr(self.ava_app.llm_client, 'models'): return 'N/A'
+                mc = self.ava_app.llm_client.models.get(model_key_str)
+                return mc.model.split('/')[-1][:8] if mc else 'N/A'
 
-                specialists_text = f"Specialists: P:{planner_model[:8]} C:{coder_model[:8]}"
-                specialists_status = "ready"
-            else:
-                # Legacy LLM client
-                specialists_text = "AI Specialists: Legacy Mode"
-                specialists_status = "working"
+            planner_model_short = get_short_name(planner_model_key)
+            coder_model_short = get_short_name(coder_model_key)
 
+            specialists_text = f"Specialists: P:{planner_model_short} C:{coder_model_short}"
+            specialists_status = "ready" if planner_model_key != 'N/A' and coder_model_key != 'N/A' else "offline"
         self.chat_interface.update_specialists_status(specialists_text, specialists_status)
 
     def _update_model_config_display(self):
-        """Update model configuration display in sidebar"""
-        if not (self.ava_app and self.ava_app.llm_client):
-            return
-
-        if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
-
-            config_summary = {}
-            for role, model_key in assignments.items():
-                if model_key and hasattr(self.ava_app.llm_client, 'models'):
-                    model_config = self.ava_app.llm_client.models.get(model_key)
-                    if model_config:
-                        display_name = f"{model_config.provider}/{model_config.model}"
-
-                        # Handle both string and enum roles
-                        role_name = role if isinstance(role, str) else role.value
-                        if role_name == "planner":
-                            config_summary['planner'] = display_name
-                        elif role_name == "coder":
-                            config_summary['coder'] = display_name
-                        elif role_name == "assembler":
-                            config_summary['assembler'] = display_name
-
-            self.sidebar.update_model_status_display(config_summary)
+        if not (self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client,
+                                                                     'get_role_assignments')): return
+        assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str, str]
+        config_summary = {}
+        for role_str_key, model_name_key in assignments.items():  # role_str_key is "planner", "coder"
+            if model_name_key and hasattr(self.ava_app.llm_client, 'models'):
+                model_config = self.ava_app.llm_client.models.get(model_name_key)
+                if model_config:
+                    display_name = f"{model_config.provider}/{model_config.model}"
+                    # Use the string key directly
+                    if role_str_key == LLMRole.PLANNER.value:
+                        config_summary['planner'] = display_name
+                    elif role_str_key == LLMRole.CODER.value:
+                        config_summary['coder'] = display_name
+                    elif role_str_key == LLMRole.ASSEMBLER.value:
+                        config_summary['assembler'] = display_name
+        self.sidebar.update_model_status_display(config_summary)
 
     def _handle_sidebar_action(self, action: str):
-        """Handles actions from the ChatActionsPanel in the sidebar."""
-        if not self.ava_app:
-            print(f"AvAApp not available to handle action: {action}")
-            return
-
+        if not self.ava_app: print(f"AvAApp not available for action: {action}"); return
         if action == "open_terminal" or action == "view_log":
             self.ava_app._open_terminal()
         elif action == "open_code_viewer" or action == "view_code":
             self.ava_app._open_code_viewer()
         elif action == "toggle_feedback_panel":
-            # NEW: Handle feedback panel toggle
             self._toggle_feedback_panel()
         elif action == "new_session":
             self.chat_interface.chat_display.clear()
             self.chat_interface.chat_display.add_assistant_message("New session started! How can I help you today?")
-            if hasattr(self.ava_app, 'current_session'):
-                self.ava_app.current_session = "New Session"
+            if hasattr(self.ava_app, 'current_session'): self.ava_app.current_session = "New Session"
             self.update_project_display(
                 self.ava_app.current_project if hasattr(self.ava_app, 'current_project') else "Default Project")
-
-            # NEW: Clear feedback panel for new session
-            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-                self.feedback_panel.clear_display()
-
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'): self.feedback_panel.clear_display()
         elif action == "force_gen":
-            self.chat_interface.chat_display.add_assistant_message(
-                "Force code generation triggered (logic to be implemented).")
+            self.chat_interface.chat_display.add_assistant_message("Force code generation triggered (logic TBI).")
         elif action == "check_updates":
-            self.chat_interface.chat_display.add_assistant_message(
-                "Checking for updates (feature not yet implemented).")
+            self.chat_interface.chat_display.add_assistant_message("Checking for updates (feature TBI).")
         else:
-            print(f"Unknown sidebar action from ChatActionsPanel: {action}")
+            print(f"Unknown sidebar action: {action}")
 
     def _handle_rag_scan_directory(self):
         if self.ava_app and self.ava_app.rag_manager:
             self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
         else:
-            self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available to scan directory.")
+            self.chat_interface.chat_display.add_assistant_message("RAG Manager is not available.")
 
     @Slot(str)
     def on_workflow_started(self, prompt: str):
-        self.chat_interface.update_llm_status("Workflow: Starting specialists...", "working")
+        self.chat_interface.update_llm_status("Workflow: Starting...", "working")
         self.chat_interface.update_specialists_status("AI Specialists: Active", "working")
-
-        # NEW: Update feedback panel
         if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-            self.feedback_panel.update_workflow_stage("planning", "Starting enhanced AI collaboration workflow...")
+            self.feedback_panel.update_workflow_stage("planning", "Starting enhanced AI collaboration...")
 
     @Slot(dict)
     def on_workflow_completed(self, result: dict):
         success = result.get("success", False)
-
         if success:
             project_name = result.get("project_name", "your project")
             num_files = result.get("file_count", 0)
-
-            # Enhanced completion message
-            if FEEDBACK_PANEL_AVAILABLE:
-                message = f"✅ Enhanced AI collaboration workflow for '{project_name}' completed! Generated {num_files} files with specialist feedback loops. Check the AI Monitor for details."
-            else:
-                message = f"✅ Enhanced workflow for '{project_name}' completed! Generated {num_files} files with AI specialists. View them in the Code Viewer."
-
+            message = f"✅ Enhanced workflow for '{project_name}' completed! Generated {num_files} files."
+            if FEEDBACK_PANEL_AVAILABLE: message += " Check AI Monitor for details."
             self.chat_interface.chat_display.add_assistant_message(message)
             self.chat_interface.update_specialists_status("AI Specialists: Completed", "success")
-
-            # NEW: Update feedback panel
-            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
-                self.feedback_panel.show_workflow_complete(result)
-
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'): self.feedback_panel.show_workflow_complete(
+                result)
         else:
-            error_msg = result.get("error", "An unknown error occurred.")
+            error_msg = result.get("error", "Unknown error.")
             self.chat_interface.chat_display.add_assistant_message(f"❌ Enhanced workflow failed: {error_msg}")
             self.chat_interface.update_specialists_status("AI Specialists: Error", "error")
-
-        # Reset chat LLM status
         self._update_chat_llm_status()
 
     @Slot(str, str)
     def on_app_error_occurred(self, component: str, error_message: str):
         self.chat_interface.chat_display.add_assistant_message(f"⚠️ Error in {component}: {error_message}")
-        if "workflow" in component.lower() or "specialist" in component.lower():
-            self.chat_interface.update_specialists_status("AI Specialists: Error", "error")
+        if "workflow" in component.lower() or "specialist" in component.lower(): self.chat_interface.update_specialists_status(
+            "AI Specialists: Error", "error")
         self._update_chat_llm_status()
 
     @Slot(str, str)
     def update_rag_status_display(self, status_text: str, color_or_key: str):
         self.chat_interface.update_rag_ui_status(status_text, color_or_key)
-
         text_color_hex = "#888888"
         if color_or_key.startswith("#"):
             text_color_hex = color_or_key
         else:
-            key_to_hex_map = {
-                "ready": "#4ade80", "success": "#4ade80", "working": "#ffb900",
-                "error": "#ef4444", "offline": "#888888", "grey": "#888888",
-                "warning": "#ffb900"
-            }
+            key_to_hex_map = {"ready": "#4ade80", "success": "#4ade80", "working": "#ffb900", "error": "#ef4444",
+                              "offline": "#888888", "grey": "#888888", "warning": "#ffb900"}
             text_color_hex = key_to_hex_map.get(color_or_key, "#888888")
-
-        if hasattr(self.sidebar, 'update_sidebar_rag_status'):
-            self.sidebar.update_sidebar_rag_status(status_text, text_color_hex)
+        if hasattr(self.sidebar, 'update_sidebar_rag_status'): self.sidebar.update_sidebar_rag_status(status_text,
+                                                                                                      text_color_hex)
 
     @Slot(str)
     def update_project_display(self, project_name_or_path: str):
         project_name = project_name_or_path
-        if "/" in project_name or "\\" in project_name:
-            from pathlib import Path
-            project_name = Path(project_name_or_path).name
-
-        session_name = "Main Chat"  # Default session name
-        if self.ava_app and hasattr(self.ava_app, 'current_session'):
-            current_session_val = getattr(self.ava_app, 'current_session', None)
-            if current_session_val:
-                session_name = current_session_val
-
-        # Enhanced title with AI specialist info and collaboration status
+        if "/" in project_name or "\\" in project_name: from pathlib import Path; project_name = Path(
+            project_name_or_path).name
+        session_name = "Main Chat"
+        current_session_val = getattr(self.ava_app, 'current_session', None) if self.ava_app else None
+        if current_session_val: session_name = current_session_val
         base_title = f"AvA [{project_name}] - Session: {session_name}"
-
         if self.ava_app and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
-            planner = assignments.get('planner', 'N/A').split('-')[-1][:8] if assignments.get('planner') else 'N/A'
-            coder = assignments.get('coder', 'N/A').split('-')[-1][:8] if assignments.get('coder') else 'N/A'
+            assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str,str]
 
-            if FEEDBACK_PANEL_AVAILABLE and hasattr(self.ava_app,
-                                                    'use_enhanced_workflow') and self.ava_app.use_enhanced_workflow:
-                base_title += f" (Enhanced: P:{planner} C:{coder})"
-            else:
-                base_title += f" (P:{planner} C:{coder})"
+            def get_short_name_from_key(role_val_str):
+                model_key = assignments.get(role_val_str)
+                if not model_key or not hasattr(self.ava_app.llm_client, 'models'): return 'N/A'
+                mc = self.ava_app.llm_client.models.get(model_key)
+                return mc.model.split('/')[-1][:8] if mc else 'N/A'
 
+            planner_short = get_short_name_from_key(LLMRole.PLANNER.value)
+            coder_short = get_short_name_from_key(LLMRole.CODER.value)
+
+            title_suffix = f" (Enhanced: P:{planner_short} C:{coder_short})" if FEEDBACK_PANEL_AVAILABLE and hasattr(
+                self.ava_app,
+                'use_enhanced_workflow') and self.ava_app.use_enhanced_workflow else f" (P:{planner_short} C:{coder_short})"
+            base_title += title_suffix
         self.setWindowTitle(base_title)
