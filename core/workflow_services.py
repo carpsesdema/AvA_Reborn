@@ -23,25 +23,31 @@ class PlannerService:
         rag_context = await self._get_planning_context(user_prompt, context_cache)
 
         plan_prompt = f"""
-You are a Senior Software Architect. Create a clean project plan:
+You are a Senior Software Architect. Create a complete project plan:
 
 REQUEST: {user_prompt}
 
 CONTEXT: {rag_context if rag_context else "Use Python best practices"}
 
-Return JSON:
+Return JSON with ALL files needed for a working solution:
 {{
     "project_name": "descriptive_snake_case_name",
     "description": "Clear description",
     "architecture_type": "cli|web_app|gui|library",
     "files": {{
         "main.py": {{"priority": 1, "description": "Main entry point"}},
-        "utils.py": {{"priority": 2, "description": "Helper functions"}}
+        "utils.py": {{"priority": 2, "description": "Helper functions"}},
+        "config.py": {{"priority": 3, "description": "Configuration"}},
+        "models.py": {{"priority": 4, "description": "Data models"}},
+        "handlers.py": {{"priority": 5, "description": "Business logic"}},
+        "exceptions.py": {{"priority": 6, "description": "Custom exceptions"}},
+        "constants.py": {{"priority": 7, "description": "Application constants"}},
+        "requirements.txt": {{"priority": 8, "description": "Dependencies"}}
     }},
     "dependencies": ["requests", "pathlib"]
 }}
 
-Maximum 6 files for clean workflow.
+Generate ALL files needed for a complete working project - no limits.
 """
 
         try:
@@ -163,7 +169,12 @@ Keep tasks ATOMIC and independent.
                 "architecture_type": "gui",
                 "files": {
                     "main.py": {"priority": 1, "description": "Main GUI application"},
-                    "ui_components.py": {"priority": 2, "description": "UI components and widgets"}
+                    "ui_components.py": {"priority": 2, "description": "UI components and widgets"},
+                    "utils.py": {"priority": 3, "description": "Utility functions"},
+                    "config.py": {"priority": 4, "description": "Configuration"},
+                    "models.py": {"priority": 5, "description": "Data models"},
+                    "exceptions.py": {"priority": 6, "description": "Custom exceptions"},
+                    "requirements.txt": {"priority": 7, "description": "Dependencies"}
                 },
                 "dependencies": ["PySide6"]
             }
@@ -174,7 +185,12 @@ Keep tasks ATOMIC and independent.
                 "architecture_type": "web_app",
                 "files": {
                     "main.py": {"priority": 1, "description": "Main web application"},
-                    "routes.py": {"priority": 2, "description": "Web routes"}
+                    "routes.py": {"priority": 2, "description": "Web routes"},
+                    "models.py": {"priority": 3, "description": "Data models"},
+                    "utils.py": {"priority": 4, "description": "Utility functions"},
+                    "config.py": {"priority": 5, "description": "Configuration"},
+                    "exceptions.py": {"priority": 6, "description": "Custom exceptions"},
+                    "requirements.txt": {"priority": 7, "description": "Dependencies"}
                 },
                 "dependencies": ["flask"]
             }
@@ -183,7 +199,15 @@ Keep tasks ATOMIC and independent.
                 "project_name": "generated_project",
                 "description": prompt,
                 "architecture_type": "cli",
-                "files": {"main.py": {"priority": 1, "description": "Main file"}},
+                "files": {
+                    "main.py": {"priority": 1, "description": "Main file"},
+                    "utils.py": {"priority": 2, "description": "Utility functions"},
+                    "config.py": {"priority": 3, "description": "Configuration"},
+                    "models.py": {"priority": 4, "description": "Data models"},
+                    "handlers.py": {"priority": 5, "description": "Business logic"},
+                    "exceptions.py": {"priority": 6, "description": "Custom exceptions"},
+                    "requirements.txt": {"priority": 7, "description": "Dependencies"}
+                },
                 "dependencies": []
             }
 
@@ -311,7 +335,7 @@ Return ONLY Python code:
 
 
 class WorkflowOrchestrator:
-    """🎼 Orchestrates All Services - Parallel File Processing with Robust Assembly & Review"""
+    """🎼 Orchestrates All Services - Unlimited File Processing with Robust Assembly & Review"""
 
     def __init__(self, planner: PlannerService, coder: CoderService,
                  assembler: AssemblerService, terminal=None):
@@ -325,9 +349,9 @@ class WorkflowOrchestrator:
         self.context_cache = ContextCache()
 
     async def execute_workflow(self, user_prompt: str, output_dir: Path) -> dict:
-        """Execute complete workflow with parallel file processing and mandatory review"""
+        """Execute complete workflow with unlimited file processing and mandatory review"""
         try:
-            self._log("🚀 Starting Enhanced Micro-Task Workflow with Robust Assembly...")
+            self._log("🚀 Starting Enhanced Workflow (No File Limits)...")
 
             # Stage 1: Planning
             self._log("🧠 PLANNER: Creating project architecture...")
@@ -340,18 +364,17 @@ class WorkflowOrchestrator:
 
             self._log(f"📋 Project planned: {project_name} ({len(plan.get('files', {}))} files)")
 
-            # Stage 2: Parallel File Processing with Review
-            self._log("⚡ Starting parallel file processing with mandatory review...")
+            # Stage 2: Process ALL files
+            self._log("⚡ Starting file processing...")
 
             files = plan.get("files", {"main.py": {"priority": 1}})
 
-            # OPTIMIZATION: Process files in smaller batches to maintain responsiveness
             file_tasks = []
             for file_path, file_info in files.items():
                 task = self._process_single_file_with_review(file_path, file_info, plan, project_dir)
                 file_tasks.append(task)
 
-            # FIXED: Execute all files with proper exception handling
+            # Execute all files with proper exception handling
             results = await asyncio.gather(*file_tasks, return_exceptions=True)
 
             # Process results

@@ -379,10 +379,24 @@ Make each task ATOMIC and project-aware.
             response_text = ''.join(response_chunks)
             tasks = self._extract_json_array(response_text)
 
-            # Add file context to each task
-            for task in tasks:
-                task["file_path"] = file_path
-                task["project_context"] = project_context
+            if not tasks: # If LLM returned empty or unparseable JSON array
+                self.terminal.log(f"[{file_path}] ⚠️ LLM returned no tasks or failed to parse JSON. Generating fallback task.")
+                tasks = [{
+                    "id": f"implement_{file_path.replace('.py', '')}",
+                    "type": "complete_file", # More descriptive type
+                    "description": f"Implement entire file: {file_path} as per specifications.",
+                    "file_path": file_path,
+                    "expected_lines": 100, # Adjusted expected lines for a full file
+                    "project_context": project_context, # Add context to fallback
+                    "dependencies": [],
+                    "integration_notes": "Implement the full file based on the overall plan.",
+                    "consistency_requirements": ["Adhere to general project standards."]
+                }]
+            else: # Tasks were successfully parsed
+                # Add file context to each task
+                for task in tasks:
+                    task["file_path"] = file_path
+                    task["project_context"] = project_context # Ensure project_context is added
 
             self.terminal.log(f"[{file_path}] 📋 Created {len(tasks)} project-aware micro-tasks")
             return tasks
@@ -392,10 +406,11 @@ Make each task ATOMIC and project-aware.
             # Return basic fallback task
             return [{
                 "id": f"implement_{file_path.replace('.py', '')}",
-                "type": "complete",
-                "description": f"Implement {file_path}",
+                "type": "complete_file",
+                "description": f"Implement entire file: {file_path} due to error.",
                 "file_path": file_path,
-                "expected_lines": 50
+                "expected_lines": 100,
+                "project_context": project_context
             }]
 
     async def _execute_collaborative_micro_tasks(self, session_id: str, file_path: str,
