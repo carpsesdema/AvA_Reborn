@@ -1,14 +1,14 @@
-# gui/enhanced_sidebar.py - Updated with READABLE font sizes
+# gui/enhanced_sidebar.py - Updated with READABLE font sizes & Reviewer Role
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
-    QListWidget, QListWidgetItem, QProgressBar, QFrame, QPushButton,
-    QScrollArea, QSizePolicy
-)
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
+    QScrollArea
+)
 
-from gui.components import ModernButton, StatusIndicator
+from core.llm_client import LLMRole  # For role reference if needed, though mostly string keys now
+from gui.components import ModernButton
 
 
 class StyledPanel(QFrame):
@@ -31,8 +31,8 @@ class StyledPanel(QFrame):
         """)
 
         self.main_layout = QVBoxLayout()
-        self.main_layout.setContentsMargins(10, 8, 10, 10)  # Increased padding
-        self.main_layout.setSpacing(8)  # Increased spacing
+        self.main_layout.setContentsMargins(10, 8, 10, 10)
+        self.main_layout.setSpacing(8)
 
         if title:
             self._create_header(title)
@@ -40,7 +40,7 @@ class StyledPanel(QFrame):
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.setSpacing(8)  # Increased spacing
+        self.content_layout.setSpacing(8)
 
         self.main_layout.addWidget(self.content_widget)
         self.setLayout(self.main_layout)
@@ -53,7 +53,7 @@ class StyledPanel(QFrame):
         header_layout.setContentsMargins(0, 0, 0, 6)
 
         self.title_label = QLabel(title)
-        self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))  # Readable size
+        self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.title_label.setStyleSheet("color: #00d7ff; background: transparent;")
 
         header_layout.addWidget(self.title_label)
@@ -61,7 +61,7 @@ class StyledPanel(QFrame):
 
         if self.collapsible:
             self.collapse_btn = QPushButton("+" if self.is_collapsed else "−")
-            self.collapse_btn.setFixedSize(20, 20)  # Slightly larger button
+            self.collapse_btn.setFixedSize(20, 20)
             self.collapse_btn.setStyleSheet("""
                 QPushButton {
                     background: #00d7ff; color: #1e1e1e; border: none;
@@ -98,7 +98,7 @@ class ProjectControlPanel(StyledPanel):
 
     def _init_ui(self):
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        self.new_project_btn.setMinimumHeight(36)  # Larger button
+        self.new_project_btn.setMinimumHeight(36)
         self.new_project_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -124,7 +124,7 @@ class ProjectControlPanel(StyledPanel):
 
 
 class ModelConfigPanel(StyledPanel):
-    """Panel for Model Configuration with READABLE text"""
+    """Panel for Model Configuration with READABLE text and Reviewer Role"""
     model_config_requested = Signal()
 
     def __init__(self):
@@ -132,29 +132,24 @@ class ModelConfigPanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
-        # Model status display
         self.model_status_layout = QVBoxLayout()
         self.model_status_layout.setSpacing(6)
 
-        # Current model assignments (readable display)
         self.planner_status = QLabel("🧠 Planner: Not configured")
-        self.planner_status.setStyleSheet("color: #888; font-size: 11px;")  # Increased from 8px
-
         self.coder_status = QLabel("⚙️ Coder: Not configured")
-        self.coder_status.setStyleSheet("color: #888; font-size: 11px;")  # Increased from 8px
-
         self.assembler_status = QLabel("📄 Assembler: Not configured")
-        self.assembler_status.setStyleSheet("color: #888; font-size: 11px;")  # Increased from 8px
+        self.reviewer_status = QLabel("🧐 Reviewer: Not configured")  # NEW
+        self.chat_status = QLabel("💬 Chat: Not configured")  # NEW for completeness
 
-        self.model_status_layout.addWidget(self.planner_status)
-        self.model_status_layout.addWidget(self.coder_status)
-        self.model_status_layout.addWidget(self.assembler_status)
+        for label in [self.planner_status, self.coder_status, self.assembler_status, self.reviewer_status,
+                      self.chat_status]:
+            label.setStyleSheet("color: #888; font-size: 11px;")
+            self.model_status_layout.addWidget(label)
 
         self.add_layout(self.model_status_layout)
 
-        # Configuration button
         self.config_button = ModernButton("⚙️ Configure Models", button_type="accent")
-        self.config_button.setMinimumHeight(36)  # Larger button
+        self.config_button.setMinimumHeight(36)
         self.config_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -178,34 +173,29 @@ class ModelConfigPanel(StyledPanel):
         self.add_widget(self.config_button)
 
     def update_model_status(self, config_summary: dict):
-        """Update the display with current model assignments"""
-        planner = config_summary.get('planner', 'Not configured')
-        coder = config_summary.get('coder', 'Not configured')
-        assembler = config_summary.get('assembler', 'Not configured')
+        """Update the display with current model assignments. Expects string role keys."""
 
-        # Truncate long model names for display but keep readable
-        def truncate_model(name):
-            if len(name) > 25:  # Increased from 20
-                return name[:22] + "..."
-            return name
+        def truncate_model(name, length=25):  # length can be adjusted
+            return name[:length - 3] + "..." if name and len(name) > length else name or "Not Configured"
 
-        self.planner_status.setText(f"🧠 Planner: {truncate_model(planner)}")
-        self.coder_status.setText(f"⚙️ Coder: {truncate_model(coder)}")
-        self.assembler_status.setText(f"📄 Assembler: {truncate_model(assembler)}")
+        status_map = {
+            LLMRole.PLANNER.value: (self.planner_status, "🧠 Planner:"),
+            LLMRole.CODER.value: (self.coder_status, "⚙️ Coder:"),
+            LLMRole.ASSEMBLER.value: (self.assembler_status, "📄 Assembler:"),
+            LLMRole.REVIEWER.value: (self.reviewer_status, "🧐 Reviewer:"),
+            LLMRole.CHAT.value: (self.chat_status, "💬 Chat:")
+        }
 
-        # Update colors based on configuration status
-        color = "#4ade80" if "Not configured" not in planner else "#888"
-        self.planner_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+        for role_str, (label_widget, prefix) in status_map.items():
+            model_name = config_summary.get(role_str, "Not configured")
+            display_name = truncate_model(model_name)
+            label_widget.setText(f"{prefix} {display_name}")
 
-        color = "#4ade80" if "Not configured" not in coder else "#888"
-        self.coder_status.setStyleSheet(f"color: {color}; font-size: 11px;")
-
-        color = "#4ade80" if "Not configured" not in assembler else "#888"
-        self.assembler_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+            color = "#4ade80" if model_name and model_name != "Not configured" else "#888"
+            label_widget.setStyleSheet(f"color: {color}; font-size: 11px;")
 
 
 class KnowledgeBasePanel(StyledPanel):
-    # Signal for RAG actions
     scan_directory_requested = Signal()
 
     def __init__(self):
@@ -214,7 +204,7 @@ class KnowledgeBasePanel(StyledPanel):
 
     def _init_ui(self):
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
-        self.scan_btn.setMinimumHeight(32)  # Larger button
+        self.scan_btn.setMinimumHeight(32)
         self.scan_btn.setStyleSheet("""
             QPushButton {
                 background: #2d2d30; border: 1px solid #404040; border-radius: 5px;
@@ -229,11 +219,11 @@ class KnowledgeBasePanel(StyledPanel):
         rag_status_layout.setContentsMargins(0, 6, 0, 0)
 
         rag_label = QLabel("RAG:")
-        rag_label.setFont(QFont("Segoe UI", 10))  # Increased from 8
+        rag_label.setFont(QFont("Segoe UI", 10))
         rag_label.setStyleSheet("color: #cccccc;")
 
         self.rag_status_display_label = QLabel("Initializing embedder...")
-        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 10px;")  # Increased from 8px
+        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 10px;")
 
         rag_status_layout.addWidget(rag_label)
         rag_status_layout.addWidget(self.rag_status_display_label, 1)
@@ -257,11 +247,11 @@ class ChatActionsPanel(StyledPanel):
             ("⚡ View Generated Code", "view_code"),
             ("🔨 Force Code Gen", "force_gen"),
             ("🔄 Check for Updates", "check_updates")
-                ]
+        ]
 
         for text, action in buttons:
             btn = ModernButton(text, button_type="secondary")
-            btn.setMinimumHeight(30)  # Larger buttons
+            btn.setMinimumHeight(30)
             btn.setStyleSheet("""
                 QPushButton {
                     background: #2d2d30; border: 1px solid #404040; border-radius: 5px;
@@ -274,7 +264,6 @@ class ChatActionsPanel(StyledPanel):
 
 
 class AvALeftSidebar(QWidget):
-    # Signals from child panels
     action_triggered = Signal(str)
     new_project_requested = Signal()
     scan_directory_requested = Signal()
@@ -282,13 +271,13 @@ class AvALeftSidebar(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setFixedWidth(300)  # Increased from 280 for better readability
+        self.setFixedWidth(300)
         self._init_ui()
         self._connect_signals()
 
     def _init_ui(self):
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(6, 6, 6, 6)  # Increased margins
+        main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(0)
 
         scroll_area = QScrollArea()
@@ -312,11 +301,10 @@ class AvALeftSidebar(QWidget):
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(6)  # Increased spacing
+        content_layout.setSpacing(6)
 
-        # Create panels
         self.project_control_panel = ProjectControlPanel()
-        self.model_config_panel = ModelConfigPanel()
+        self.model_config_panel = ModelConfigPanel()  # This panel now handles all roles
         self.rag_panel = KnowledgeBasePanel()
         self.actions_panel = ChatActionsPanel()
 
@@ -339,18 +327,16 @@ class AvALeftSidebar(QWidget):
         """)
 
     def _connect_signals(self):
-        # Connect signals from child panels to the sidebar's own signals
         self.project_control_panel.new_project_clicked.connect(self.new_project_requested)
         self.model_config_panel.model_config_requested.connect(self.model_config_requested)
         self.rag_panel.scan_directory_requested.connect(self.scan_directory_requested)
         self.actions_panel.action_triggered.connect(self.action_triggered)
 
     def update_sidebar_rag_status(self, status_text: str, color_hex: str):
-        """Update RAG status display in sidebar"""
         if hasattr(self.rag_panel, 'rag_status_display_label'):
             self.rag_panel.rag_status_display_label.setText(status_text)
-            self.rag_panel.rag_status_display_label.setStyleSheet(f"color: {color_hex}; font-size: 10px;")  # Increased from 8px
+            self.rag_panel.rag_status_display_label.setStyleSheet(f"color: {color_hex}; font-size: 10px;")
 
     def update_model_status_display(self, config_summary: dict):
-        """Update model configuration status display"""
+        """Update model configuration status display. Expects string role keys."""
         self.model_config_panel.update_model_status(config_summary)
