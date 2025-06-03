@@ -36,13 +36,32 @@ class EnhancedLLMClient:
     """
     Enhanced LLM client supporting multiple models for different AI roles
     Optimizes cost by using appropriate models for each task
+    Supports individual personalities for each AI role.
     """
 
     def __init__(self):
         self.models: Dict[str, ModelConfig] = {}
         self.role_assignments: Dict[LLMRole, str] = {}
+        self.personalities: Dict[LLMRole, str] = {}  # NEW: Store personalities
         self._initialize_models()
         self._assign_roles()
+        self._initialize_default_personalities() # NEW: Initialize default personalities
+
+    def _initialize_default_personalities(self):
+        """Initialize default personalities if not set by config dialog"""
+        # These would be overridden if a config dialog sets them
+        default_personalities = {
+            LLMRole.PLANNER: "You are a senior software architect with 15+ years of experience. You think strategically, break down complex problems into clear steps, and always consider scalability and maintainability. You communicate clearly and provide detailed technical specifications.",
+            LLMRole.CODER: "You are a coding specialist who writes clean, efficient, and well-documented code. You follow best practices, use proper error handling, and write code that is both functional and elegant. You focus on getting things done with high quality.",
+            LLMRole.ASSEMBLER: "You are a meticulous code integrator who ensures all pieces work together seamlessly. You have an eye for detail, maintain consistent code style, and create professional, production-ready files with proper organization and documentation.",
+            LLMRole.REVIEWER: "You are a detail-oriented code reviewer. Your primary goal is to ensure code quality, adherence to best practices, security, and performance. Provide constructive feedback and clear justifications for any issues found.",
+            LLMRole.CHAT: "You are AvA, a friendly and helpful AI development assistant. Engage in natural conversation and guide users through their development tasks."
+        }
+        for role, personality_text in default_personalities.items():
+            if role not in self.personalities: # Only set if not already loaded (e.g., by config)
+                self.personalities[role] = personality_text
+                print(f"Initialized default personality for {role.value}")
+
 
     def _initialize_models(self):
         """Initialize available models with their configurations"""
@@ -239,22 +258,24 @@ class EnhancedLLMClient:
 
     async def chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> str:
         model_config = self.get_role_model(role)
+        personality = self.personalities.get(role, "") # NEW: Get personality
+
         if not model_config:
             print(f"Error: No model configured for role {role.value}. Using fallback response.")
             return self._fallback_response(prompt, role)
 
-        print(f"Role: {role.value} using Model: {model_config.provider}/{model_config.model}")
+        print(f"Role: {role.value} using Model: {model_config.provider}/{model_config.model} with Personality: '{personality[:30]}...'")
         try:
             if model_config.provider == "gemini":
-                return await self._call_gemini(prompt, model_config)
+                return await self._call_gemini(prompt, model_config, personality)
             elif model_config.provider == "openai":
-                return await self._call_openai(prompt, model_config)
+                return await self._call_openai(prompt, model_config, personality)
             elif model_config.provider == "anthropic":
-                return await self._call_anthropic(prompt, model_config)
+                return await self._call_anthropic(prompt, model_config, personality)
             elif model_config.provider == "ollama":
-                return await self._call_ollama(prompt, model_config)
+                return await self._call_ollama(prompt, model_config, personality)
             elif model_config.provider == "deepseek":
-                return await self._call_deepseek(prompt, model_config)
+                return await self._call_deepseek(prompt, model_config, personality)
             else:
                 print(f"Error: Unknown provider {model_config.provider} for role {role.value}")
                 return self._fallback_response(prompt, role)
@@ -266,34 +287,37 @@ class EnhancedLLMClient:
                 chat_model_config = self.get_role_model(LLMRole.CHAT)
                 if chat_model_config and chat_model_config.model != model_config.model:  # Avoid re-calling the same failed model
                     try:
-                        return await self.chat(prompt, LLMRole.CHAT)  # Recurses with CHAT role
+                        # Pass original role to get correct personality for fallback
+                        return await self.chat(prompt, LLMRole.CHAT)
                     except Exception as e_chat:
                         print(f"Fallback to CHAT model also failed: {e_chat}")
             return self._fallback_response(prompt, role)
 
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
         model_config = self.get_role_model(role)
+        personality = self.personalities.get(role, "") # NEW: Get personality
+
         if not model_config:
             print(f"Error: No model configured for role {role.value} for streaming. Using fallback response.")
             yield self._fallback_response(prompt, role)
             return
 
-        print(f"Streaming - Role: {role.value} using Model: {model_config.provider}/{model_config.model}")
+        print(f"Streaming - Role: {role.value} using Model: {model_config.provider}/{model_config.model} with Personality: '{personality[:30]}...'")
         try:
             if model_config.provider == "gemini":
-                async for chunk in self._stream_gemini(prompt, model_config):
+                async for chunk in self._stream_gemini(prompt, model_config, personality):
                     yield chunk
             elif model_config.provider == "openai":
-                async for chunk in self._stream_openai(prompt, model_config):
+                async for chunk in self._stream_openai(prompt, model_config, personality):
                     yield chunk
             elif model_config.provider == "anthropic":
-                async for chunk in self._stream_anthropic(prompt, model_config):
+                async for chunk in self._stream_anthropic(prompt, model_config, personality):
                     yield chunk
             elif model_config.provider == "ollama":
-                async for chunk in self._stream_ollama(prompt, model_config):
+                async for chunk in self._stream_ollama(prompt, model_config, personality):
                     yield chunk
             elif model_config.provider == "deepseek":
-                async for chunk in self._stream_deepseek(prompt, model_config):
+                async for chunk in self._stream_deepseek(prompt, model_config, personality):
                     yield chunk
             else:
                 print(f"Error: Unknown provider {model_config.provider} for role {role.value} for streaming.")
@@ -301,14 +325,17 @@ class EnhancedLLMClient:
         except Exception as e:
             print(
                 f"Streaming API call with {model_config.provider}/{model_config.model} for role {role.value} failed: {e}")
-            # Fallback for streaming is tricky, could try a non-streaming call to the CHAT model or just error out
             yield self._fallback_response(prompt, role)
 
-    async def _call_gemini(self, prompt: str, config: ModelConfig) -> str:
+    async def _call_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
+        final_prompt = prompt
+        if personality:
+            final_prompt = f"SYSTEM CONTEXT (Personality: {personality})\n\nUSER PROMPT:\n{prompt}"
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:generateContent?key={config.api_key}"
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"parts": [{"text": final_prompt}]}],
             "generationConfig": {
                 "temperature": config.temperature,
                 "maxOutputTokens": config.max_tokens
@@ -327,11 +354,15 @@ class EnhancedLLMClient:
                         raise Exception(f"Gemini API response format error: {response_json}")
                 raise Exception(f"Gemini API error: {response.status} - {response_json}")
 
-    async def _stream_gemini(self, prompt: str, config: ModelConfig) -> AsyncGenerator[str, None]:
+    async def _stream_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
         import aiohttp
+        final_prompt = prompt
+        if personality:
+            final_prompt = f"SYSTEM CONTEXT (Personality: {personality})\n\nUSER PROMPT:\n{prompt}"
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:streamGenerateContent?key={config.api_key}&alt=sse"
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"parts": [{"text": final_prompt}]}],
             "generationConfig": {
                 "temperature": config.temperature,
                 "maxOutputTokens": config.max_tokens
@@ -357,8 +388,13 @@ class EnhancedLLMClient:
                             print(f"Warning: Could not decode JSON from Gemini stream: {line_str}")
                             continue
 
-    async def _call_openai(self, prompt: str, config: ModelConfig) -> str:
+    async def _call_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
+        messages = []
+        if personality:
+            messages.append({"role": "system", "content": personality})
+        messages.append({"role": "user", "content": prompt})
+
         url = config.base_url or "https://api.openai.com/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {config.api_key}",
@@ -366,7 +402,7 @@ class EnhancedLLMClient:
         }
         payload = {
             "model": config.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": config.temperature,
             "max_tokens": config.max_tokens
         }
@@ -377,8 +413,13 @@ class EnhancedLLMClient:
                     return response_json["choices"][0]["message"]["content"]
                 raise Exception(f"OpenAI API error: {response.status} - {response_json}")
 
-    async def _stream_openai(self, prompt: str, config: ModelConfig) -> AsyncGenerator[str, None]:
+    async def _stream_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
         import aiohttp
+        messages = []
+        if personality:
+            messages.append({"role": "system", "content": personality})
+        messages.append({"role": "user", "content": prompt})
+
         url = config.base_url or "https://api.openai.com/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {config.api_key}",
@@ -386,7 +427,7 @@ class EnhancedLLMClient:
         }
         payload = {
             "model": config.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "stream": True
@@ -413,7 +454,7 @@ class EnhancedLLMClient:
                             print(f"Warning: Could not decode JSON from OpenAI stream: {line_str}")
                             continue
 
-    async def _call_anthropic(self, prompt: str, config: ModelConfig) -> str:
+    async def _call_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
         url = config.base_url or "https://api.anthropic.com/v1/messages"
         headers = {
@@ -427,6 +468,9 @@ class EnhancedLLMClient:
             "temperature": config.temperature,
             "messages": [{"role": "user", "content": prompt}]
         }
+        if personality:
+            payload["system"] = personality # Anthropic uses a dedicated system field
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 response_json = await response.json()
@@ -434,7 +478,7 @@ class EnhancedLLMClient:
                     return response_json["content"][0]["text"]
                 raise Exception(f"Anthropic API error: {response.status} - {response_json}")
 
-    async def _stream_anthropic(self, prompt: str, config: ModelConfig) -> AsyncGenerator[str, None]:
+    async def _stream_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
         import aiohttp
         url = config.base_url or "https://api.anthropic.com/v1/messages"
         headers = {
@@ -450,6 +494,9 @@ class EnhancedLLMClient:
             "messages": [{"role": "user", "content": prompt}],
             "stream": True
         }
+        if personality:
+            payload["system"] = personality
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
@@ -473,12 +520,16 @@ class EnhancedLLMClient:
                             print(f"Warning: Could not decode JSON from Anthropic stream: {line_str}")
                             continue
 
-    async def _call_ollama(self, prompt: str, config: ModelConfig) -> str:
+    async def _call_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
+        final_prompt = prompt
+        if personality:
+            final_prompt = f"SYSTEM PERSONALITY: {personality}\n\n{prompt}"
+
         url = f"{config.base_url}/api/generate"
         payload = {
             "model": config.model,
-            "prompt": prompt,
+            "prompt": final_prompt,
             "stream": False,
             "options": {
                 "temperature": config.temperature,
@@ -492,12 +543,16 @@ class EnhancedLLMClient:
                     return response_json["response"]
                 raise Exception(f"Ollama API error: {response.status} - {response_json}")
 
-    async def _stream_ollama(self, prompt: str, config: ModelConfig) -> AsyncGenerator[str, None]:
+    async def _stream_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
         import aiohttp
+        final_prompt = prompt
+        if personality:
+            final_prompt = f"SYSTEM PERSONALITY: {personality}\n\n{prompt}"
+
         url = f"{config.base_url}/api/generate"
         payload = {
             "model": config.model,
-            "prompt": prompt,
+            "prompt": final_prompt,
             "stream": True,
             "options": {
                 "temperature": config.temperature,
@@ -523,8 +578,13 @@ class EnhancedLLMClient:
                             f"Warning: Could not decode JSON from Ollama stream: {line.decode('utf-8', errors='ignore')}")
                         continue
 
-    async def _call_deepseek(self, prompt: str, config: ModelConfig) -> str:
+    async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
+        messages = []
+        if personality:
+            messages.append({"role": "system", "content": personality})
+        messages.append({"role": "user", "content": prompt})
+
         url = f"{config.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {config.api_key}",
@@ -532,7 +592,7 @@ class EnhancedLLMClient:
         }
         payload = {
             "model": config.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": config.temperature,
             "max_tokens": config.max_tokens
         }
@@ -543,8 +603,13 @@ class EnhancedLLMClient:
                     return response_json["choices"][0]["message"]["content"]
                 raise Exception(f"DeepSeek API error: {response.status} - {response_json}")
 
-    async def _stream_deepseek(self, prompt: str, config: ModelConfig) -> AsyncGenerator[str, None]:
+    async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
         import aiohttp
+        messages = []
+        if personality:
+            messages.append({"role": "system", "content": personality})
+        messages.append({"role": "user", "content": prompt})
+
         url = f"{config.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {config.api_key}",
@@ -552,7 +617,7 @@ class EnhancedLLMClient:
         }
         payload = {
             "model": config.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "stream": True
