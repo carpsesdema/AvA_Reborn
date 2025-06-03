@@ -253,10 +253,11 @@ class ChatActionsPanel(StyledPanel):
             ("📊 View LLM Log", "view_log"),
             ("📟 Open Terminal", "open_terminal"),
             ("📄 Open Code Viewer", "open_code_viewer"),
+            ("🎛️ Toggle AI Monitor", "toggle_feedback_panel"),
             ("⚡ View Generated Code", "view_code"),
             ("🔨 Force Code Gen", "force_gen"),
             ("🔄 Check for Updates", "check_updates")
-        ]
+                ]
 
         for text, action in buttons:
             btn = ModernButton(text, button_type="secondary")

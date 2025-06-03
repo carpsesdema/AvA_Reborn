@@ -1,17 +1,26 @@
-# gui/main_window.py - Enhanced with Model Configuration Dialog - FIXED
+# gui/main_window.py - Enhanced with Feedback Panel and AI Collaboration
 
 import asyncio
 import inspect
 
-from PySide6.QtCore import Signal, Slot, QTimer
+from PySide6.QtCore import Signal, Slot, QTimer, Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QLabel, QTextEdit
+    QLineEdit, QLabel, QTextEdit, QSplitter, QTabWidget
 )
 
 from gui.components import ModernButton, StatusIndicator
 from gui.enhanced_sidebar import AvALeftSidebar
-from gui.model_config_dialog import ModelConfigurationDialog  # NEW IMPORT
+from gui.model_config_dialog import ModelConfigurationDialog
+
+# NEW: Import feedback panel
+try:
+    from gui.feedback_panel import FeedbackPanel
+
+    FEEDBACK_PANEL_AVAILABLE = True
+except ImportError:
+    print("Feedback panel not available - enhanced features disabled")
+    FEEDBACK_PANEL_AVAILABLE = False
 
 # Import LLMRole for chat functionality
 try:
@@ -39,9 +48,14 @@ class ChatDisplay(QTextEdit):
                 font-size: 14px;
             }
         """)
-        self.append(self._format_message("AvA",
-                                         "Hello! I'm AvA with enhanced AI specialists. I can help you build applications using my Planner, Coder, and Assembler AIs, or just chat. What would you like to work on?",
-                                         "assistant"))
+
+        # Enhanced welcome message
+        welcome_msg = "Hello! I'm AvA with enhanced AI specialists. I can help you build applications using my Planner, Coder, and Assembler AIs"
+        if FEEDBACK_PANEL_AVAILABLE:
+            welcome_msg += " with real-time collaboration monitoring"
+        welcome_msg += ". What would you like to work on?"
+
+        self.append(self._format_message("AvA", welcome_msg, "assistant"))
 
     def add_user_message(self, message: str):
         self.append(self._format_message("You", message, "user"))
@@ -84,7 +98,12 @@ class ChatInterface(QWidget):
         input_layout.setSpacing(10)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Chat with AvA... (type 'build' or 'create' to start a project)")
+        placeholder_text = "Chat with AvA... (type 'build' or 'create' to start a project"
+        if FEEDBACK_PANEL_AVAILABLE:
+            placeholder_text += " with AI collaboration)"
+        else:
+            placeholder_text += ")"
+        self.input_field.setPlaceholderText(placeholder_text)
         self.input_field.setMinimumHeight(45)
         self.input_field.setStyleSheet("""
             QLineEdit {
@@ -192,12 +211,23 @@ class AvAMainWindow(QMainWindow):
     workflow_requested = Signal(str)
     new_project_requested = Signal()
 
+    # NEW: Enhanced workflow signals
+    feedback_settings_changed = Signal(dict)
+    user_feedback_added = Signal(str, str, int, str)  # type, content, rating, file_path
+    iteration_requested = Signal(str, str)  # file_path, feedback
+
     def __init__(self, ava_app=None, config=None):
         super().__init__()
         self.ava_app = ava_app
+        self.show_feedback_panel = FEEDBACK_PANEL_AVAILABLE
 
-        self.setWindowTitle("AvA - Enhanced AI Development Assistant")
-        self.setGeometry(100, 100, 1400, 900)
+        # Enhanced title based on available features
+        title = "AvA - Enhanced AI Development Assistant"
+        if FEEDBACK_PANEL_AVAILABLE:
+            title += " with AI Collaboration"
+        self.setWindowTitle(title)
+
+        self.setGeometry(100, 100, 1600, 900)  # Wider to accommodate feedback panel
         self._apply_theme()
         self._init_ui()
         self._connect_signals()
@@ -209,6 +239,16 @@ class AvAMainWindow(QMainWindow):
             self.ava_app.workflow_completed.connect(self.on_workflow_completed)
             self.ava_app.error_occurred.connect(self.on_app_error_occurred)
             self.ava_app.project_loaded.connect(self.update_project_display)
+
+            # NEW: Connect enhanced workflow signals if available
+            if hasattr(self.ava_app, 'ai_collaboration_started'):
+                self.ava_app.ai_collaboration_started.connect(self.on_ai_collaboration_started)
+            if hasattr(self.ava_app, 'ai_feedback_received'):
+                self.ava_app.ai_feedback_received.connect(self.on_ai_feedback_received)
+            if hasattr(self.ava_app, 'iteration_completed'):
+                self.ava_app.iteration_completed.connect(self.on_iteration_completed)
+            if hasattr(self.ava_app, 'quality_check_completed'):
+                self.ava_app.quality_check_completed.connect(self.on_quality_check_completed)
 
             # Defer initial UI status update
             QTimer.singleShot(150, self._update_initial_ui_status)
@@ -229,14 +269,57 @@ class AvAMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        # Left sidebar
         self.sidebar = AvALeftSidebar()
-        self.chat_interface = ChatInterface()
 
-        main_layout.addWidget(self.sidebar)
-        main_layout.addWidget(self.chat_interface, 1)
+        # NEW: Create main content area with optional feedback panel
+        if FEEDBACK_PANEL_AVAILABLE:
+            # Use splitter for resizable layout with feedback panel
+            self.main_splitter = QSplitter()
+            self.main_splitter.setOrientation(Qt.Orientation.Horizontal)  # Horizontal orientation
+
+            # Chat interface
+            self.chat_interface = ChatInterface()
+
+            # NEW: Feedback panel
+            self.feedback_panel = FeedbackPanel()
+            self.feedback_panel.setMinimumWidth(350)
+            self.feedback_panel.setMaximumWidth(450)
+
+            # Add to splitter
+            self.main_splitter.addWidget(self.chat_interface)
+            self.main_splitter.addWidget(self.feedback_panel)
+
+            # Set initial splitter sizes (chat interface gets more space)
+            self.main_splitter.setSizes([800, 350])
+            self.main_splitter.setCollapsible(0, False)  # Chat interface not collapsible
+            self.main_splitter.setCollapsible(1, True)  # Feedback panel can be collapsed
+
+            main_layout.addWidget(self.sidebar)
+            main_layout.addWidget(self.main_splitter, 1)
+        else:
+            # Standard layout without feedback panel
+            self.chat_interface = ChatInterface()
+            self.feedback_panel = None
+
+            main_layout.addWidget(self.sidebar)
+            main_layout.addWidget(self.chat_interface, 1)
 
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
+
+    def _toggle_feedback_panel(self):
+        """NEW: Toggle feedback panel visibility"""
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            current_visibility = self.feedback_panel.isVisible()
+            self.feedback_panel.setVisible(not current_visibility)
+
+            if not current_visibility:
+                # Show feedback panel
+                self.main_splitter.setSizes([800, 350])
+            else:
+                # Hide feedback panel
+                self.main_splitter.setSizes([1150, 0])
 
     def _connect_signals(self):
         self.chat_interface.message_sent.connect(self.handle_user_message)
@@ -246,11 +329,77 @@ class AvAMainWindow(QMainWindow):
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_directory)
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
 
-        # NEW: Connect model configuration signal
+        # Connect model configuration signal
         self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
 
+        # NEW: Connect feedback panel signals if available
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.feedback_settings_changed.connect(self._on_feedback_settings_changed)
+            self.feedback_panel.user_feedback_added.connect(self._on_user_feedback_added)
+            self.feedback_panel.iteration_requested.connect(self._on_iteration_requested)
+
+    # NEW: Enhanced workflow signal handlers
+    @Slot(dict)
+    def _on_feedback_settings_changed(self, settings: dict):
+        """Handle feedback settings changes"""
+        if self.ava_app and hasattr(self.ava_app, 'update_workflow_settings'):
+            self.ava_app.update_workflow_settings(settings)
+        self.feedback_settings_changed.emit(settings)
+
+    @Slot(str, str, int, str)
+    def _on_user_feedback_added(self, feedback_type: str, content: str, rating: int, file_path: str):
+        """Handle user feedback"""
+        if self.ava_app and hasattr(self.ava_app, 'add_user_feedback'):
+            self.ava_app.add_user_feedback(feedback_type, content, rating, file_path)
+        self.user_feedback_added.emit(feedback_type, content, rating, file_path)
+
+    @Slot(str, str)
+    def _on_iteration_requested(self, file_path: str, feedback: str):
+        """Handle iteration request"""
+        if self.ava_app and hasattr(self.ava_app, 'request_file_iteration'):
+            success = self.ava_app.request_file_iteration(file_path, feedback)
+            if success:
+                self.chat_interface.chat_display.add_assistant_message(
+                    f"🔄 Iteration requested for {file_path}. Processing your feedback..."
+                )
+        self.iteration_requested.emit(file_path, feedback)
+
+    # NEW: Enhanced workflow event handlers
+    @Slot(str)
+    def on_ai_collaboration_started(self, session_id: str):
+        """Handle AI collaboration session start"""
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.add_ai_collaboration_message(
+                "system", "", f"🤝 Collaboration session started: {session_id}"
+            )
+
+    @Slot(str, str, str)
+    def on_ai_feedback_received(self, from_ai: str, to_ai: str, content: str):
+        """Handle AI feedback messages"""
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.add_ai_collaboration_message(from_ai, to_ai, content)
+
+    @Slot(str, int)
+    def on_iteration_completed(self, file_path: str, iteration_number: int):
+        """Handle iteration completion"""
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.update_iteration_count(iteration_number)
+
+        # Update available files for iteration requests
+        if self.ava_app and hasattr(self.ava_app, 'project_state_manager'):
+            if self.ava_app.project_state_manager:
+                available_files = list(self.ava_app.project_state_manager.files.keys())
+                if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+                    self.feedback_panel.update_available_files(available_files)
+
+    @Slot(str, bool, str)
+    def on_quality_check_completed(self, file_path: str, approved: bool, feedback: str):
+        """Handle quality check completion"""
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.show_file_completed(file_path, approved, 1)
+
     def _open_model_config_dialog(self):
-        """NEW: Open the model configuration dialog"""
+        """Open the model configuration dialog"""
         if not self.ava_app or not self.ava_app.llm_client:
             self.chat_interface.chat_display.add_assistant_message(
                 "⚠️ LLM client is not available. Cannot configure models."
@@ -270,7 +419,7 @@ class AvAMainWindow(QMainWindow):
         dialog.exec()
 
     def _on_model_configuration_applied(self, new_config: dict):
-        """NEW: Handle when model configuration is applied - FIXED"""
+        """Handle when model configuration is applied"""
         # Update the sidebar display with new configuration
         if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
             assignments = self.ava_app.llm_client.get_role_assignments()
@@ -283,7 +432,7 @@ class AvAMainWindow(QMainWindow):
                     if model_config:
                         display_name = f"{model_config.provider}/{model_config.model}"
 
-                        # FIXED: Handle both string and enum roles
+                        # Handle both string and enum roles
                         role_name = role if isinstance(role, str) else role.value
                         if role_name == "planner":
                             config_summary['planner'] = display_name
@@ -306,6 +455,11 @@ class AvAMainWindow(QMainWindow):
     def handle_user_message(self, message: str):
         """Handle user messages - decide between casual chat vs workflow"""
         if self._is_build_request(message):
+            # Update feedback panel to show workflow starting
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+                self.feedback_panel.clear_display()
+                self.feedback_panel.update_workflow_stage("initializing", "Starting enhanced workflow...")
+
             # This is a build request - send to workflow
             self.workflow_requested.emit(message)
         else:
@@ -355,16 +509,20 @@ class AvAMainWindow(QMainWindow):
         # Update status to show we're chatting
         self.chat_interface.update_llm_status("LLM: Chatting...", "working")
 
-        # Create casual chat prompt
+        # Create casual chat prompt with enhanced context
+        enhanced_features = ""
+        if FEEDBACK_PANEL_AVAILABLE:
+            enhanced_features = "I also have real-time AI collaboration monitoring and user feedback controls. "
+
         chat_prompt = f"""
 You are AvA, a friendly AI development assistant with specialized AI agents. The user said: "{message}"
 
 Respond naturally and helpfully. If they're just greeting you or making casual conversation, 
 respond warmly. If they ask about your capabilities, mention:
 - You have specialized AI agents: Planner AI, Coder AI, and Assembler AI
-- You can build applications using a micro-task workflow
-- You have access to a knowledge base for code examples and best practices
-- You can work with multiple programming languages
+- You can build applications using a micro-task workflow with project awareness
+- {enhanced_features}You have access to a knowledge base for code examples and best practices
+- You can work with multiple programming languages and provide iterative improvements
 
 Keep responses conversational and under 2-3 sentences unless they ask for detailed information.
 """
@@ -439,6 +597,18 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             project_name_to_display = self.ava_app.current_project
         self.update_project_display(project_name_to_display)
 
+        # NEW: Update feedback panel with initial state if available
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            # Set initial feedback panel state
+            self.feedback_panel.update_workflow_stage("idle", "Ready for enhanced AI collaboration")
+
+            # Update available files if enhanced workflow is active
+            if (self.ava_app and hasattr(self.ava_app, 'use_enhanced_workflow') and
+                    self.ava_app.use_enhanced_workflow and hasattr(self.ava_app, 'project_state_manager')):
+                if self.ava_app.project_state_manager:
+                    available_files = list(self.ava_app.project_state_manager.files.keys())
+                    self.feedback_panel.update_available_files(available_files)
+
     def _update_chat_llm_status(self):
         """Update chat LLM status display"""
         llm_model_text = "LLM: Unknown"
@@ -482,7 +652,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         self.chat_interface.update_specialists_status(specialists_text, specialists_status)
 
     def _update_model_config_display(self):
-        """NEW: Update model configuration display in sidebar - FIXED"""
+        """Update model configuration display in sidebar"""
         if not (self.ava_app and self.ava_app.llm_client):
             return
 
@@ -496,7 +666,7 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                     if model_config:
                         display_name = f"{model_config.provider}/{model_config.model}"
 
-                        # FIXED: Handle both string and enum roles
+                        # Handle both string and enum roles
                         role_name = role if isinstance(role, str) else role.value
                         if role_name == "planner":
                             config_summary['planner'] = display_name
@@ -517,6 +687,9 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
             self.ava_app._open_terminal()
         elif action == "open_code_viewer" or action == "view_code":
             self.ava_app._open_code_viewer()
+        elif action == "toggle_feedback_panel":
+            # NEW: Handle feedback panel toggle
+            self._toggle_feedback_panel()
         elif action == "new_session":
             self.chat_interface.chat_display.clear()
             self.chat_interface.chat_display.add_assistant_message("New session started! How can I help you today?")
@@ -524,6 +697,11 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
                 self.ava_app.current_session = "New Session"
             self.update_project_display(
                 self.ava_app.current_project if hasattr(self.ava_app, 'current_project') else "Default Project")
+
+            # NEW: Clear feedback panel for new session
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+                self.feedback_panel.clear_display()
+
         elif action == "force_gen":
             self.chat_interface.chat_display.add_assistant_message(
                 "Force code generation triggered (logic to be implemented).")
@@ -544,6 +722,10 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         self.chat_interface.update_llm_status("Workflow: Starting specialists...", "working")
         self.chat_interface.update_specialists_status("AI Specialists: Active", "working")
 
+        # NEW: Update feedback panel
+        if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+            self.feedback_panel.update_workflow_stage("planning", "Starting enhanced AI collaboration workflow...")
+
     @Slot(dict)
     def on_workflow_completed(self, result: dict):
         success = result.get("success", False)
@@ -551,9 +733,20 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
         if success:
             project_name = result.get("project_name", "your project")
             num_files = result.get("file_count", 0)
-            message = f"✅ Enhanced workflow for '{project_name}' completed! Generated {num_files} files with AI specialists. View them in the Code Viewer."
+
+            # Enhanced completion message
+            if FEEDBACK_PANEL_AVAILABLE:
+                message = f"✅ Enhanced AI collaboration workflow for '{project_name}' completed! Generated {num_files} files with specialist feedback loops. Check the AI Monitor for details."
+            else:
+                message = f"✅ Enhanced workflow for '{project_name}' completed! Generated {num_files} files with AI specialists. View them in the Code Viewer."
+
             self.chat_interface.chat_display.add_assistant_message(message)
             self.chat_interface.update_specialists_status("AI Specialists: Completed", "success")
+
+            # NEW: Update feedback panel
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
+                self.feedback_panel.show_workflow_complete(result)
+
         else:
             error_msg = result.get("error", "An unknown error occurred.")
             self.chat_interface.chat_display.add_assistant_message(f"❌ Enhanced workflow failed: {error_msg}")
@@ -596,16 +789,22 @@ Keep responses conversational and under 2-3 sentences unless they ask for detail
 
         session_name = "Main Chat"  # Default session name
         if self.ava_app and hasattr(self.ava_app, 'current_session'):
-            # Check if AvAApplication exists and has current_session
             current_session_val = getattr(self.ava_app, 'current_session', None)
-            if current_session_val:  # Ensure it's not None or empty
+            if current_session_val:
                 session_name = current_session_val
 
-        # Enhanced title with AI specialist info
+        # Enhanced title with AI specialist info and collaboration status
+        base_title = f"AvA [{project_name}] - Session: {session_name}"
+
         if self.ava_app and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
             assignments = self.ava_app.llm_client.get_role_assignments()
             planner = assignments.get('planner', 'N/A').split('-')[-1][:8] if assignments.get('planner') else 'N/A'
             coder = assignments.get('coder', 'N/A').split('-')[-1][:8] if assignments.get('coder') else 'N/A'
-            self.setWindowTitle(f"AvA Enhanced [{project_name}] - Session: {session_name} (P:{planner} C:{coder})")
-        else:
-            self.setWindowTitle(f"AvA [{project_name}] - Session: {session_name}")
+
+            if FEEDBACK_PANEL_AVAILABLE and hasattr(self.ava_app,
+                                                    'use_enhanced_workflow') and self.ava_app.use_enhanced_workflow:
+                base_title += f" (Enhanced: P:{planner} C:{coder})"
+            else:
+                base_title += f" (P:{planner} C:{coder})"
+
+        self.setWindowTitle(base_title)

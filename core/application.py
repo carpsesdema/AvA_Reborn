@@ -9,6 +9,18 @@ from PySide6.QtWidgets import QApplication
 
 from core.llm_client import LLMClient
 from core.workflow_engine import WorkflowEngine
+
+# NEW: Import enhanced workflow components
+try:
+    from core.enhanced_workflow_engine import EnhancedWorkflowEngine
+    from core.project_state_manager import ProjectStateManager
+    from core.ai_feedback_system import AIFeedbackSystem
+
+    ENHANCED_WORKFLOW_AVAILABLE = True
+except ImportError as e:
+    print(f"Enhanced workflow components not available: {e}")
+    ENHANCED_WORKFLOW_AVAILABLE = False
+
 # Import the components
 from gui.main_window import AvAMainWindow
 from windows.code_viewer import CodeViewerWindow
@@ -27,7 +39,7 @@ except ImportError as e:
 
 class AvAApplication(QObject):
     """
-    AvA Application - Enhanced with Streaming & Progress Tracking
+    AvA Application - Enhanced with Project Awareness & AI Collaboration
     """
     fully_initialized_signal = Signal()  # Signal to indicate all async init is done
 
@@ -37,6 +49,12 @@ class AvAApplication(QObject):
     error_occurred = Signal(str, str)
     rag_status_changed = Signal(str, str)  # For RAGManager to emit to this app instance
     project_loaded = Signal(str)
+
+    # NEW: Enhanced workflow signals
+    ai_collaboration_started = Signal(str)  # session_id
+    ai_feedback_received = Signal(str, str, str)  # from_ai, to_ai, content
+    iteration_completed = Signal(str, int)  # file_path, iteration_number
+    quality_check_completed = Signal(str, bool, str)  # file_path, approved, feedback
 
     def __init__(self):
         super().__init__()
@@ -53,6 +71,12 @@ class AvAApplication(QObject):
         self.workflow_engine = None
         self.rag_manager = None
 
+        # NEW: Enhanced workflow components
+        self.enhanced_workflow_engine = None
+        self.project_state_manager = None
+        self.ai_feedback_system = None
+        self.use_enhanced_workflow = ENHANCED_WORKFLOW_AVAILABLE
+
         # Application state
         self.workspace_dir = Path("./workspace")
         self.workspace_dir.mkdir(exist_ok=True)
@@ -65,7 +89,11 @@ class AvAApplication(QObject):
         self.current_config = {
             "chat_model": "Gemini: gemini-2.5-pro-preview-05-06",
             "code_model": "qwen2.5-coder:14b",
-            "temperature": 0.7
+            "temperature": 0.7,
+            # NEW: Enhanced workflow settings
+            "enable_iterations": True,
+            "max_iterations": 3,
+            "pause_for_feedback": False
         }
 
         # NEW: Performance monitoring timer
@@ -84,7 +112,7 @@ class AvAApplication(QObject):
                 emoji_replacements = {
                     '🚀': '[LAUNCH]', '✅': '[OK]', '❌': '[ERROR]', '⚠️': '[WARNING]',
                     '🧠': '[BRAIN]', '📊': '[STATS]', '🔧': '[TOOL]', '📄': '[FILE]',
-                    '📝': '[EDIT]', '📂': '[FOLDER]'
+                    '📝': '[EDIT]', '📂': '[FOLDER]', '🤖': '[AI]', '🤝': '[COLLAB]'
                 }
                 for emoji, replacement in emoji_replacements.items():
                     msg = msg.replace(emoji, replacement)
@@ -98,49 +126,53 @@ class AvAApplication(QObject):
         logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 
     async def initialize(self):
-        self.logger.info("[LAUNCH] Initializing AvA Application (UI and core services part)...")
+        self.logger.info("[LAUNCH] Initializing AvA Application with Enhanced AI Collaboration...")
 
         self.main_window = AvAMainWindow(ava_app=self)
-        self.logger.info("[OK] Main window initialized (sync part)")
+        self.logger.info("[OK] Main window initialized")
+
         # FIXED: Use the enhanced terminal with progress tracking
         self.terminal_window = TerminalWindow()
-        self.logger.info("[OK] Enhanced terminal window initialized (sync part)")
+        self.logger.info("[OK] Enhanced terminal window initialized")
+
         self.code_viewer = CodeViewerWindow()
-        self.logger.info("[OK] Code viewer initialized (sync part)")
+        self.logger.info("[OK] Code viewer initialized")
 
         self._initialize_core_services()
 
         if self.main_window and not self.main_window.isVisible():
             self.main_window.show()
             self.logger.info("Main window shown.")
-            await asyncio.sleep(0.01)  # Slightly longer sleep to ensure UI processes events
+            await asyncio.sleep(0.01)
 
-        self.logger.info("About to start and await async_initialize_components...")
-        await self.async_initialize_components()  # Directly await the async initialization
-        self.logger.info("Finished awaiting async_initialize_components in initialize method.")
-        # fully_initialized_signal is emitted from async_initialize_components
+        self.logger.info("Starting async component initialization...")
+        await self.async_initialize_components()
+        self.logger.info("Async component initialization completed.")
 
     async def async_initialize_components(self):
-        self.logger.info("[LAUNCH] Initializing AvA Application (async components part)...")
+        self.logger.info("[LAUNCH] Initializing async components with enhanced workflow...")
         try:
             await self._initialize_rag_manager_async()
             self.logger.info(
-                f"RAG Manager initialization attempt complete. RAG ready: {self.rag_manager.is_ready if self.rag_manager and hasattr(self.rag_manager, 'is_ready') else 'N/A or Manager not created'}")
+                f"RAG Manager initialization complete. Ready: {self.rag_manager.is_ready if self.rag_manager and hasattr(self.rag_manager, 'is_ready') else 'N/A'}")
 
-            self._initialize_workflow_engine()
+            # NEW: Initialize enhanced workflow components
+            if self.use_enhanced_workflow:
+                await self._initialize_enhanced_workflow()
+            else:
+                self._initialize_workflow_engine()
+
             self._connect_components()
             self._setup_window_behaviors()
 
             status = self.get_status()
-            self.logger.info(f"System status after async init: {status}")
-            self.logger.info("[OK] AvA Application async components initialized successfully.")
+            self.logger.info(f"System status after initialization: {status}")
+            self.logger.info("[OK] AvA Application with enhanced workflow initialized successfully.")
 
         except Exception as e:
-            self.logger.error(f"[ERROR] Failed to initialize AvA async components: {e}", exc_info=True)
+            self.logger.error(f"[ERROR] Failed to initialize AvA components: {e}", exc_info=True)
             self.error_occurred.emit("async_initialization", str(e))
         finally:
-            # Ensure this signal is emitted regardless of success or failure in this block,
-            # so main.py (or any listener) knows this phase is over.
             self.fully_initialized_signal.emit()
 
     def _initialize_core_services(self):
@@ -151,6 +183,42 @@ class AvAApplication(QObject):
         if not available_models or available_models == ["No LLM services available"]:
             self.logger.warning("[WARNING] No LLM services available!")
 
+    async def _initialize_enhanced_workflow(self):
+        """NEW: Initialize enhanced workflow components"""
+        try:
+            self.logger.info("[AI] Initializing project-aware AI collaboration system...")
+
+            # Initialize project state manager
+            self.project_state_manager = ProjectStateManager(self.workspace_dir)
+            self.logger.info("[OK] Project state manager initialized")
+
+            # Initialize AI feedback system
+            self.ai_feedback_system = AIFeedbackSystem(
+                self.llm_client,
+                self.project_state_manager,
+                self.terminal_window
+            )
+            self.logger.info("[OK] AI feedback system initialized")
+
+            # Initialize enhanced workflow engine
+            self.enhanced_workflow_engine = EnhancedWorkflowEngine(
+                llm_client=self.llm_client,
+                terminal_window=self.terminal_window,
+                code_viewer=self.code_viewer,
+                rag_manager=self.rag_manager,
+                project_root=str(self.workspace_dir)
+            )
+
+            # Set as primary workflow engine
+            self.workflow_engine = self.enhanced_workflow_engine
+            self.logger.info("[OK] Enhanced workflow engine initialized")
+
+        except Exception as e:
+            self.logger.error(f"[ERROR] Enhanced workflow initialization failed: {e}")
+            self.logger.info("Falling back to standard workflow engine...")
+            self.use_enhanced_workflow = False
+            self._initialize_workflow_engine()
+
     async def _initialize_rag_manager_async(self):
         self.logger.info("Attempting to initialize RAG manager (async)...")
         if RAG_MANAGER_AVAILABLE:
@@ -158,58 +226,82 @@ class AvAApplication(QObject):
                 self.rag_manager = RAGManager()
                 self.rag_manager.status_changed.connect(self._on_rag_status_changed)
                 self.rag_manager.upload_completed.connect(self._on_rag_upload_completed)
-                await self.rag_manager.async_initialize()  # This now waits for embedder
+                await self.rag_manager.async_initialize()
                 self.logger.info(
-                    f"[OK] RAG manager async_initialize call completed. RAG ready: {self.rag_manager.is_ready}")
+                    f"[OK] RAG manager initialized. Ready: {self.rag_manager.is_ready}")
             except Exception as e:
-                self.logger.error(f"[ERROR] RAG manager async initialization threw an exception: {e}", exc_info=True)
-                self.rag_manager = None  # Ensure rag_manager is None if init fails
+                self.logger.error(f"[ERROR] RAG manager initialization failed: {e}", exc_info=True)
+                self.rag_manager = None
                 self._on_rag_status_changed(f"RAG Init Exception: {e}", "error")
         else:
-            self.logger.info("RAG services not available (import failed) - running without RAG functionality.")
+            self.logger.info("RAG services not available - running without RAG functionality.")
             self.rag_manager = None
             self._on_rag_status_changed("RAG: Not Available (Import Fail)", "grey")
 
     def _initialize_workflow_engine(self):
-        self.logger.info("Initializing workflow engine...")
+        """Fallback: Initialize standard workflow engine"""
+        self.logger.info("Initializing standard workflow engine...")
         self.workflow_engine = WorkflowEngine(
             self.llm_client,
             self.terminal_window,
             self.code_viewer,
             self.rag_manager
         )
-        self.logger.info("[OK] Workflow engine initialized.")
+        self.logger.info("[OK] Standard workflow engine initialized.")
 
     def _connect_components(self):
         self.logger.info("Connecting components...")
         if self.main_window:
             self.main_window.workflow_requested.connect(self._handle_workflow_request)
-            if hasattr(self.main_window, 'new_project_requested'):  # Check before connecting
+            if hasattr(self.main_window, 'new_project_requested'):
                 self.main_window.new_project_requested.connect(self.create_new_project_dialog)
 
+        # Connect workflow signals
         self.workflow_started.connect(self._on_workflow_started)
         self.workflow_completed.connect(self._on_workflow_completed)
         self.error_occurred.connect(self._on_error_occurred)
 
-        if self.workflow_engine:  # Check if workflow_engine was initialized
-            if self.main_window:  # Check if main_window exists
+        if self.workflow_engine:
+            if self.main_window:
                 self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
                 self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
 
-            # FIXED: Now this should work with the enhanced terminal
+            # NEW: Connect enhanced workflow signals if available
+            if self.use_enhanced_workflow and hasattr(self.workflow_engine, 'ai_collaboration_started'):
+                self.workflow_engine.ai_collaboration_started.connect(self.ai_collaboration_started)
+                self.workflow_engine.ai_feedback_received.connect(self.ai_feedback_received)
+                self.workflow_engine.iteration_completed.connect(self.iteration_completed)
+                self.workflow_engine.quality_check_completed.connect(self.quality_check_completed)
+
+                # Connect to main window feedback panel if available
+                if hasattr(self.main_window, 'feedback_panel'):
+                    self.workflow_engine.ai_collaboration_started.connect(
+                        lambda session_id: self.main_window.feedback_panel.add_ai_collaboration_message(
+                            "system", "", f"Collaboration session started: {session_id}"
+                        )
+                    )
+                    self.workflow_engine.ai_feedback_received.connect(
+                        self.main_window.feedback_panel.add_ai_collaboration_message
+                    )
+                    self.workflow_engine.quality_check_completed.connect(
+                        lambda file_path, approved, feedback:
+                        self.main_window.feedback_panel.show_file_completed(file_path, approved, 1)
+                    )
+
+            # Connect progress updates to terminal
             if self.terminal_window and hasattr(self.terminal_window, 'update_workflow_progress'):
                 self.workflow_engine.workflow_progress.connect(self.terminal_window.update_workflow_progress)
                 self.logger.info("[OK] Workflow progress connected to terminal")
-            else:
-                self.logger.warning("[WARNING] Terminal doesn't support workflow progress updates")
 
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
+
         self.logger.info("[OK] Components connected.")
 
     def _setup_window_behaviors(self):
         if self.main_window:
-            self.main_window.setWindowTitle(f"AvA - AI Development Assistant")
+            title = "AvA - Enhanced AI Development Assistant" if self.use_enhanced_workflow else "AvA - AI Development Assistant"
+            self.main_window.setWindowTitle(title)
         if self.terminal_window:
             self.terminal_window.setWindowTitle("AvA - Enhanced Workflow Terminal")
         if self.code_viewer:
@@ -219,29 +311,28 @@ class AvAApplication(QObject):
 
     def _position_windows(self):
         screen_geo = QApplication.primaryScreen().geometry()
-        if self.main_window: self.main_window.setGeometry(100, 50, 1400, 900)
-        if self.terminal_window: self.terminal_window.setGeometry(screen_geo.width() - 850, screen_geo.height() - 400,
-                                                                  900, 700)  # Larger for progress widgets
-        if self.code_viewer: self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
+        if self.main_window:
+            self.main_window.setGeometry(100, 50, 1400, 900)
+        if self.terminal_window:
+            self.terminal_window.setGeometry(screen_geo.width() - 850, screen_geo.height() - 400, 900, 700)
+        if self.code_viewer:
+            self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
 
     def _update_performance_stats(self):
-        """NEW: Update performance statistics in terminal"""
+        """Update performance statistics in terminal"""
         if not (self.terminal_window and self.workflow_engine):
             return
 
         try:
-            # Get workflow stats including cache performance
             stats = self.workflow_engine.get_workflow_stats()
             cache_stats = stats.get("cache_stats", {})
 
-            # Update terminal cache status
             cache_size = cache_stats.get("cache_size", 0)
             hit_rate = cache_stats.get("hit_rate", 0.0)
 
             if hasattr(self.terminal_window, 'update_cache_status'):
                 self.terminal_window.update_cache_status(cache_size, hit_rate)
 
-            # Update task progress if workflow is active
             workflow_state = stats.get("workflow_state", {})
             if workflow_state.get("stage") not in ["idle", "complete", "error"]:
                 completed = workflow_state.get("completed_tasks", 0)
@@ -264,15 +355,17 @@ class AvAApplication(QObject):
                 if hasattr(self.rag_manager, 'get_collection_info') and callable(
                         getattr(self.rag_manager, 'get_collection_info')):
                     rag_info["collections"] = self.rag_manager.get_collection_info()
-            elif self.rag_manager:  # Manager exists but might not have all attributes (e.g. during init fail)
+            elif self.rag_manager:
                 rag_info["status_text"] = "RAG: Manager exists, status uncertain"
-            else:  # RAG_MANAGER_AVAILABLE is true, but self.rag_manager is None (init failed badly)
+            else:
                 rag_info["status_text"] = "RAG: Initialization Failed (Manager None)"
-        else:  # RAG_MANAGER_AVAILABLE is false
+        else:
             rag_info["status_text"] = "RAG: Dependencies Missing / Not Available"
 
-        # NEW: Include performance stats
+        # Include performance stats and enhanced workflow info
         performance_stats = {}
+        enhanced_info = {}
+
         if self.workflow_engine:
             try:
                 workflow_stats = self.workflow_engine.get_workflow_stats()
@@ -280,16 +373,30 @@ class AvAApplication(QObject):
                     "cache_stats": workflow_stats.get("cache_stats", {}),
                     "workflow_state": workflow_stats.get("workflow_state", {})
                 }
+
+                # NEW: Enhanced workflow specific info
+                if self.use_enhanced_workflow:
+                    enhanced_info = {
+                        "project_awareness": self.project_state_manager is not None,
+                        "ai_collaboration": self.ai_feedback_system is not None,
+                        "project_files": len(self.project_state_manager.files) if self.project_state_manager else 0,
+                        "ai_decisions": len(
+                            self.project_state_manager.ai_decisions) if self.project_state_manager else 0
+                    }
             except Exception:
                 pass
 
         return {
             "ready": self.workflow_engine is not None,
+            "enhanced_workflow": self.use_enhanced_workflow,  # NEW
             "llm_models": llm_models_list,
-            "workspace": str(self.workspace_dir), "current_project": self.current_project,
-            "current_session": self.current_session, "configuration": self.current_config,
+            "workspace": str(self.workspace_dir),
+            "current_project": self.current_project,
+            "current_session": self.current_session,
+            "configuration": self.current_config,
             "rag": rag_info,
-            "performance": performance_stats,  # NEW
+            "performance": performance_stats,
+            "enhanced": enhanced_info,  # NEW
             "windows": {
                 "main": self.main_window.isVisible() if self.main_window else False,
                 "terminal": self.terminal_window.isVisible() if self.terminal_window else False,
@@ -301,29 +408,75 @@ class AvAApplication(QObject):
     def _handle_workflow_request(self, user_prompt: str):
         self.logger.info(f"Workflow request received: {user_prompt[:100]}...")
         current_status = self.get_status()
+
+        # Check for LLM availability
         if not current_status["llm_models"] or current_status["llm_models"] == ["LLM Client not init"] or \
                 current_status["llm_models"] == ["No LLM services available"]:
             error_msg = "No LLM services available. Please configure API keys."
-            if self.terminal_window: self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
+            if self.terminal_window:
+                self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
             self.error_occurred.emit("llm_unavailable", error_msg)
             return
+
         if not self.workflow_engine:
             error_msg = "Workflow engine not initialized. Cannot process request."
-            if self.terminal_window: self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
+            if self.terminal_window:
+                self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
             self.error_occurred.emit("workflow_engine_unavailable", error_msg)
             return
 
         self._open_terminal()
         workflow_id = f"workflow_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        self.active_workflows[workflow_id] = {"prompt": user_prompt, "start_time": datetime.now(), "status": "running"}
+        self.active_workflows[workflow_id] = {
+            "prompt": user_prompt,
+            "start_time": datetime.now(),
+            "status": "running",
+            "enhanced": self.use_enhanced_workflow
+        }
+
         self.workflow_started.emit(user_prompt)
+
         try:
-            self.workflow_engine.execute_workflow(user_prompt)
+            # NEW: Use enhanced workflow if available
+            if self.use_enhanced_workflow and hasattr(self.workflow_engine, 'execute_enhanced_workflow'):
+                self.logger.info("[AI] Starting enhanced workflow with AI collaboration...")
+                settings = self.current_config
+                asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(
+                    user_prompt,
+                    enable_iterations=settings.get("enable_iterations", True),
+                    max_iterations=settings.get("max_iterations", 3)
+                ))
+            else:
+                # Fallback to standard workflow
+                self.logger.info("Starting standard workflow...")
+                self.workflow_engine.execute_workflow(user_prompt)
+
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {e}", exc_info=True)
             self.error_occurred.emit("workflow_execution_error", str(e))
             self.active_workflows[workflow_id]["status"] = "failed"
             self.active_workflows[workflow_id]["error"] = str(e)
+
+    # NEW: Enhanced workflow control methods
+    def update_workflow_settings(self, settings: Dict[str, Any]):
+        """Update enhanced workflow settings"""
+        self.current_config.update(settings)
+        self.logger.info(f"[AI] Workflow settings updated: {settings}")
+
+        if self.use_enhanced_workflow and hasattr(self.workflow_engine, 'set_pause_for_feedback'):
+            self.workflow_engine.set_pause_for_feedback(settings.get("pause_for_feedback", False))
+
+    def add_user_feedback(self, feedback_type: str, content: str, rating: int = 5, file_path: str = None):
+        """Add user feedback to the enhanced workflow"""
+        if self.use_enhanced_workflow and hasattr(self.workflow_engine, 'add_user_feedback'):
+            self.workflow_engine.add_user_feedback(feedback_type, content, rating, file_path)
+            self.logger.info(f"[AI] User feedback added: {feedback_type}")
+
+    def request_file_iteration(self, file_path: str, feedback: str) -> bool:
+        """Request iteration for a specific file"""
+        if self.use_enhanced_workflow and hasattr(self.workflow_engine, 'request_file_iteration'):
+            return asyncio.create_task(self.workflow_engine.request_file_iteration(file_path, feedback))
+        return False
 
     def _open_terminal(self):
         if self.terminal_window:
@@ -339,7 +492,8 @@ class AvAApplication(QObject):
 
     def _on_file_generated(self, file_path: str):
         self.logger.info(f"File generated: {file_path}")
-        if self.code_viewer: self.code_viewer.auto_open_file(file_path)
+        if self.code_viewer:
+            self.code_viewer.auto_open_file(file_path)
 
     def _on_project_loaded(self, project_path: str):
         self.logger.info(f"Project loaded: {project_path}")
@@ -349,33 +503,32 @@ class AvAApplication(QObject):
         self._open_code_viewer()
 
     def _on_workflow_started(self, prompt: str):
-        self.logger.info(f"[OK] Workflow started (app signal): {prompt}")
+        self.logger.info(f"[OK] Workflow started: {prompt}")
         if self.main_window and hasattr(self.main_window, 'on_workflow_started'):
             self.main_window.on_workflow_started(prompt)
 
     def _on_workflow_completed(self, result: dict):
-        self.logger.info(f"[OK] Workflow completed (app signal): {result.get('project_name', 'N/A')}")
+        self.logger.info(f"[OK] Workflow completed: {result.get('project_name', 'N/A')}")
         for wf_id, wf_data in self.active_workflows.items():
-            if wf_data["status"] == "running":  # Assuming only one runs at a time for this logic
+            if wf_data["status"] == "running":
                 wf_data["status"] = "completed" if result.get("success") else "failed"
                 wf_data["end_time"] = datetime.now()
-                # ... (duration calculation)
                 break
         if self.main_window and hasattr(self.main_window, 'on_workflow_completed'):
             self.main_window.on_workflow_completed(result)
 
     def _on_error_occurred(self, component: str, error_message: str):
-        self.logger.error(f"[ERROR] App Error Signal in {component}: {error_message}")
+        self.logger.error(f"[ERROR] App Error in {component}: {error_message}")
         if self.main_window and hasattr(self.main_window, 'on_app_error_occurred'):
             self.main_window.on_app_error_occurred(component, error_message)
 
     def _on_rag_status_changed(self, status_text: str, color: str):
-        self.logger.info(f"RAG Status Update (internal slot): {status_text} (Color: {color})")
-        self.rag_status_changed.emit(status_text, color)  # Re-emit for main_window
+        self.logger.info(f"RAG Status Update: {status_text} (Color: {color})")
+        self.rag_status_changed.emit(status_text, color)
 
     def _on_rag_upload_completed(self, collection_id: str, files_processed: int):
         msg = f"RAG: {files_processed} files added to {collection_id}"
-        self.logger.info(f"RAG Upload Completed (internal slot): {msg}")
+        self.logger.info(f"RAG Upload Completed: {msg}")
         self.rag_status_changed.emit(msg, "#4ade80")
 
     def update_configuration(self, config_updates: dict):
@@ -385,7 +538,7 @@ class AvAApplication(QObject):
             self.main_window._update_initial_ui_status()
 
     def create_new_project_dialog(self):
-        """ENHANCED: Allow creating new directories or selecting existing ones"""
+        """Enhanced: Allow creating new directories or selecting existing ones"""
         self.logger.info("Request to create a new project received.")
         if self.terminal_window:
             self.terminal_window.log("✨ New Project creation requested.")
@@ -562,6 +715,11 @@ This project was created on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.
             self.current_project = project_path.name
             self.logger.info(f"Project set to: {project_path}")
 
+            # NEW: Update project state manager if available
+            if self.use_enhanced_workflow and self.project_state_manager:
+                self.project_state_manager = ProjectStateManager(project_path)
+                self.logger.info("[AI] Project state manager updated for new project")
+
             if hasattr(self.main_window, 'update_project_display'):
                 self.main_window.update_project_display(self.current_project)
 
@@ -581,12 +739,24 @@ This project was created on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.
     def shutdown(self):
         self.logger.info("Shutting down AvA Application...")
 
-        # NEW: Stop performance monitoring
+        # Stop performance monitoring
         if self.performance_timer:
             self.performance_timer.stop()
 
-        # Add proper async shutdown for RAG if needed
-        if self.main_window: self.main_window.close()
-        if self.terminal_window: self.terminal_window.close()
-        if self.code_viewer: self.code_viewer.close()
+        # NEW: Save project state if enhanced workflow is active
+        if self.use_enhanced_workflow and self.project_state_manager:
+            try:
+                self.project_state_manager.save_state()
+                self.logger.info("[AI] Project state saved")
+            except Exception as e:
+                self.logger.error(f"Failed to save project state: {e}")
+
+        # Close windows
+        if self.main_window:
+            self.main_window.close()
+        if self.terminal_window:
+            self.terminal_window.close()
+        if self.code_viewer:
+            self.code_viewer.close()
+
         self.logger.info("AvA Application shutdown complete.")
