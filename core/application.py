@@ -15,7 +15,7 @@ from core.enhanced_workflow_engine import EnhancedWorkflowEngine
 # Import the components
 from gui.main_window import AvAMainWindow
 from windows.code_viewer import CodeViewerWindow
-from gui.terminals import TerminalWindow
+from gui.terminals import TerminalWindow # This is actually StreamingTerminal
 
 # Try to import RAG manager - gracefully handle if not available
 try:
@@ -225,9 +225,11 @@ class AvAApplication(QObject):
         if self.main_window:
             self.main_window.setGeometry(100, 50, 1400, 900)
         if self.terminal_window:
-            self.terminal_window.setGeometry(screen_geo.width() - 850, screen_geo.height() - 400, 900, 700)
+            # Adjusted width for potential scrollbar, and height for more content
+            self.terminal_window.setGeometry(screen_geo.width() - 920, screen_geo.height() - 450, 900, 400)
         if self.code_viewer:
             self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
+
 
     def _update_performance_stats(self):
         """Update performance statistics"""
@@ -273,7 +275,6 @@ class AvAApplication(QObject):
         else:
             rag_info["status_text"] = "RAG: Dependencies Missing"
 
-        # Include basic performance stats
         performance_stats = {}
         if self.workflow_engine:
             try:
@@ -304,62 +305,51 @@ class AvAApplication(QObject):
         }
 
     def _handle_enhanced_workflow_request(self, user_prompt: str, conversation_history: List[Dict]):
-        """Streamlined workflow handler with conversation context"""
         self.logger.info(f"Fast workflow request: {user_prompt[:100]}...")
         self.logger.info(f"Context: {len(conversation_history)} messages")
-
         current_status = self.get_status()
 
-        # Check for LLM availability
         if not current_status["llm_models"] or current_status["llm_models"] == ["LLM Client not init"] or \
                 current_status["llm_models"] == ["No LLM services available"]:
             error_msg = "No LLM services available. Please configure API keys."
-            if self.terminal_window:
-                self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
+            if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+                self.terminal_window.stream_log_rich("Application", "error", f"Workflow Halted: {error_msg}", "0")
             self.error_occurred.emit("llm_unavailable", error_msg)
             return
 
         if not self.workflow_engine:
             error_msg = "Workflow engine not initialized."
-            if self.terminal_window:
-                self.terminal_window.log(f"[ERROR] Workflow Halted: {error_msg}")
+            if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+                self.terminal_window.stream_log_rich("Application", "error", f"Workflow Halted: {error_msg}", "0")
             self.error_occurred.emit("workflow_engine_unavailable", error_msg)
             return
 
         self._open_terminal()
         workflow_id = f"workflow_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.active_workflows[workflow_id] = {
-            "prompt": user_prompt,
-            "conversation_history": conversation_history,
-            "start_time": datetime.now(),
-            "status": "running"
+            "prompt": user_prompt, "conversation_history": conversation_history,
+            "start_time": datetime.now(), "status": "running"
         }
-
         self.workflow_started.emit(user_prompt)
 
         try:
-            # STREAMLINED: Fast workflow execution
             self.logger.info("Starting FAST professional workflow...")
             if hasattr(self.workflow_engine, 'execute_enhanced_workflow'):
-                # Use enhanced workflow with context
                 asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(
-                    user_prompt,
-                    conversation_context=conversation_history
+                    user_prompt, conversation_context=conversation_history
                 ))
-            else:
-                # Fallback to standard workflow
+            else: # Fallback
                 self.workflow_engine.execute_workflow(user_prompt)
-
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {e}", exc_info=True)
             self.error_occurred.emit("workflow_execution_error", str(e))
-            self.active_workflows[workflow_id]["status"] = "failed"
-            self.active_workflows[workflow_id]["error"] = str(e)
+            if workflow_id in self.active_workflows: # Check if key exists before updating
+                self.active_workflows[workflow_id]["status"] = "failed"
+                self.active_workflows[workflow_id]["error"] = str(e)
+
 
     def _handle_workflow_request(self, user_prompt: str):
-        """Original workflow handler for compatibility"""
         self.logger.info(f"Standard workflow request: {user_prompt[:100]}...")
-        # Use enhanced workflow with empty conversation history
         self._handle_enhanced_workflow_request(user_prompt, [])
 
     def _open_terminal(self):
@@ -399,6 +389,9 @@ class AvAApplication(QObject):
 
     def _on_error_occurred(self, component: str, error_message: str):
         self.logger.error(f"[ERROR] App Error in {component}: {error_message}")
+        if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+            self.terminal_window.stream_log_rich("Application", "error", f"Error in {component}: {error_message}", "0")
+
 
     def _on_rag_status_changed(self, status_text: str, color: str):
         self.logger.info(f"RAG Status: {status_text}")
@@ -414,78 +407,55 @@ class AvAApplication(QObject):
         self.logger.info(f"Configuration updated: {config_updates}")
 
     def create_new_project_dialog(self):
-        """Streamlined project creation"""
         self.logger.info("Creating new project...")
-        if self.terminal_window:
-            self.terminal_window.log("✨ New Project creation started.")
+        if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+            self.terminal_window.stream_log_rich("Application", "info", "✨ New Project creation started.", "0")
 
         from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
-
-        if not self.main_window:
-            return
+        if not self.main_window: return
 
         try:
-            # Get project name
             project_name, ok = QInputDialog.getText(
-                self.main_window,
-                'New Project',
-                'Enter project name:',
-                text='my_new_project'
+                self.main_window, 'New Project', 'Enter project name:', text='my_new_project'
             )
-
-            if not ok or not project_name.strip():
-                return
-
+            if not ok or not project_name.strip(): return
             project_name = project_name.strip()
 
-            # Select directory
             base_dir = QFileDialog.getExistingDirectory(
-                self.main_window,
-                'Select Directory for New Project',
-                str(self.workspace_dir)
+                self.main_window, 'Select Directory for New Project', str(self.workspace_dir)
             )
+            if not base_dir: return
 
-            if not base_dir:
-                return
-
-            # Create project
             project_path = Path(base_dir) / project_name
-
             if project_path.exists():
                 reply = QMessageBox.question(
-                    self.main_window,
-                    'Directory Exists',
+                    self.main_window, 'Directory Exists',
                     f'Directory "{project_name}" exists. Use it anyway?',
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
-                if reply == QMessageBox.StandardButton.No:
-                    return
+                if reply == QMessageBox.StandardButton.No: return
             else:
                 project_path.mkdir(parents=True, exist_ok=True)
 
-            # Update state
             self.current_project = project_name
-            self.workspace_dir = project_path
+            self.workspace_dir = project_path # Update current workspace to new project dir
 
-            # Create basic files
             (project_path / "README.md").write_text(f"# {project_name}\n\nA new project created with AvA.\n")
             (project_path / "main.py").write_text(
                 f'"""{project_name} - Main Entry Point"""\n\ndef main():\n    print("Hello from {project_name}!")\n\nif __name__ == "__main__":\n    main()\n'
             )
 
-            # Update UI
             success_msg = f"✅ Project '{project_name}' created!"
-            if self.terminal_window:
-                self.terminal_window.log(success_msg)
+            if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+                self.terminal_window.stream_log_rich("Application", "success", success_msg, "0")
 
             if self.main_window:
-                self.main_window.chat_interface.chat_display.add_assistant_message(
+                self.main_window.chat_interface.add_assistant_response(
                     f"{success_msg}\n\nLocation: {project_path}\n\nReady to build! Describe what you want to create."
                 )
                 if hasattr(self.main_window, 'update_project_display'):
                     self.main_window.update_project_display(project_name)
 
-            # Open code viewer
             self._open_code_viewer()
             if self.code_viewer and hasattr(self.code_viewer, 'load_project'):
                 self.code_viewer.load_project(str(project_path))
@@ -495,20 +465,13 @@ class AvAApplication(QObject):
         except Exception as e:
             error_msg = f"Project creation failed: {e}"
             self.logger.error(error_msg, exc_info=True)
-            if self.terminal_window:
-                self.terminal_window.log(f"❌ {error_msg}")
+            if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
+                self.terminal_window.stream_log_rich("Application", "error", f"❌ {error_msg}", "0")
 
     def shutdown(self):
         self.logger.info("Shutting down streamlined AvA Application...")
-
-        if self.performance_timer:
-            self.performance_timer.stop()
-
-        if self.main_window:
-            self.main_window.close()
-        if self.terminal_window:
-            self.terminal_window.close()
-        if self.code_viewer:
-            self.code_viewer.close()
-
+        if self.performance_timer: self.performance_timer.stop()
+        if self.main_window: self.main_window.close()
+        if self.terminal_window: self.terminal_window.close()
+        if self.code_viewer: self.code_viewer.close()
         self.logger.info("Shutdown complete.")
