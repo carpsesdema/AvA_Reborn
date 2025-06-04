@@ -1,11 +1,57 @@
-# gui/terminals.py - Enhanced with Progress Visualization
-
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QHBoxLayout, QPushButton, QCheckBox, QProgressBar, QLabel
 from PySide6.QtCore import QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QTextCursor
 from datetime import datetime
 import queue
 import threading
+import re
+
+
+class StreamingProgressDisplay:
+    """Clean, hierarchical progress display like aider"""
+
+    def __init__(self, terminal):
+        self.terminal = terminal
+        self.current_stage = None
+        self.current_file = None
+        self.indent_level = 0
+        self.active_streams = {}
+
+    def start_workflow(self, prompt: str):
+        self.terminal.add_separator("WORKFLOW START")
+        self.terminal.log("🚀 Starting AvA workflow")
+        self.terminal.log(f"📋 Request: {prompt[:80]}...")
+        self.terminal.log("")
+
+    def start_stage(self, stage: str, description: str):
+        self.current_stage = stage
+        self.terminal.log(f"▶ {stage.upper()}: {description}")
+        self.indent_level = 1
+
+    def start_file(self, file_path: str):
+        self.current_file = file_path
+        self.terminal.log(f"  📄 {file_path}", indent=1)
+        self.indent_level = 2
+
+    def stream_progress(self, content: str, progress_type: str = "code"):
+        """Stream with appropriate visual indicators"""
+        if progress_type == "planning":
+            self.terminal.stream_log(f"    🧠 {content}", indent=2)
+        elif progress_type == "coding":
+            self.terminal.stream_log(f"    ⚡ {content}", indent=2)
+        elif progress_type == "review":
+            self.terminal.stream_log(f"    👁️ {content}", indent=2)
+        else:
+            self.terminal.stream_log(f"    {content}", indent=2)
+
+    def complete_file(self, file_path: str, status: str):
+        status_icon = "✅" if status == "success" else "⚠️" if status == "warning" else "❌"
+        self.terminal.log(f"  {status_icon} {file_path} - {status}")
+
+    def complete_workflow(self, result: dict):
+        self.terminal.log("")
+        self.terminal.log(f"🎉 Workflow complete: {result['file_count']} files generated")
+        self.terminal.log(f"📁 Project: {result['project_dir']}")
 
 
 class WorkflowProgressWidget(QWidget):
@@ -57,9 +103,9 @@ class WorkflowProgressWidget(QWidget):
         """Update workflow stage"""
         stage_colors = {
             "idle": "#888888",
-            "starting": "#ffb900",
+            "initializing": "#ffb900",
+            "context_discovery": "#a5a5f0",
             "planning": "#a5a5f0",
-            "decomposition": "#f0883e",
             "generation": "#00d7ff",
             "finalization": "#3fb950",
             "complete": "#3fb950",
@@ -68,10 +114,10 @@ class WorkflowProgressWidget(QWidget):
 
         stage_emojis = {
             "idle": "⏸️",
-            "starting": "🚀",
+            "initializing": "🚀",
+            "context_discovery": "🔍",
             "planning": "🧠",
-            "decomposition": "📋",
-            "generation": "⚙️",
+            "generation": "⚡",
             "finalization": "📄",
             "complete": "✅",
             "error": "❌"
@@ -104,14 +150,14 @@ class StreamingIndicator(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setFixedSize(100, 20)
+        self.setFixedSize(120, 20)
         self.is_streaming = False
         self.animation_step = 0
 
         # Animation timer
         self.timer = QTimer()
         self.timer.timeout.connect(self._animate)
-        self.timer.setInterval(200)  # 200ms animation
+        self.timer.setInterval(300)
 
         self.label = QLabel("● Ready")
         self.label.setStyleSheet("color: #3fb950; font-size: 11px; font-weight: bold;")
@@ -141,30 +187,38 @@ class StreamingIndicator(QWidget):
         if not self.is_streaming:
             return
 
-        dots = ["", ".", "..", "..."]
+        dots = ["⚡", "⚡.", "⚡..", "⚡..."]
         dot = dots[self.animation_step % len(dots)]
-        self.label.setText(f"⚡ {self.base_message}{dot}")
+        self.label.setText(f"{dot} {self.base_message}")
         self.animation_step += 1
 
 
 class StreamingTerminal(QWidget):
     """
-    Enhanced Aider-like terminal widget with real-time streaming,
-    progress visualization, and workflow tracking.
+    🎯 Aider-Style Terminal with Real-time Streaming & Progress Visualization
+
+    Features:
+    - Clean hierarchical progress display
+    - Real-time code streaming
+    - Visual workflow tracking
+    - Professional layout like aider
     """
 
     def __init__(self):
         super().__init__()
         self.message_queue = queue.Queue()
         self.stream_buffer = ""
-        self.current_stream_type = None
+        self.current_indent = 0
         self._init_ui()
         self._setup_timer()
+
+        # Enhanced progress display
+        self.progress_display = StreamingProgressDisplay(self)
 
     def _init_ui(self):
         layout = QVBoxLayout()
 
-        # NEW: Workflow progress section
+        # Workflow progress section
         self.workflow_progress = WorkflowProgressWidget()
         layout.addWidget(self.workflow_progress)
 
@@ -175,27 +229,26 @@ class StreamingTerminal(QWidget):
         self.auto_scroll_checkbox.setChecked(True)
         self.auto_scroll_checkbox.setStyleSheet("color: #c6c6c6;")
 
-        # NEW: Streaming indicator
+        # Streaming indicator
         self.streaming_indicator = StreamingIndicator()
 
-        # Cache status label
+        # Cache status
         self.cache_status = QLabel("Cache: 0 items")
         self.cache_status.setStyleSheet("color: #888; font-size: 11px;")
+
+        # Performance stats
+        self.perf_status = QLabel("Speed: Ready")
+        self.perf_status.setStyleSheet("color: #888; font-size: 11px;")
 
         self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_terminal)
         self.clear_button.setStyleSheet("""
             QPushButton {
-                background-color: #2d2d2d;
-                color: #ffffff;
-                border: 1px solid #3e3e3e;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
+                background-color: #2d2d2d; color: #ffffff;
+                border: 1px solid #3e3e3e; border-radius: 4px;
+                padding: 4px 8px; font-size: 12px;
             }
-            QPushButton:hover {
-                background-color: #3e3e3e;
-            }
+            QPushButton:hover { background-color: #3e3e3e; }
         """)
 
         self.save_button = QPushButton("Save Log")
@@ -205,29 +258,41 @@ class StreamingTerminal(QWidget):
         controls_layout.addWidget(self.auto_scroll_checkbox)
         controls_layout.addWidget(self.streaming_indicator)
         controls_layout.addWidget(self.cache_status)
+        controls_layout.addWidget(self.perf_status)
         controls_layout.addStretch()
         controls_layout.addWidget(self.clear_button)
         controls_layout.addWidget(self.save_button)
 
-        # Terminal display
+        # Terminal display with enhanced styling
         self.text_area = QTextEdit()
         self.text_area.setReadOnly(True)
-
-        # Enhanced terminal styling with better contrast
         self.text_area.setStyleSheet("""
             QTextEdit {
                 background-color: #0d1117;
-                color: #58a6ff;
+                color: #c9d1d9;
                 border: 1px solid #30363d;
                 border-radius: 6px;
-                padding: 10px;
+                padding: 12px;
                 font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
                 font-size: 13px;
-                line-height: 1.4;
+                line-height: 1.5;
+            }
+            QScrollBar:vertical {
+                background: #21262d;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #484f58;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #58a6ff;
             }
         """)
 
-        # Set font explicitly
+        # Set monospace font
         font = QFont("JetBrains Mono", 12)
         font.setStyleHint(QFont.Monospace)
         self.text_area.setFont(font)
@@ -236,51 +301,68 @@ class StreamingTerminal(QWidget):
         layout.addWidget(self.text_area)
         self.setLayout(layout)
 
-        # Add initial welcome message
         self._add_initial_message()
 
     def _setup_timer(self):
-        """Setup timer for processing queued messages"""
+        """Setup timer for smooth message processing"""
         self.timer = QTimer()
         self.timer.timeout.connect(self._process_queue)
-        self.timer.start(50)  # Process queue every 50ms for smooth streaming
+        self.timer.start(30)  # 30ms for smooth streaming
 
     def _add_initial_message(self):
-        """Add welcome message to terminal"""
+        """Add clean welcome message"""
         welcome_msg = """
-<div style="color: #7c3aed; font-weight: bold;">
-╭─────────────────────────────────────────────────────────────╮
-│                     AvA Development Terminal                │
-│            Ready for streaming workflows! 🚀⚡              │
-│                Enhanced with progress tracking              │
-╰─────────────────────────────────────────────────────────────╯
+<div style="color: #7c3aed; font-weight: bold; margin-bottom: 8px;">
+╭────────────────────────────────────────────────────────────╮
+│                    AvA Development Terminal                │
+│               Real-time streaming & progress               │
+│                    Ready for workflows! 🚀                │
+╰────────────────────────────────────────────────────────────╯
 </div>
         """.strip()
         self.text_area.append(welcome_msg)
 
-    def append_text(self, text: str, message_type: str = "INFO"):
-        """Queue text to be added to terminal with timestamp and color coding"""
+    def log(self, message: str, log_level: str = "info", indent: int = 0):
+        """
+        🎯 Main logging method - clean like aider
+        """
         timestamp = datetime.now().strftime("%H:%M:%S")
 
-        # Thread-safe queuing
         self.message_queue.put({
             'timestamp': timestamp,
-            'text': text,
-            'type': message_type
+            'text': message,
+            'type': log_level,
+            'indent': indent
         })
 
-    def log(self, message: str, message_type: str = "info"):
+    def stream_log(self, message: str, indent: int = 0, update_last: bool = False):
         """
-        Add message to terminal - main entry point
+        📺 Stream content with live updates (like aider's streaming)
         """
-        self.append_text(message, message_type)
+        if update_last:
+            # Update the last line (for progress updates)
+            self.message_queue.put({
+                'timestamp': datetime.now().strftime("%H:%M:%S"),
+                'text': message,
+                'type': 'stream_update',
+                'indent': indent,
+                'update_last': True
+            })
+        else:
+            # Add new streaming line
+            self.message_queue.put({
+                'timestamp': datetime.now().strftime("%H:%M:%S"),
+                'text': message,
+                'type': 'stream',
+                'indent': indent
+            })
 
     def _process_queue(self):
-        """Process queued messages and update display"""
+        """Process queued messages with enhanced streaming"""
         messages_processed = 0
-        max_messages_per_cycle = 15  # Increased for better streaming
+        max_messages = 20  # Higher for smooth streaming
 
-        while not self.message_queue.empty() and messages_processed < max_messages_per_cycle:
+        while not self.message_queue.empty() and messages_processed < max_messages:
             try:
                 message = self.message_queue.get_nowait()
                 self._display_message(message)
@@ -289,226 +371,190 @@ class StreamingTerminal(QWidget):
                 break
 
     def _display_message(self, message: dict):
-        """Display a single message with appropriate formatting"""
+        """Display message with aider-style formatting"""
         timestamp = message['timestamp']
         text = message['text']
         msg_type = message['type']
+        indent = message.get('indent', 0)
 
-        # Enhanced color coding and icons
+        # Clean indentation (like aider)
+        indent_str = "  " * indent
+
+        # Get color and icon
         color = self._get_message_color(text, msg_type)
         icon = self._get_message_icon(text, msg_type)
 
-        # Special handling for progress messages
-        if "%" in text and ("progress" in text.lower() or "executing:" in text.lower()):
-            # Extract percentage for special formatting
-            import re
-            percent_match = re.search(r'\[(\d+)%\]', text)
-            if percent_match:
-                percent = percent_match.group(1)
-                text = text.replace(f"[{percent}%]",
-                                    f"<span style='color: #00d7ff; font-weight: bold;'>[{percent}%]</span>")
+        # Special handling for different message types
+        if msg_type == 'stream':
+            # Streaming messages - minimal formatting
+            formatted_message = f"""
+            <div style="margin: 1px 0; font-family: monospace;">
+                <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
+                <span style="color: {color};">{indent_str}{icon} {self._escape_html(text)}</span>
+            </div>
+            """
+        elif msg_type == 'stream_update':
+            # Update last line (for progress bars, etc.)
+            # For now, just add as new line - more complex cursor manipulation could be added
+            formatted_message = f"""
+            <div style="margin: 1px 0; font-family: monospace;">
+                <span style="color: {color};">{indent_str}⟳ {self._escape_html(text)}</span>
+            </div>
+            """
+        else:
+            # Regular messages
+            formatted_message = f"""
+            <div style="margin: 2px 0; font-family: monospace; padding: 1px 0;">
+                <span style="color: #6e7681; font-size: 11px;">[{timestamp}]</span>
+                <span style="color: {color}; font-weight: 500;">{indent_str}{icon} {self._escape_html(text)}</span>
+            </div>
+            """
 
-        # Format the message with enhanced HTML
-        formatted_message = f"""
-        <div style="margin: 2px 0; font-family: monospace; padding: 2px 0;">
-            <span style="color: #6e7681; font-size: 11px;">[{timestamp}]</span>
-            <span style="color: {color}; font-weight: 500;">{icon} {self._escape_html(text)}</span>
-        </div>
-        """
-
-        # Add to display
         self.text_area.append(formatted_message)
 
-        # Auto-scroll if enabled
+        # Smart auto-scroll
         if self.auto_scroll_checkbox.isChecked():
             self._scroll_to_bottom()
 
     def _get_message_color(self, text: str, msg_type: str) -> str:
-        """Enhanced color determination with more categories"""
+        """Enhanced color coding for better readability"""
         text_lower = text.lower()
 
-        # Error states
-        if any(keyword in text_lower for keyword in ['error', 'failed', 'exception', '❌']):
+        # Message type colors
+        if msg_type == 'stream':
+            return "#58a6ff"  # Blue for streaming
+        elif msg_type == 'debug':
+            return "#8b949e"  # Gray for debug
+
+        # Content-based colors
+        if any(word in text_lower for word in ['error', 'failed', 'exception', '❌']):
             return "#f85149"  # Red
-
-        # Success states
-        if any(keyword in text_lower for keyword in ['✅', 'completed', 'success', 'finished', 'written:']):
+        elif any(word in text_lower for word in ['✅', 'completed', 'success', 'approved']):
             return "#3fb950"  # Green
-
-        # Warning states
-        if any(keyword in text_lower for keyword in ['warning', 'warn', '⚠️']):
+        elif any(word in text_lower for word in ['warning', '⚠️']):
             return "#d29922"  # Yellow
+        elif any(word in text_lower for word in ['creating:', 'generating', 'streaming']):
+            return "#00d7ff"  # Bright blue
+        elif text.startswith('▶'):
+            return "#a5a5f0"  # Purple for stages
+        elif text.startswith('  📄'):
+            return "#79c0ff"  # Light blue for files
+        elif 'iteration' in text_lower:
+            return "#f0883e"  # Orange for iterations
 
-        # Progress and work states
-        if any(keyword in text_lower for keyword in ['executing:', 'generating', 'processing', 'assembling']):
-            return "#00d7ff"  # Bright blue for active work
-
-        # Workflow stages
-        if text.startswith('[PLANNING]') or '🧠' in text:
-            return "#a5a5f0"  # Purple for planning
-        elif text.startswith('[TASK]') or '⚙️' in text:
-            return "#58a6ff"  # Blue for tasks
-        elif text.startswith('[FILE]') or '📄' in text:
-            return "#3fb950"  # Green for files
-        elif text.startswith('[CODE]') or '🔧' in text:
-            return "#f0883e"  # Orange for code
-
-        # Cache operations
-        elif 'cache' in text_lower and '⚡' in text:
-            return "#ffb900"  # Gold for cache hits
-
-        # Streaming operations
-        elif 'streaming' in text_lower or 'chars)' in text:
-            return "#40e0ff"  # Light blue for streaming
-
-        return "#c9d1d9"  # Default white
+        return "#c9d1d9"  # Default
 
     def _get_message_icon(self, text: str, msg_type: str) -> str:
-        """Enhanced icon determination"""
+        """Smart icon detection"""
+        # Don't add icon if text already has emoji
+        if re.search(r'[🚀🧠📋⚙️📄✅❌⚠📊🔧📝⚡🎯🔍👁]', text):
+            return ""
+
         text_lower = text.lower()
 
-        # Check for existing emojis first
-        if any(emoji in text for emoji in ['🚀', '🧠', '📋', '⚙️', '📄', '✅', '❌', '⚠️', '📊', '🔧', '📝', '⚡']):
-            return ""  # No additional icon needed
-
-        # Progress indicators
-        if '[' in text and '%' in text and ']' in text:
-            return "⏳"
-
-        # Error states
         if 'error' in text_lower or 'failed' in text_lower:
             return "❌"
-
-        # Success states
-        if 'completed' in text_lower or 'success' in text_lower:
+        elif 'success' in text_lower or 'completed' in text_lower:
             return "✅"
+        elif 'creating' in text_lower or 'generating' in text_lower:
+            return "⚡"
+        elif msg_type == 'stream':
+            return "📺"
 
-        # Work in progress
-        if any(keyword in text_lower for keyword in ['calling', 'querying', 'analyzing']):
-            return "⚙️"
-
-        # Cache operations
-        if 'cache' in text_lower:
-            return "💾"
-
-        return "ℹ️"
+        return ""
 
     def _escape_html(self, text: str) -> str:
-        """Escape HTML characters in text but preserve our formatting"""
-        # Don't escape if text already contains our span tags
+        """Safe HTML escaping"""
         if '<span style=' in text:
             return text
         return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     def _scroll_to_bottom(self):
-        """Scroll terminal to bottom"""
+        """Smooth scroll to bottom"""
         cursor = self.text_area.textCursor()
         cursor.movePosition(QTextCursor.End)
         self.text_area.setTextCursor(cursor)
 
+    def add_separator(self, title: str = ""):
+        """Add visual separator like aider"""
+        if title:
+            separator = f"{'─' * 15} {title} {'─' * 15}"
+        else:
+            separator = '─' * 50
+
+        self.log(separator, "separator")
+
+    # Enhanced status updates
+    def update_workflow_progress(self, stage: str, description: str):
+        """Update workflow progress"""
+        self.workflow_progress.update_stage(stage, description)
+        self.progress_display.start_stage(stage, description)
+
+    def update_task_progress(self, completed: int, total: int):
+        """Update task progress"""
+        self.workflow_progress.update_progress(completed, total)
+
+    def update_cache_status(self, cache_size: int, hit_rate: float):
+        """Update cache status"""
+        self.cache_status.setText(f"Cache: {cache_size} items ({hit_rate:.1%})")
+
+        color = "#3fb950" if hit_rate >= 0.5 else "#ffb900" if hit_rate >= 0.2 else "#888"
+        self.cache_status.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+    def update_performance_stats(self, speed_info: str):
+        """Update performance information"""
+        self.perf_status.setText(f"Speed: {speed_info}")
+
+    def start_file_generation(self, file_path: str):
+        """Start file generation tracking"""
+        self.progress_display.start_file(file_path)
+        self.streaming_indicator.start_streaming(f"Generating {file_path}")
+
+    def complete_file_generation(self, file_path: str, success: bool):
+        """Complete file generation tracking"""
+        status = "success" if success else "error"
+        self.progress_display.complete_file(file_path, status)
+        self.streaming_indicator.stop_streaming("● Ready")
+
     @Slot()
     def clear_terminal(self):
-        """Clear terminal contents"""
+        """Clear terminal with reset"""
         self.text_area.clear()
         self._add_initial_message()
         self.workflow_progress.reset_progress()
+        self.streaming_indicator.stop_streaming()
 
     @Slot()
     def save_log(self):
-        """Save terminal log to file"""
+        """Save terminal log"""
         try:
             from PySide6.QtWidgets import QFileDialog
 
             filename, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save Terminal Log",
-                f"ava_terminal_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                f"ava_terminal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                 "Text Files (*.txt);;All Files (*)"
             )
 
             if filename:
-                # Get plain text content (strip HTML)
                 plain_text = self.text_area.toPlainText()
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(plain_text)
-
-                self.append_text(f"Log saved to: {filename}", "SUCCESS")
+                self.log(f"Log saved: {filename}", "success")
 
         except Exception as e:
-            self.append_text(f"Failed to save log: {e}", "ERROR")
-
-    def stream_llm_response(self, response_generator):
-        """
-        Stream LLM response in real-time with enhanced feedback
-        """
-
-        def stream_worker():
-            try:
-                self.streaming_indicator.start_streaming("LLM Streaming")
-                chunk_count = 0
-
-                for chunk in response_generator:
-                    self.append_text(chunk, "LLM_STREAM")
-                    chunk_count += 1
-
-                    # Update streaming indicator periodically
-                    if chunk_count % 5 == 0:
-                        self.streaming_indicator.start_streaming(f"LLM Streaming ({chunk_count} chunks)")
-
-                self.streaming_indicator.stop_streaming("● Stream Complete")
-
-            except Exception as e:
-                self.streaming_indicator.stop_streaming("● Stream Error")
-                self.append_text(f"Streaming error: {e}", "ERROR")
-
-        # Run streaming in separate thread to avoid blocking UI
-        thread = threading.Thread(target=stream_worker, daemon=True)
-        thread.start()
-
-    def update_workflow_progress(self, stage: str, description: str):
-        """Update workflow progress visualization"""
-        self.workflow_progress.update_stage(stage, description)
-
-    def update_task_progress(self, completed: int, total: int):
-        """Update task progress counter"""
-        self.workflow_progress.update_progress(completed, total)
-
-    def update_cache_status(self, cache_size: int, hit_rate: float):
-        """Update cache status display"""
-        self.cache_status.setText(f"Cache: {cache_size} items ({hit_rate:.1%} hit)")
-
-        # Color code based on hit rate
-        if hit_rate >= 0.5:
-            color = "#3fb950"  # Green for good hit rate
-        elif hit_rate >= 0.2:
-            color = "#ffb900"  # Yellow for moderate hit rate
-        else:
-            color = "#888"  # Gray for low hit rate
-
-        self.cache_status.setStyleSheet(f"color: {color}; font-size: 11px;")
-
-    def add_separator(self, title: str = ""):
-        """Add a visual separator to the terminal"""
-        if title:
-            separator = f"\n{'─' * 20} {title} {'─' * 20}\n"
-        else:
-            separator = f"\n{'─' * 60}\n"
-
-        self.append_text(separator, "SEPARATOR")
+            self.log(f"Save failed: {e}", "error")
 
 
 class TerminalWindow(StreamingTerminal):
-    """
-    Standalone terminal window that can be opened separately.
-    Inherits all functionality from StreamingTerminal.
-    """
+    """Standalone terminal window"""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AvA Terminal - Enhanced with Streaming & Progress")
-        self.resize(900, 700)  # Slightly larger for progress widgets
+        self.setWindowTitle("AvA Terminal - Enhanced Streaming & Progress")
+        self.resize(1000, 750)
 
-        # Add window-specific styling
         self.setStyleSheet("""
             QWidget {
                 background-color: #0d1117;

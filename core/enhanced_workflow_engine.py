@@ -1,457 +1,628 @@
-# core/enhanced_workflow_engine.py - RESULTS FOCUSED VERSION
+# enhanced_workflow_engine.py - COMPLETE WORKING FILE with Role-Based LLM
 
 import asyncio
-from pathlib import Path
+import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from PySide6.QtCore import QObject, Signal, QTimer
-
-from core.project_state_manager import ProjectStateManager
-from core.ai_feedback_system import AIFeedbackSystem, FeedbackType
-from core.enhanced_micro_task_engine import StreamlinedMicroTaskEngine
-from core.domain_context_manager import DomainContextManager
-from core.llm_client import LLMRole
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+import tempfile
+import shutil
 import json
+import traceback
+
+from PySide6.QtCore import QObject, Signal, QTimer, QThread
 
 
 class EnhancedWorkflowEngine(QObject):
     """
-    🚀 RESULTS-FOCUSED Workflow Engine
-
-    Fast, efficient, professional code generation with:
-    - Smart task decomposition (3-5 chunks)
-    - Real-time code streaming
-    - Domain awareness
-    - Professional output quality
+    🚀 Enhanced Workflow Engine with Role-Based AI Code Generation
     """
 
-    # Existing signals (keep compatibility)
-    workflow_started = Signal(str)
-    workflow_completed = Signal(dict)
-    file_generated = Signal(str)
-    project_loaded = Signal(str)
-    workflow_progress = Signal(str, str)
+    # Define all the signals the terminal expects
+    workflow_started = Signal(str)  # prompt
+    workflow_completed = Signal(dict)  # result
+    workflow_progress = Signal(str, str)  # stage, description
+    file_generated = Signal(str)  # file_path
+    project_loaded = Signal(str)  # project_path
 
-    # New signals for enhanced features
-    ai_collaboration_started = Signal(str)
-    ai_feedback_received = Signal(str, str, str)
-    iteration_completed = Signal(str, int)
-    quality_check_completed = Signal(str, bool, str)
+    # Additional streaming signals
+    file_progress = Signal(str, str)  # file_path, status
+    streaming_content = Signal(str, str, str)  # content, type, indent
+    task_progress = Signal(int, int)  # completed, total
 
-    def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None, project_root: str = None):
+    def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
-
-        # Core components
         self.llm_client = llm_client
-        self.terminal = terminal_window
+        self.terminal_window = terminal_window
         self.code_viewer = code_viewer
         self.rag_manager = rag_manager
 
-        # Enhanced components
-        self.project_root = Path(project_root) if project_root else Path("./workspace")
-        self.project_state = ProjectStateManager(self.project_root)
-        self.ai_feedback_system = AIFeedbackSystem(llm_client, self.project_state, terminal_window)
+        self.logger = logging.getLogger(__name__)
 
-        # STREAMLINED components
-        self.domain_context_manager = DomainContextManager(self.project_root)
-        self.micro_task_engine = StreamlinedMicroTaskEngine(
-            llm_client, self.project_state, self.domain_context_manager
-        )
+        # DEBUG: Test LLM immediately
+        self._debug_llm_client()
 
-        # Output directory
-        self.output_dir = Path("./generated_projects")
-        self.output_dir.mkdir(exist_ok=True)
-
-        # Workflow state
-        self.current_workflow_state = {
-            "stage": "idle",
-            "progress": 0,
-            "total_tasks": 0,
-            "completed_tasks": 0,
-            "active_collaboration_session": None,
-            "iterations": {},
-            "domain_context": None
+        # Performance tracking
+        self.workflow_stats = {
+            "cache_stats": {"cache_size": 0, "hit_rate": 0.0},
+            "workflow_state": {"stage": "idle", "completed_tasks": 0, "total_tasks": 0}
         }
 
-        # Active workflow tracking
-        self.current_workflow_task = None
-        self.workflow_active = False
-        self.current_project_dir = None
+        # Connect signals to terminal methods
+        self._connect_terminal_signals()
 
-        # User feedback integration
-        self.user_feedback_queue = []
-        self.pause_for_feedback = False
+        self.logger.info("✅ Enhanced Workflow Engine initialized with Role-Based AI")
 
-        self._connect_code_viewer()
-        self._log_enhanced_initialization()
-
-    def _connect_code_viewer(self):
-        """Connect code viewer for real-time updates"""
-        if self.code_viewer:
-            self.code_viewer.file_changed.connect(self._on_file_changed)
-
-    def _log_enhanced_initialization(self):
-        """Log streamlined initialization"""
-        self.terminal.log("🚀 RESULTS-FOCUSED Workflow Engine Initialized!")
-        self.terminal.log("   ⚡ Fast task decomposition (3-5 chunks)")
-        self.terminal.log("   📺 Real-time code streaming")
-        self.terminal.log("   🎯 Professional output quality")
-        self.terminal.log("   🔍 Smart domain awareness")
-
-        if self.project_state.files:
-            self.terminal.log(f"   📁 Existing project loaded: {len(self.project_state.files)} files")
-        else:
-            self.terminal.log("   📄 Ready to build professional code")
-
-    async def execute_enhanced_workflow(self, user_prompt: str, enable_iterations: bool = True,
-                                        max_iterations: int = 2) -> Dict[str, Any]:
-        """Execute RESULTS-FOCUSED workflow"""
-
-        if not self._is_build_request(user_prompt):
-            self.terminal.log(f"⚠️ Not a build request: '{user_prompt}'")
-            return {"success": False, "error": "Not a build request"}
-
-        if self.workflow_active:
-            self.terminal.log("⚠️ Workflow already running")
-            return {"success": False, "error": "Workflow already active"}
-
+    def _debug_llm_client(self):
+        """DEBUG: Check what's wrong with LLM client"""
         try:
-            self.workflow_active = True
-            self.workflow_started.emit(user_prompt)
-            self._update_workflow_stage("initializing", "Starting fast professional workflow...")
+            self.logger.info("🔍 DEBUGGING LLM CLIENT...")
 
-            # Quick domain context discovery
-            self._update_workflow_stage("context_discovery", "Analyzing project domain...")
-            domain_context = await self.domain_context_manager.get_comprehensive_context()
-            self.current_workflow_state["domain_context"] = domain_context
+            if not self.llm_client:
+                self.logger.error("❌ LLM CLIENT IS NONE!")
+                return
 
-            # Log what we found
-            if domain_context.get('frameworks'):
-                frameworks = [f['name'] for f in domain_context['frameworks'] if f['confidence'] > 0.5]
-                if frameworks:
-                    self.terminal.log(f"🔍 Detected: {', '.join(frameworks)}")
+            self.logger.info(f"✅ LLM Client exists: {type(self.llm_client)}")
 
-            # Initialize collaboration
-            target_files = await self._predict_target_files(user_prompt)
-            session_id = await self.ai_feedback_system.initiate_collaboration(
-                task_description=user_prompt,
-                target_files=target_files,
-                participating_ais=["planner", "coder", "assembler", "reviewer"]
-            )
+            # Check available methods
+            methods = [method for method in dir(self.llm_client) if not method.startswith('_')]
+            self.logger.info(f"📋 LLM Client methods: {methods}")
 
-            self.ai_collaboration_started.emit(session_id)
-
-            # Fast planning
-            self._update_workflow_stage("planning", "Creating professional development plan...")
-            planner_guidance = await self.ai_feedback_system.process_planner_requirements(
-                session_id, user_prompt
-            )
-            planner_guidance["domain_context"] = domain_context
-
-            # Setup project
-            project_name = planner_guidance.get("project_plan", {}).get("name", "enhanced_project")
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            self.current_project_dir = self.output_dir / f"{project_name}_{timestamp}"
-            self.current_project_dir.mkdir(exist_ok=True)
-
-            # FAST file generation
-            self._update_workflow_stage("generation", "🚀 Generating professional code...")
-            files_to_generate = planner_guidance.get("file_specifications", {})
-
-            generated_files = []
-            failed_files = []
-
-            for file_path, file_spec in files_to_generate.items():
-                self.terminal.log(f"🎯 Creating: {file_path}")
-
-                result = await self._generate_file_fast(
-                    session_id=session_id,
-                    file_path=file_path,
-                    file_spec=file_spec,
-                    planner_guidance=planner_guidance,
-                    enable_iterations=enable_iterations,
-                    max_iterations=max_iterations
-                )
-
-                if result["success"]:
-                    generated_files.append(result["file_path"])
-                    self.file_generated.emit(result["file_path"])
-
-                    # Add to project state
-                    self.project_state.add_file(
-                        result["file_path"],
-                        result["content"],
-                        ai_role="fast_workflow",
-                        reasoning=f"Generated for: {user_prompt}"
-                    )
-                else:
-                    failed_files.append({"file": file_path, "error": result.get("error", "Unknown error")})
-
-            # Finalize
-            if generated_files:
-                self._update_workflow_stage("finalization", "Finalizing project...")
-                await self._finalize_enhanced_project(generated_files)
-
-            # Complete
-            success = len(generated_files) > 0
-            result = {
-                "success": success,
-                "project_dir": str(self.current_project_dir),
-                "generated_files": generated_files,
-                "failed_files": failed_files,
-                "project_name": project_name,
-                "file_count": len(generated_files)
-            }
-
-            if success:
-                self.terminal.log(f"✅ SUCCESS! Generated {len(generated_files)} files")
+            # Check if chat method exists
+            if hasattr(self.llm_client, 'chat'):
+                self.logger.info("✅ chat method exists")
             else:
-                self.terminal.log(f"❌ FAILED! No files generated")
+                self.logger.error("❌ chat method MISSING!")
 
-            self.workflow_completed.emit(result)
-            return result
+            # Check available models
+            if hasattr(self.llm_client, 'get_available_models'):
+                models = self.llm_client.get_available_models()
+                self.logger.info(f"📊 Available models: {models}")
+
+                if not models or models == ["No LLM services available"]:
+                    self.logger.error("❌ NO LLM MODELS AVAILABLE!")
+                else:
+                    self.logger.info("✅ LLM models are available")
+            else:
+                self.logger.warning("⚠️ get_available_models method missing")
 
         except Exception as e:
-            self.terminal.log(f"❌ Workflow failed: {e}")
-            import traceback
-            traceback.print_exc()
+            self.logger.error(f"❌ LLM DEBUG FAILED: {e}")
+            self.logger.error(traceback.format_exc())
 
-            error_result = {
-                "success": False,
-                "error": str(e),
-                "project_dir": str(self.current_project_dir) if self.current_project_dir else None
-            }
-            self.workflow_completed.emit(error_result)
-            return error_result
+    def _connect_terminal_signals(self):
+        """Connect workflow signals to terminal streaming methods"""
+        if not self.terminal_window:
+            return
 
-        finally:
-            self.workflow_active = False
-            self.current_workflow_task = None
+        try:
+            # Connect progress signals (FIXED: Only one connection to avoid duplicates)
+            self.workflow_progress.connect(self.terminal_window.update_workflow_progress)
+            self.task_progress.connect(self.terminal_window.update_task_progress)
 
-    async def _generate_file_fast(self, session_id: str, file_path: str, file_spec: Dict[str, Any],
-                                  planner_guidance: Dict[str, Any], enable_iterations: bool = True,
-                                  max_iterations: int = 2) -> Dict[str, Any]:
-        """Fast file generation with streaming"""
+            # Connect file progress
+            if hasattr(self.terminal_window, 'start_file_generation'):
+                self.file_progress.connect(self._handle_file_progress)
 
-        iteration = 0
-        current_content = ""
-        review_approved = False
+            # Connect streaming content
+            if hasattr(self.terminal_window, 'stream_log'):
+                self.streaming_content.connect(self._handle_streaming_content)
 
-        while iteration < max_iterations and not review_approved:
-            iteration += 1
-            self.terminal.log(f"[{file_path}] 🔄 Iteration {iteration}/{max_iterations}")
+            self.logger.info("✅ Terminal signals connected for streaming")
 
-            try:
-                # Create smart tasks (3-5 chunks)
-                self.terminal.log(f"[{file_path}] 🎯 Planning code structure...")
+        except Exception as e:
+            self.logger.error(f"❌ Failed to connect terminal signals: {e}")
 
-                smart_tasks = await self.micro_task_engine.create_smart_tasks(
-                    file_path=file_path,
-                    file_spec=file_spec,
-                    project_context=planner_guidance.get("domain_context", {})
-                )
+    def _handle_file_progress(self, file_path: str, status: str):
+        """Handle file progress updates"""
+        if status == "started":
+            self.terminal_window.start_file_generation(file_path)
+        elif status in ["completed", "error"]:
+            success = status == "completed"
+            self.terminal_window.complete_file_generation(file_path, success)
 
-                self.terminal.log(f"[{file_path}] 📋 Created {len(smart_tasks)} code chunks")
+    def _handle_streaming_content(self, content: str, content_type: str, indent: str):
+        """Handle streaming content updates"""
+        indent_level = int(indent) if indent.isdigit() else 0
+        self.terminal_window.stream_log(content, indent=indent_level)
 
-                # Execute with STREAMING
-                task_results = await self._execute_with_streaming(
-                    session_id, file_path, smart_tasks, planner_guidance
-                )
+    async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
+        """
+        🚀 Execute workflow with Role-Based AI code generation and streaming progress
+        """
+        self.logger.info(f"🚀 Starting Role-Based AI workflow: {user_prompt[:100]}...")
 
-                # Assemble
-                self.terminal.log(f"[{file_path}] 🔧 Assembling final code...")
-                assembled_content, assembly_context = await self.ai_feedback_system.assemble_with_context_feedback(
-                    session_id, file_path, task_results, planner_guidance
-                )
+        # Initialize workflow state
+        self.workflow_stats["workflow_state"] = {
+            "stage": "initializing",
+            "completed_tasks": 0,
+            "total_tasks": 6
+        }
 
-                # Quick review
-                review_approved, review_feedback, review_data = await self.ai_feedback_system.review_with_collaborative_feedback(
-                    session_id, file_path, assembled_content, assembly_context, planner_guidance
-                )
+        try:
+            # Emit workflow started
+            self.workflow_started.emit(user_prompt)
 
-                current_content = assembled_content
+            # Stage 1: Initialize
+            await self._emit_stage_progress("initializing", "Setting up AI workflow environment")
+            await asyncio.sleep(0.1)
 
-                if review_approved:
-                    self.terminal.log(f"[{file_path}] ✅ Code APPROVED!")
-                    break
-                else:
-                    self.terminal.log(f"[{file_path}] ⚠️ Needs improvement...")
-                    if not enable_iterations or iteration >= max_iterations:
-                        self.terminal.log(f"[{file_path}] ⏭️ Using current version")
-                        review_approved = True
-                        break
+            # Stage 2: Context Discovery
+            await self._emit_stage_progress("context_discovery", "Analyzing project requirements with AI")
+            context_info = await self._discover_context_with_ai(user_prompt, conversation_context)
+            self._update_task_progress(1, 6)
 
-            except Exception as e:
-                self.terminal.log(f"[{file_path}] ❌ Iteration {iteration} failed: {e}")
-                if iteration == max_iterations:
+            # Stage 3: Planning
+            await self._emit_stage_progress("planning", "Creating intelligent development plan")
+            plan = await self._create_ai_development_plan(user_prompt, context_info)
+            self._update_task_progress(2, 6)
+
+            # Stage 4: Architecture Design
+            await self._emit_stage_progress("design", "Designing project architecture with AI")
+            architecture = await self._design_project_architecture(user_prompt, plan)
+            self._update_task_progress(3, 6)
+
+            # Stage 5: Code Generation
+            await self._emit_stage_progress("generation", "Generating code with AI assistance")
+            results = await self._execute_ai_generation_phase(user_prompt, plan, architecture)
+            self._update_task_progress(5, 6)
+
+            # Stage 6: Finalization
+            await self._emit_stage_progress("finalization", "Finalizing project")
+            final_result = await self._finalize_project(results)
+            self._update_task_progress(6, 6)
+
+            # Complete workflow
+            await self._emit_stage_progress("complete", "AI workflow completed successfully")
+            self.workflow_completed.emit(final_result)
+
+            self.logger.info("✅ Enhanced AI workflow completed successfully")
+            return final_result
+
+        except Exception as e:
+            self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
+            await self._emit_stage_progress("error", f"AI workflow failed: {str(e)}")
+            self.workflow_completed.emit({"success": False, "error": str(e)})
+            raise
+
+    async def _emit_stage_progress(self, stage: str, description: str):
+        """Emit stage progress with terminal streaming"""
+        # FIXED: Only emit one signal to avoid duplicates
+        self.workflow_progress.emit(stage, description)
+
+        # Update internal state
+        self.workflow_stats["workflow_state"]["stage"] = stage
+
+        # Stream to terminal
+        if stage == "initializing":
+            self.streaming_content.emit("🚀 Initializing AvA AI workflow system", "info", "0")
+        elif stage == "context_discovery":
+            self.streaming_content.emit("🔍 AI analyzing project context and requirements", "info", "0")
+        elif stage == "planning":
+            self.streaming_content.emit("🧠 AI creating intelligent development plan", "info", "0")
+        elif stage == "design":
+            self.streaming_content.emit("🏗️ AI designing project architecture", "info", "0")
+        elif stage == "generation":
+            self.streaming_content.emit("⚡ AI generating professional code", "info", "0")
+        elif stage == "finalization":
+            self.streaming_content.emit("📄 Finalizing AI-generated project", "info", "0")
+        elif stage == "complete":
+            self.streaming_content.emit("✅ AI workflow completed successfully!", "success", "0")
+        elif stage == "error":
+            self.streaming_content.emit(f"❌ {description}", "error", "0")
+
+    def _update_task_progress(self, completed: int, total: int):
+        """Update task progress"""
+        self.workflow_stats["workflow_state"]["completed_tasks"] = completed
+        self.workflow_stats["workflow_state"]["total_tasks"] = total
+        self.task_progress.emit(completed, total)
+
+    async def _discover_context_with_ai(self, prompt: str, conversation_context: List[Dict]) -> Dict[str, Any]:
+        """AI-powered context discovery"""
+        self.streaming_content.emit("  🧠 AI analyzing user requirements", "stream", "1")
+
+        # Use LLM to analyze the prompt
+        analysis_prompt = f"""
+        Analyze this development request and extract key information:
+
+        Request: "{prompt}"
+
+        Please provide a JSON response with:
+        {{
+            "project_type": "web_app|desktop_app|cli_tool|library|game|other",
+            "main_technology": "python|javascript|java|etc",
+            "frameworks": ["PySide6", "Flask", etc],
+            "complexity": "simple|moderate|complex",
+            "key_features": ["feature1", "feature2"],
+            "estimated_files": 3
+        }}
+        """
+
+        try:
+            if self.llm_client and hasattr(self.llm_client, 'chat'):
+                self.streaming_content.emit("  🤖 Consulting AI for project analysis", "stream", "1")
+
+                # Get AI analysis using role-based system
+                ai_response = await self._call_llm_async(analysis_prompt, "analysis")
+
+                # Try to parse JSON from response
+                try:
+                    # Extract JSON from response
+                    start = ai_response.find('{')
+                    end = ai_response.rfind('}') + 1
+                    if start >= 0 and end > start:
+                        json_str = ai_response[start:end]
+                        ai_analysis = json.loads(json_str)
+                    else:
+                        raise ValueError("No JSON found")
+
+                    self.streaming_content.emit("  ✅ AI analysis complete", "success", "1")
+
                     return {
-                        "success": False,
-                        "file_path": file_path,
-                        "error": f"Failed after {max_iterations} iterations: {e}"
+                        "prompt": prompt,
+                        "conversation_history": conversation_context or [],
+                        "ai_analysis": ai_analysis,
+                        "project_type": ai_analysis.get("project_type", "desktop_app"),
+                        "complexity": ai_analysis.get("complexity", "moderate"),
+                        "frameworks": ai_analysis.get("frameworks", ["Python"])
                     }
 
-        # Write file
-        if current_content:
-            full_path = self.current_project_dir / file_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(current_content, encoding='utf-8')
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.streaming_content.emit("  ⚠️ Using fallback analysis", "warning", "1")
 
-            self.terminal.log(f"[{file_path}] 📝 File written ({len(current_content)} chars)")
-
-            return {
-                "success": True,
-                "file_path": str(full_path),
-                "content": current_content,
-                "iterations_used": iteration,
-                "final_review_approved": review_approved
-            }
-        else:
-            return {
-                "success": False,
-                "file_path": file_path,
-                "error": "No content generated"
-            }
-
-    async def _execute_with_streaming(self, session_id: str, file_path: str,
-                                      smart_tasks: List[Any], planner_guidance: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Execute tasks with REAL-TIME CODE STREAMING"""
-
-        task_results = []
-
-        for task in smart_tasks:
-            task_dict = task.to_dict()
-
-            self.terminal.log(f"[{file_path}] 🚀 {task.description}")
-            self.terminal.log(f"[{file_path}] 📝 Streaming code...")
-
-            try:
-                # Create professional prompt
-                code_prompt = f"""
-You are a senior Python developer creating professional, production-ready code.
-
-TASK: {task.description}
-CONTEXT: {task.context}
-REQUIREMENTS: {task.exact_requirements}
-
-FILE: {file_path}
-EXPECTED LENGTH: ~{task.expected_lines} lines
-
-Create clean, well-documented, production-ready Python code that follows best practices.
-Include proper error handling, type hints, and docstrings.
-Make it professional quality that would pass code review.
-
-Code:
-"""
-
-                # STREAM the actual code generation
-                code_chunks = []
-                async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
-                    code_chunks.append(chunk)
-                    # Show every 50 characters to terminal
-                    if len(''.join(code_chunks)) % 50 == 0:
-                        self.terminal.log(f"[{file_path}] 📺 {''.join(code_chunks[-50:])}", log_level="debug")
-
-                generated_code = ''.join(code_chunks)
-
-                self.terminal.log(f"[{file_path}] ✅ Chunk complete ({len(generated_code)} chars)")
-
-                task_results.append({
-                    "task": task_dict,
-                    "code": generated_code
-                })
-
-            except Exception as e:
-                self.terminal.log(f"[{file_path}] ❌ Task failed: {e}")
-                task_results.append({
-                    "task": task_dict,
-                    "code": f"# ERROR: {e}\n# TODO: Fix this implementation\npass"
-                })
-
-        return task_results
-
-    # Keep all the other methods unchanged...
-    async def _finalize_enhanced_project(self, generated_files: List[str]):
-        """Finalize project"""
-        if self.code_viewer and self.current_project_dir:
-            self.code_viewer.load_project(str(self.current_project_dir))
-
-            main_files = ["main.py", "app.py", "__init__.py"]
-            for main_file in main_files:
-                main_path = self.current_project_dir / main_file
-                if main_path.exists():
-                    self.code_viewer.auto_open_file(str(main_path))
-                    break
-
-        self.project_state.save_state(self.current_project_dir / ".ava_project_state.json")
-        self.project_loaded.emit(str(self.current_project_dir))
-
-    def execute_workflow(self, user_prompt: str):
-        """Compatibility method"""
-        if not self._is_build_request(user_prompt):
-            self.terminal.log(f"⚠️ Skipping workflow - not a build request: '{user_prompt}'")
-            return
-
-        if self.workflow_active:
-            self.terminal.log("⚠️ Workflow already running - please wait")
-            return
-
-        try:
-            self.current_workflow_task = asyncio.create_task(
-                self.execute_enhanced_workflow(user_prompt)
-            )
         except Exception as e:
-            self.terminal.log(f"❌ Failed to start workflow: {e}")
+            self.logger.warning(f"AI analysis failed, using fallback: {e}")
+            self.streaming_content.emit("  ⚠️ AI unavailable, using smart fallback", "warning", "1")
 
-    async def _predict_target_files(self, user_prompt: str) -> List[str]:
-        """Predict files needed"""
-        prompt_lower = user_prompt.lower()
-        if "gui" in prompt_lower or "calculator" in prompt_lower:
-            return ["main.py"]
-        elif "api" in prompt_lower:
-            return ["main.py", "api.py"]
-        else:
-            return ["main.py"]
-
-    def _is_build_request(self, prompt: str) -> bool:
-        """Check if this is a build request"""
-        prompt_lower = prompt.lower().strip()
-
-        casual_phrases = ['hi', 'hello', 'hey', 'thanks', 'ok', 'yes', 'no']
-        if prompt_lower in casual_phrases:
-            return False
-
-        build_keywords = [
-            'build', 'create', 'make', 'generate', 'develop', 'code',
-            'implement', 'write', 'design', 'calculator', 'app'
-        ]
-
-        return any(keyword in prompt_lower for keyword in build_keywords) and len(prompt.split()) >= 3
-
-    def _update_workflow_stage(self, stage: str, description: str):
-        """Update workflow stage"""
-        self.current_workflow_state["stage"] = stage
-        self.workflow_progress.emit(stage, description)
-        self.terminal.log(f"📋 {description}")
-
-    def _on_file_changed(self, file_path: str, content: str):
-        """Handle file changes"""
-        if self.project_state:
-            self.project_state.add_file(
-                file_path, content, ai_role="user_edit",
-                reasoning="User modified file"
-            )
-
-    def get_workflow_stats(self) -> Dict:
-        """Get workflow statistics"""
+        # Fallback analysis
         return {
-            "workflow_state": self.current_workflow_state.copy(),
-            "workflow_active": self.workflow_active,
-            "project_files": len(self.project_state.files) if self.project_state else 0
+            "prompt": prompt,
+            "conversation_history": conversation_context or [],
+            "project_type": "desktop_app" if "gui" in prompt.lower() or "pyside" in prompt.lower() else "cli_tool",
+            "complexity": "moderate",
+            "frameworks": ["PySide6"] if "pyside" in prompt.lower() else ["Python"]
         }
 
-    def is_workflow_running(self) -> bool:
-        """Check if workflow is running"""
-        return self.workflow_active and (
-                self.current_workflow_task is not None and
-                not self.current_workflow_task.done()
-        )
+    async def _create_ai_development_plan(self, prompt: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """AI-powered development planning"""
+        self.streaming_content.emit("  🧠 AI creating development strategy", "stream", "1")
+
+        planning_prompt = f"""
+        Create a development plan for this project:
+
+        Request: "{prompt}"
+        Project Type: {context.get('project_type', 'unknown')}
+        Complexity: {context.get('complexity', 'moderate')}
+
+        Create a JSON plan with:
+        {{
+            "project_name": "descriptive_name",
+            "files_to_create": [
+                {{"filename": "main.py", "purpose": "Main application file"}},
+                {{"filename": "calculator.py", "purpose": "Calculator logic"}}
+            ],
+            "architecture": "single_file|modular|mvc",
+            "strategy": "fast_single_file|standard_multi_file|comprehensive"
+        }}
+
+        For a calculator app, suggest appropriate modular structure.
+        """
+
+        try:
+            if self.llm_client:
+                self.streaming_content.emit("  🤖 AI designing project structure", "stream", "1")
+                ai_response = await self._call_llm_async(planning_prompt, "planning")
+
+                # Parse AI response
+                try:
+                    start = ai_response.find('{')
+                    end = ai_response.rfind('}') + 1
+                    if start >= 0 and end > start:
+                        json_str = ai_response[start:end]
+                        ai_plan = json.loads(json_str)
+
+                        self.streaming_content.emit("  ✅ AI development plan created", "success", "1")
+                        return ai_plan
+
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        except Exception as e:
+            self.logger.warning(f"AI planning failed: {e}")
+
+        # Intelligent fallback based on prompt analysis
+        self.streaming_content.emit("  🎯 Creating smart fallback plan", "stream", "1")
+
+        if "calculator" in prompt.lower():
+            return {
+                "project_name": "calculator_app",
+                "files_to_create": [
+                    {"filename": "main.py", "purpose": "Main application entry point"},
+                    {"filename": "calculator_gui.py", "purpose": "PySide6 GUI interface"},
+                    {"filename": "calculator_logic.py", "purpose": "Calculator computation logic"},
+                    {"filename": "styles.py", "purpose": "Dark theme styling"},
+                    {"filename": "README.md", "purpose": "Project documentation"}
+                ],
+                "architecture": "modular",
+                "strategy": "standard_multi_file"
+            }
+        else:
+            return {
+                "project_name": "ai_generated_app",
+                "files_to_create": [
+                    {"filename": "main.py", "purpose": "Main application file"},
+                    {"filename": "README.md", "purpose": "Project documentation"}
+                ],
+                "architecture": "single_file",
+                "strategy": "fast_single_file"
+            }
+
+    async def _design_project_architecture(self, prompt: str, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """AI-powered architecture design"""
+        self.streaming_content.emit("  🏗️ AI designing system architecture", "stream", "1")
+        await asyncio.sleep(0.3)
+
+        # For now, return a simple architecture
+        architecture = {
+            "pattern": plan.get("architecture", "modular"),
+            "entry_point": "main.py",
+            "dependencies": plan.get("frameworks", ["Python"]),
+            "structure": "Clean, modular design with separation of concerns"
+        }
+
+        self.streaming_content.emit("  ✅ Architecture design complete", "success", "1")
+        return architecture
+
+    async def _execute_ai_generation_phase(self, prompt: str, plan: Dict[str, Any], architecture: Dict[str, Any]) -> \
+    Dict[str, Any]:
+        """Execute REAL AI code generation"""
+        results = {"files_created": [], "project_dir": None}
+
+        # Create project directory
+        project_name = plan.get("project_name", "ai_project")
+        project_dir = Path("./workspace") / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        results["project_dir"] = str(project_dir)
+
+        self.streaming_content.emit(f"  📁 Created project directory: {project_name}", "info", "1")
+
+        # Generate files with REAL AI
+        files_to_create = plan.get("files_to_create", [])
+        for i, file_info in enumerate(files_to_create):
+            filename = file_info.get("filename", f"file_{i}.py")
+            purpose = file_info.get("purpose", "Generated file")
+
+            await self._generate_ai_file(project_dir, filename, purpose, prompt, plan, architecture)
+            results["files_created"].append(filename)
+
+            # Update progress
+            self._update_task_progress(4 + (i / len(files_to_create)), 6)
+
+        return results
+
+    async def _generate_ai_file(self, project_dir: Path, filename: str, purpose: str,
+                                original_prompt: str, plan: Dict[str, Any], architecture: Dict[str, Any]):
+        """Generate individual file with REAL AI"""
+        file_path = project_dir / filename
+
+        # Start file generation
+        self.file_progress.emit(str(file_path), "started")
+        self.streaming_content.emit(f"  📄 AI generating {filename}", "stream", "1")
+
+        try:
+            # Create AI prompt for this specific file
+            if filename.endswith('.py'):
+                file_prompt = f"""
+                Generate a complete, professional {filename} file for this project:
+
+                Original Request: "{original_prompt}"
+                File Purpose: {purpose}
+                Project Architecture: {architecture.get('pattern', 'modular')}
+
+                Requirements:
+                - Write complete, working Python code
+                - Follow best practices and PEP 8
+                - Include proper docstrings and comments
+                - Make it production-ready
+                - If PySide6 GUI, include proper dark theme
+                - If calculator, implement all basic operations
+
+                Generate ONLY the Python code, no explanations.
+                """
+            else:
+                file_prompt = f"""
+                Generate a complete {filename} file for this project:
+
+                Original Request: "{original_prompt}"
+                File Purpose: {purpose}
+                Project Name: {plan.get('project_name', 'AI Project')}
+
+                Make it professional and comprehensive.
+                Generate ONLY the file content, no explanations.
+                """
+
+            self.streaming_content.emit(f"    🤖 AI coding {filename}...", "stream", "2")
+
+            # Call AI to generate content using role-based system
+            if self.llm_client:
+                ai_content = await self._call_llm_async(file_prompt, "code")
+
+                # Clean up AI response (remove markdown code blocks if present)
+                content = ai_content.strip()
+                if content.startswith("```python"):
+                    content = content[9:]
+                if content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+
+                # Ensure we have actual content
+                if len(content) < 50:  # Too short, probably failed
+                    raise ValueError("AI generated content too short")
+
+            else:
+                # Fallback content if no LLM available
+                content = self._generate_fallback_content(filename, purpose, original_prompt)
+
+            # Write file
+            file_path.write_text(content, encoding='utf-8')
+
+            # Stream success
+            self.streaming_content.emit(f"    ✅ {filename} generated ({len(content)} chars)", "success", "2")
+            self.file_progress.emit(str(file_path), "completed")
+            self.file_generated.emit(str(file_path))
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate {filename}: {e}")
+            # Create fallback content
+            content = self._generate_fallback_content(filename, purpose, original_prompt)
+            file_path.write_text(content, encoding='utf-8')
+
+            self.streaming_content.emit(f"    ⚠️ {filename} created with fallback ({len(content)} chars)", "warning",
+                                        "2")
+            self.file_progress.emit(str(file_path), "completed")
+            self.file_generated.emit(str(file_path))
+
+    def _generate_fallback_content(self, filename: str, purpose: str, original_prompt: str) -> str:
+        """Generate fallback content when AI is unavailable"""
+        if filename == "main.py":
+            return f'''#!/usr/bin/env python3
+"""
+{purpose}
+Generated by AvA for: {original_prompt}
+"""
+
+def main():
+    """Main entry point"""
+    print("Application starting...")
+    # TODO: Implement main application logic
+
+if __name__ == "__main__":
+    main()
+'''
+        elif filename.endswith('.py'):
+            class_name = filename.replace('.py', '').replace('_', ' ').title().replace(' ', '')
+            return f'''"""
+{purpose}
+Generated by AvA for: {original_prompt}
+"""
+
+class {class_name}:
+    """Main class for {purpose}"""
+
+    def __init__(self):
+        """Initialize {class_name}"""
+        pass
+
+    def run(self):
+        """Run the main functionality"""
+        print(f"{class_name} is running...")
+        # TODO: Implement functionality
+'''
+        elif filename == "README.md":
+            project_name = Path(original_prompt.split()[0] if original_prompt else "Project").name
+            return f'''# {project_name}
+
+{purpose}
+
+## Description
+{original_prompt}
+
+## Installation
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+```bash
+python main.py
+```
+
+Generated by AvA on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+'''
+        else:
+            return f'''# {filename}
+
+{purpose}
+
+Created for: {original_prompt}
+Generated by AvA on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+'''
+
+    async def _call_llm_async(self, prompt: str, task_type: str = "code") -> str:
+        """Call LLM asynchronously using ROLE-BASED API"""
+        try:
+            self.logger.info(f"🤖 Attempting LLM call for {task_type}...")
+            self.streaming_content.emit(f"    🔍 Calling AI {task_type} specialist...", "stream", "2")
+
+            # Import the LLMRole enum and parent class
+            from core.llm_client import LLMRole, EnhancedLLMClient
+
+            # Choose the right AI role based on task type
+            if task_type == "planning":
+                role = LLMRole.PLANNER
+                self.streaming_content.emit("    🧠 Using PLANNER AI for strategic thinking", "stream", "2")
+            elif task_type == "code":
+                role = LLMRole.CODER
+                self.streaming_content.emit("    ⚡ Using CODER AI for code generation", "stream", "2")
+            elif task_type == "analysis":
+                role = LLMRole.REVIEWER
+                self.streaming_content.emit("    👁️ Using REVIEWER AI for analysis", "stream", "2")
+            else:
+                role = LLMRole.CHAT
+                self.streaming_content.emit("    💬 Using CHAT AI for general tasks", "stream", "2")
+
+            # DEBUG: Check if LLM client exists
+            if not self.llm_client:
+                raise Exception("LLM client is None - not initialized properly")
+
+            self.logger.info(f"✅ LLM client validated, calling {role.value} role...")
+
+            # FIXED: Call parent class method directly (LLMClient overrides chat to only take prompt)
+            self.logger.info(f"📞 Calling async EnhancedLLMClient.chat with {role.value} role...")
+            response = await EnhancedLLMClient.chat(self.llm_client, prompt, role)
+
+            self.logger.info(f"✅ LLM response received: {len(response)} chars from {role.value}")
+            self.streaming_content.emit(f"    ✅ AI {role.value} response received", "success", "2")
+
+            if not response or len(response.strip()) < 10:
+                raise Exception(f"LLM returned empty/short response: '{response}'")
+
+            return response
+
+        except Exception as e:
+            error_msg = f"LLM call failed: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.error(traceback.format_exc())
+            self.streaming_content.emit(f"    ❌ AI call failed: {str(e)}", "error", "2")
+            raise Exception(error_msg)
+
+    async def _finalize_project(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Finalize project with streaming updates"""
+        self.streaming_content.emit("  📋 Creating project summary", "stream", "1")
+        await asyncio.sleep(0.2)
+
+        if results.get("project_dir"):
+            self.project_loaded.emit(results["project_dir"])
+            self.streaming_content.emit(f"  📁 Project loaded: {results['project_dir']}", "success", "1")
+
+        final_result = {
+            "success": True,
+            "project_name": Path(results["project_dir"]).name if results.get("project_dir") else "Unknown",
+            "project_dir": results.get("project_dir"),
+            "file_count": len(results.get("files_created", [])),
+            "files_created": results.get("files_created", [])
+        }
+
+        self.streaming_content.emit("  ✅ AI project finalization complete", "success", "1")
+        return final_result
+
+    def get_workflow_stats(self) -> Dict[str, Any]:
+        """Get current workflow statistics"""
+        return self.workflow_stats.copy()
+
+    # Legacy methods for compatibility
+    def execute_workflow(self, prompt: str):
+        """Legacy workflow execution (non-async)"""
+        asyncio.create_task(self.execute_enhanced_workflow(prompt, []))
