@@ -1,8 +1,9 @@
-# gui/main_window.py - Enhanced with Feedback Panel and AI Collaboration
+# gui/main_window.py - Enhanced with Conversation Context and AI Collaboration
 
 import asyncio
 import inspect
 import html  # For escaping text in chat display
+from datetime import datetime
 
 from PySide6.QtCore import Signal, Slot, QTimer, Qt
 from PySide6.QtWidgets import (
@@ -191,6 +192,7 @@ class ChatInterface(QWidget):
 
 class AvAMainWindow(QMainWindow):
     workflow_requested = Signal(str)
+    workflow_requested_with_context = Signal(str, list)  # NEW: Enhanced signal with conversation context
     new_project_requested = Signal()
     feedback_settings_changed = Signal(dict)
     user_feedback_added = Signal(str, str, int, str)
@@ -199,6 +201,10 @@ class AvAMainWindow(QMainWindow):
     def __init__(self, ava_app=None, config=None):
         super().__init__()
         self.ava_app = ava_app
+
+        # NEW: Store conversation history for enhanced context
+        self.conversation_history = []
+
         self.show_feedback_panel = FEEDBACK_PANEL_AVAILABLE
         title = "AvA - Enhanced AI Development Assistant"
         if FEEDBACK_PANEL_AVAILABLE: title += " with AI Collaboration"
@@ -344,16 +350,29 @@ class AvAMainWindow(QMainWindow):
         self.chat_interface.chat_display.add_assistant_message("✅ Model configuration updated!")
 
     def handle_user_message(self, message: str):
+        """Enhanced message handling with conversation context"""
+        # Store the user message in conversation history
+        self.conversation_history.append({
+            "role": "user",
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Keep last 10 messages for context
+        if len(self.conversation_history) > 10:
+            self.conversation_history.pop(0)
+
         if self._is_build_request(message):
             if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
                 self.feedback_panel.clear_display()
                 self.feedback_panel.update_workflow_stage("initializing", "Starting enhanced workflow...")
-            self.workflow_requested.emit(message)
+
+            # CRITICAL FIX: Pass full conversation context
+            self.workflow_requested_with_context.emit(message, self.conversation_history.copy())
         else:
             self._handle_casual_chat(message)
 
     def _is_build_request(self, prompt: str) -> bool:
-        # ... (implementation remains the same)
         prompt_lower = prompt.lower().strip()
         casual_phrases = ['hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay', 'yes', 'no', 'sure', 'cool',
                           'nice', 'good', 'great']
@@ -369,7 +388,6 @@ class AvAMainWindow(QMainWindow):
         return has_build_keyword and is_substantial
 
     def _handle_casual_chat(self, message: str):
-        # ... (implementation remains the same, ensures LLMRole.CHAT is used)
         if not self.ava_app or not self.ava_app.llm_client:
             self.chat_interface.chat_display.add_assistant_message("Sorry, LLM client is not available right now.")
             return
@@ -379,11 +397,10 @@ class AvAMainWindow(QMainWindow):
 You are AvA, a friendly AI development assistant with specialized AI agents. User said: "{message}"
 Respond naturally. Capabilities: Planner, Coder, Assembler, and Reviewer AIs; micro-task workflow; {enhanced_features}knowledge base; iterative improvements.
 Keep responses conversational and brief unless asked for details.
-"""  # Added Reviewer to capabilities
-        asyncio.create_task(self._async_casual_chat(chat_prompt))
+"""
+        asyncio.create_task(self._async_casual_chat(chat_prompt, message))
 
-    async def _async_casual_chat(self, prompt: str):
-        # ... (implementation remains the same, uses LLMRole.CHAT)
+    async def _async_casual_chat(self, prompt: str, original_message: str):
         try:
             response_chunks = []
             llm_client = self.ava_app.llm_client
@@ -395,17 +412,24 @@ Keep responses conversational and brief unless asked for details.
                     response_chunks.append(chunk)
             response = ''.join(response_chunks).strip()
             self.chat_interface.chat_display.add_assistant_message(response)
+
+            # Store assistant response in conversation history
+            self.conversation_history.append({
+                "role": "assistant",
+                "message": response,
+                "timestamp": datetime.now().isoformat()
+            })
+
             self._update_chat_llm_status()
         except Exception as e:
             self.chat_interface.chat_display.add_assistant_message(f"Sorry, I encountered an error: {e}")
             self.chat_interface.update_llm_status("LLM: Error", "error")
 
     def _update_initial_ui_status(self):
-        # ... (implementation mostly same, ensure _update_specialists_status is called)
         self._update_chat_llm_status()
-        self._update_specialists_status()  # This will now include Reviewer if configured
-        self._update_model_config_display()  # This will update sidebar with all roles
-        # RAG status update logic ... (remains same)
+        self._update_specialists_status()
+        self._update_model_config_display()
+
         rag_text = "RAG: Unknown"
         rag_color_key_for_indicator = "offline"
         if self.ava_app:
@@ -434,7 +458,6 @@ Keep responses conversational and brief unless asked for details.
                     self.feedback_panel.update_available_files(available_files)
 
     def _update_chat_llm_status(self):
-        # ... (implementation remains the same, uses LLMRole.CHAT.value for lookup)
         llm_model_text = "LLM: Unknown"
         llm_indicator_status = "offline"
         if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
@@ -445,7 +468,7 @@ Keep responses conversational and brief unless asked for details.
                 if model_config:
                     chat_model_name = model_config.model
                     current_temp = model_config.temperature
-                    llm_model_text = f"Chat: {chat_model_name.split('/')[-1][:15]} (T:{current_temp:.1f})"  # Shorter
+                    llm_model_text = f"Chat: {chat_model_name.split('/')[-1][:15]} (T:{current_temp:.1f})"
                     llm_indicator_status = "ready"
         self.chat_interface.update_llm_status(llm_model_text, llm_indicator_status)
 
@@ -454,13 +477,13 @@ Keep responses conversational and brief unless asked for details.
         specialists_text = "AI Specialists: Unknown"
         specialists_status = "offline"
         if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str, str]
+            assignments = self.ava_app.llm_client.get_role_assignments()
 
             def get_short_name(role_value_str):
                 model_key = assignments.get(role_value_str)
                 if not model_key or not hasattr(self.ava_app.llm_client, 'models'): return 'N/A'
                 mc = self.ava_app.llm_client.models.get(model_key)
-                return mc.model.split('/')[-1][:6] if mc else 'N/A'  # Even shorter
+                return mc.model.split('/')[-1][:6] if mc else 'N/A'
 
             p_model = get_short_name(LLMRole.PLANNER.value)
             c_model = get_short_name(LLMRole.CODER.value)
@@ -469,7 +492,7 @@ Keep responses conversational and brief unless asked for details.
 
             specialists_text = f"P:{p_model} C:{c_model} A:{a_model} R:{r_model}"
             all_assigned = all(m != 'N/A' for m in [p_model, c_model, a_model, r_model])
-            specialists_status = "ready" if all_assigned else "working"  # "working" if some are N/A but not all
+            specialists_status = "ready" if all_assigned else "working"
             if not any(m != 'N/A' for m in [p_model, c_model, a_model, r_model]):
                 specialists_status = "offline"
 
@@ -480,10 +503,10 @@ Keep responses conversational and brief unless asked for details.
         if not (self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client,
                                                                      'get_role_assignments')): return
 
-        assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str,str]
-        config_summary = {}  # This will have string keys for roles
+        assignments = self.ava_app.llm_client.get_role_assignments()
+        config_summary = {}
 
-        for role_enum_member in LLMRole:  # Iterate through all LLMRole enum members
+        for role_enum_member in LLMRole:
             role_str_key = role_enum_member.value
             model_name_key = assignments.get(role_str_key)
             if model_name_key and hasattr(self.ava_app.llm_client, 'models'):
@@ -496,7 +519,6 @@ Keep responses conversational and brief unless asked for details.
         self.sidebar.update_model_status_display(config_summary)
 
     def _handle_sidebar_action(self, action: str):
-        # ... (implementation remains the same)
         if not self.ava_app: print(f"AvAApp not available for action: {action}"); return
         if action == "open_terminal" or action == "view_log":
             self.ava_app._open_terminal()
@@ -507,6 +529,8 @@ Keep responses conversational and brief unless asked for details.
         elif action == "new_session":
             self.chat_interface.chat_display.clear()
             self.chat_interface.chat_display.add_assistant_message("New session started! How can I help you today?")
+            # Clear conversation history for new session
+            self.conversation_history.clear()
             if hasattr(self.ava_app, 'current_session'): self.ava_app.current_session = "New Session"
             self.update_project_display(
                 self.ava_app.current_project if hasattr(self.ava_app, 'current_project') else "Default Project")
@@ -519,7 +543,6 @@ Keep responses conversational and brief unless asked for details.
             print(f"Unknown sidebar action: {action}")
 
     def _handle_rag_scan_directory(self):
-        # ... (implementation remains the same)
         if self.ava_app and self.ava_app.rag_manager:
             self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
         else:
@@ -527,7 +550,6 @@ Keep responses conversational and brief unless asked for details.
 
     @Slot(str)
     def on_workflow_started(self, prompt: str):
-        # ... (implementation remains the same)
         self.chat_interface.update_llm_status("Workflow: Starting...", "working")
         self.chat_interface.update_specialists_status("AI Specialists: Active", "working")
         if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'):
@@ -535,7 +557,6 @@ Keep responses conversational and brief unless asked for details.
 
     @Slot(dict)
     def on_workflow_completed(self, result: dict):
-        # ... (implementation remains the same)
         success = result.get("success", False)
         if success:
             project_name = result.get("project_name", "your project")
@@ -544,25 +565,49 @@ Keep responses conversational and brief unless asked for details.
             if FEEDBACK_PANEL_AVAILABLE: message += " Check AI Monitor for details."
             self.chat_interface.chat_display.add_assistant_message(message)
             self.chat_interface.update_specialists_status("AI Specialists: Completed", "success")
+
+            # Store completion in conversation history
+            self.conversation_history.append({
+                "role": "assistant",
+                "message": message,
+                "timestamp": datetime.now().isoformat()
+            })
+
             if FEEDBACK_PANEL_AVAILABLE and hasattr(self, 'feedback_panel'): self.feedback_panel.show_workflow_complete(
                 result)
         else:
             error_msg = result.get("error", "Unknown error.")
-            self.chat_interface.chat_display.add_assistant_message(f"❌ Enhanced workflow failed: {error_msg}")
+            failure_message = f"❌ Enhanced workflow failed: {error_msg}"
+            self.chat_interface.chat_display.add_assistant_message(failure_message)
             self.chat_interface.update_specialists_status("AI Specialists: Error", "error")
+
+            # Store failure in conversation history
+            self.conversation_history.append({
+                "role": "assistant",
+                "message": failure_message,
+                "timestamp": datetime.now().isoformat()
+            })
+
         self._update_chat_llm_status()
 
     @Slot(str, str)
     def on_app_error_occurred(self, component: str, error_message: str):
-        # ... (implementation remains the same)
-        self.chat_interface.chat_display.add_assistant_message(f"⚠️ Error in {component}: {error_message}")
-        if "workflow" in component.lower() or "specialist" in component.lower(): self.chat_interface.update_specialists_status(
-            "AI Specialists: Error", "error")
+        error_text = f"⚠️ Error in {component}: {error_message}"
+        self.chat_interface.chat_display.add_assistant_message(error_text)
+        if "workflow" in component.lower() or "specialist" in component.lower():
+            self.chat_interface.update_specialists_status("AI Specialists: Error", "error")
+
+        # Store error in conversation history
+        self.conversation_history.append({
+            "role": "assistant",
+            "message": error_text,
+            "timestamp": datetime.now().isoformat()
+        })
+
         self._update_chat_llm_status()
 
     @Slot(str, str)
     def update_rag_status_display(self, status_text: str, color_or_key: str):
-        # ... (implementation remains the same)
         self.chat_interface.update_rag_ui_status(status_text, color_or_key)
         text_color_hex = "#888888"
         if color_or_key.startswith("#"):
@@ -576,7 +621,6 @@ Keep responses conversational and brief unless asked for details.
 
     @Slot(str)
     def update_project_display(self, project_name_or_path: str):
-        # ... (implementation updated to include Reviewer in title)
         project_name = project_name_or_path
         if "/" in project_name or "\\" in project_name: from pathlib import Path; project_name = Path(
             project_name_or_path).name
@@ -586,23 +630,23 @@ Keep responses conversational and brief unless asked for details.
         base_title = f"AvA [{project_name}] - Session: {session_name}"
 
         if self.ava_app and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()  # Dict[str,str]
+            assignments = self.ava_app.llm_client.get_role_assignments()
 
             def get_short_model_name(role_value_str_key):
                 model_key = assignments.get(role_value_str_key)
                 if not model_key or not hasattr(self.ava_app.llm_client, 'models'): return 'N/A'
                 mc = self.ava_app.llm_client.models.get(model_key)
-                return mc.model.split('/')[-1][:6] if mc else 'N/A'  # Short name
+                return mc.model.split('/')[-1][:6] if mc else 'N/A'
 
             p_short = get_short_model_name(LLMRole.PLANNER.value)
             c_short = get_short_model_name(LLMRole.CODER.value)
             a_short = get_short_model_name(LLMRole.ASSEMBLER.value)
-            r_short = get_short_model_name(LLMRole.REVIEWER.value)  # Added Reviewer
+            r_short = get_short_model_name(LLMRole.REVIEWER.value)
 
-            title_suffix = f" (P:{p_short} C:{c_short} A:{a_short} R:{r_short})"  # Updated title
+            title_suffix = f" (P:{p_short} C:{c_short} A:{a_short} R:{r_short})"
             if FEEDBACK_PANEL_AVAILABLE and hasattr(self.ava_app,
                                                     'use_enhanced_workflow') and self.ava_app.use_enhanced_workflow:
-                title_suffix = f" (Enhanced Workflow Mode)" + title_suffix  # Simpler enhanced mode indication
+                title_suffix = f" (Enhanced Workflow Mode)" + title_suffix
 
             base_title += title_suffix
         self.setWindowTitle(base_title)

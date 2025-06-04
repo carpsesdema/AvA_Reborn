@@ -1,4 +1,4 @@
-# core/llm_client.py - Enhanced Multi-Model LLM Client
+# core/llm_client.py - FIXED ASYNC GENERATOR CLEANUP
 
 import os
 from pathlib import Path
@@ -327,26 +327,47 @@ class EnhancedLLMClient:
 
         print(
             f"Streaming - Role: {role.value} Model: {model_config.provider}/{model_config.model} (Temp: {model_config.temperature}) Pers: '{personality[:30]}...'")
+
+        # FIXED: Proper async generator cleanup
+        stream_generator = None
         try:
             if model_config.provider == "gemini":
-                stream_func = self._stream_gemini
+                stream_generator = self._stream_gemini(prompt, model_config, personality)
             elif model_config.provider == "openai":
-                stream_func = self._stream_openai
+                stream_generator = self._stream_openai(prompt, model_config, personality)
             elif model_config.provider == "anthropic":
-                stream_func = self._stream_anthropic
+                stream_generator = self._stream_anthropic(prompt, model_config, personality)
             elif model_config.provider == "ollama":
-                stream_func = self._stream_ollama
+                stream_generator = self._stream_ollama(prompt, model_config, personality)
             elif model_config.provider == "deepseek":
-                stream_func = self._stream_deepseek
+                stream_generator = self._stream_deepseek(prompt, model_config, personality)
             else:
                 print(f"Error: Unknown provider {model_config.provider} for streaming.")
-                yield self._fallback_response(
-                    prompt, role); return
+                yield self._fallback_response(prompt, role)
+                return
 
-            async for chunk in stream_func(prompt, model_config, personality): yield chunk
+            # CRITICAL FIX: Proper generator consumption with cleanup
+            async for chunk in stream_generator:
+                yield chunk
+
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit properly
+            if stream_generator and hasattr(stream_generator, 'aclose'):
+                try:
+                    await stream_generator.aclose()
+                except Exception:
+                    pass
+            raise  # Re-raise GeneratorExit
         except Exception as e:
             print(f"Streaming API call for role {role.value} failed: {e}")
             yield self._fallback_response(prompt, role)
+        finally:
+            # CRITICAL: Ensure cleanup happens
+            if stream_generator and hasattr(stream_generator, 'aclose'):
+                try:
+                    await stream_generator.aclose()
+                except Exception:
+                    pass
 
     async def _call_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
@@ -371,19 +392,35 @@ class EnhancedLLMClient:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:streamGenerateContent?key={config.api_key}&alt=sse"
         payload = {"contents": [{"parts": [{"text": final_prompt}]}],
                    "generationConfig": {"temperature": config.temperature, "maxOutputTokens": config.max_tokens}}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers={"Content-Type": "application/json"}, json=payload) as response:
-                if response.status != 200: raise Exception(
-                    f"Gemini API stream error {response.status}: {await response.text()}")
-                async for line in response.content:
-                    line_str = line.decode('utf-8').strip()
-                    if line_str.startswith("data: "):
-                        try:
-                            data = json.loads(line_str[6:])
-                            if data.get("candidates") and data["candidates"][0].get("content", {}).get("parts"):
-                                yield data["candidates"][0]["content"]["parts"][0]["text"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: Gemini stream JSON decode error: {line_str}")
+
+        # FIXED: Proper cleanup for async generators
+        session = None
+        response = None
+        try:
+            session = aiohttp.ClientSession()
+            response = await session.post(url, headers={"Content-Type": "application/json"}, json=payload)
+
+            if response.status != 200:
+                raise Exception(f"Gemini API stream error {response.status}: {await response.text()}")
+
+            async for line in response.content:
+                line_str = line.decode('utf-8').strip()
+                if line_str.startswith("data: "):
+                    try:
+                        data = json.loads(line_str[6:])
+                        if data.get("candidates") and data["candidates"][0].get("content", {}).get("parts"):
+                            yield data["candidates"][0]["content"]["parts"][0]["text"]
+                    except json.JSONDecodeError:
+                        print(f"Warning: Gemini stream JSON decode error: {line_str}")
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit
+            raise
+        finally:
+            # CRITICAL: Always cleanup
+            if response:
+                response.close()
+            if session:
+                await session.close()
 
     async def _call_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
@@ -408,21 +445,38 @@ class EnhancedLLMClient:
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
                    "max_tokens": config.max_tokens, "stream": True}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                if response.status != 200: raise Exception(
-                    f"OpenAI API stream error {response.status}: {await response.text()}")
-                async for line in response.content:
-                    line_str = line.decode('utf-8').strip()
-                    if line_str.startswith("data: "):
-                        data_content = line_str[6:]
-                        if data_content == "[DONE]": break
-                        try:
-                            chunk = json.loads(data_content)
-                            if chunk["choices"][0].get("delta", {}).get("content"): yield chunk["choices"][0]["delta"][
-                                "content"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: OpenAI stream JSON decode error: {line_str}")
+
+        # FIXED: Proper cleanup for async generators
+        session = None
+        response = None
+        try:
+            session = aiohttp.ClientSession()
+            response = await session.post(url, headers=headers, json=payload)
+
+            if response.status != 200:
+                raise Exception(f"OpenAI API stream error {response.status}: {await response.text()}")
+
+            async for line in response.content:
+                line_str = line.decode('utf-8').strip()
+                if line_str.startswith("data: "):
+                    data_content = line_str[6:]
+                    if data_content == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_content)
+                        if chunk["choices"][0].get("delta", {}).get("content"):
+                            yield chunk["choices"][0]["delta"]["content"]
+                    except json.JSONDecodeError:
+                        print(f"Warning: OpenAI stream JSON decode error: {line_str}")
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit
+            raise
+        finally:
+            # CRITICAL: Always cleanup
+            if response:
+                response.close()
+            if session:
+                await session.close()
 
     async def _call_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
@@ -446,21 +500,37 @@ class EnhancedLLMClient:
         payload = {"model": config.model, "max_tokens": config.max_tokens, "temperature": config.temperature,
                    "messages": [{"role": "user", "content": prompt}], "stream": True}
         if personality: payload["system"] = personality
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                if response.status != 200: raise Exception(
-                    f"Anthropic API stream error {response.status}: {await response.text()}")
-                async for line in response.content:
-                    line_str = line.decode('utf-8').strip()
-                    if line_str.startswith("data: "):
-                        try:
-                            data = json.loads(line_str[6:])
-                            if data.get("type") == "content_block_delta" and data["delta"]["type"] == "text_delta":
-                                yield data["delta"]["text"]
-                            elif data.get("type") == "message_stop":
-                                break
-                        except json.JSONDecodeError:
-                            print(f"Warning: Anthropic stream JSON decode error: {line_str}")
+
+        # FIXED: Proper cleanup for async generators
+        session = None
+        response = None
+        try:
+            session = aiohttp.ClientSession()
+            response = await session.post(url, headers=headers, json=payload)
+
+            if response.status != 200:
+                raise Exception(f"Anthropic API stream error {response.status}: {await response.text()}")
+
+            async for line in response.content:
+                line_str = line.decode('utf-8').strip()
+                if line_str.startswith("data: "):
+                    try:
+                        data = json.loads(line_str[6:])
+                        if data.get("type") == "content_block_delta" and data["delta"]["type"] == "text_delta":
+                            yield data["delta"]["text"]
+                        elif data.get("type") == "message_stop":
+                            break
+                    except json.JSONDecodeError:
+                        print(f"Warning: Anthropic stream JSON decode error: {line_str}")
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit
+            raise
+        finally:
+            # CRITICAL: Always cleanup
+            if response:
+                response.close()
+            if session:
+                await session.close()
 
     async def _call_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
@@ -481,16 +551,35 @@ class EnhancedLLMClient:
         url = f"{config.base_url}/api/generate"
         payload = {"model": config.model, "prompt": final_prompt, "stream": True,
                    "options": {"temperature": config.temperature, "num_predict": config.max_tokens}}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                if response.status != 200: raise Exception(
-                    f"Ollama API stream error {response.status}: {await response.text()}")
-                async for line in response.content:
-                    try:
-                        if line: data = json.loads(line.decode('utf-8')); yield data.get("response", "");
-                        if data.get("done"): break
-                    except json.JSONDecodeError:
-                        print(f"Warning: Ollama stream JSON decode error: {line.decode('utf-8', errors='ignore')}")
+
+        # FIXED: Proper cleanup for async generators
+        session = None
+        response = None
+        try:
+            session = aiohttp.ClientSession()
+            response = await session.post(url, json=payload)
+
+            if response.status != 200:
+                raise Exception(f"Ollama API stream error {response.status}: {await response.text()}")
+
+            async for line in response.content:
+                try:
+                    if line:
+                        data = json.loads(line.decode('utf-8'))
+                        yield data.get("response", "")
+                        if data.get("done"):
+                            break
+                except json.JSONDecodeError:
+                    print(f"Warning: Ollama stream JSON decode error: {line.decode('utf-8', errors='ignore')}")
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit
+            raise
+        finally:
+            # CRITICAL: Always cleanup
+            if response:
+                response.close()
+            if session:
+                await session.close()
 
     async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
@@ -515,21 +604,38 @@ class EnhancedLLMClient:
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
                    "max_tokens": config.max_tokens, "stream": True}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                if response.status != 200: raise Exception(
-                    f"DeepSeek API stream error {response.status}: {await response.text()}")
-                async for line in response.content:
-                    line_str = line.decode('utf-8').strip()
-                    if line_str.startswith("data: "):
-                        data_content = line_str[6:]
-                        if data_content == "[DONE]": break
-                        try:
-                            chunk = json.loads(data_content)
-                            if chunk["choices"][0].get("delta", {}).get("content"): yield chunk["choices"][0]["delta"][
-                                "content"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: DeepSeek stream JSON decode error: {line_str}")
+
+        # FIXED: Proper cleanup for async generators
+        session = None
+        response = None
+        try:
+            session = aiohttp.ClientSession()
+            response = await session.post(url, headers=headers, json=payload)
+
+            if response.status != 200:
+                raise Exception(f"DeepSeek API stream error {response.status}: {await response.text()}")
+
+            async for line in response.content:
+                line_str = line.decode('utf-8').strip()
+                if line_str.startswith("data: "):
+                    data_content = line_str[6:]
+                    if data_content == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_content)
+                        if chunk["choices"][0].get("delta", {}).get("content"):
+                            yield chunk["choices"][0]["delta"]["content"]
+                    except json.JSONDecodeError:
+                        print(f"Warning: DeepSeek stream JSON decode error: {line_str}")
+        except GeneratorExit:
+            # CRITICAL: Handle GeneratorExit
+            raise
+        finally:
+            # CRITICAL: Always cleanup
+            if response:
+                response.close()
+            if session:
+                await session.close()
 
     def _fallback_response(self, prompt: str, role: LLMRole) -> str:
         return f"# AvA Error: No {role.value} LLM available or API call failed.\n# Request: {prompt[:100]}...\n# Check config and API keys."
@@ -561,7 +667,8 @@ class LLMClient(EnhancedLLMClient):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+            loop = asyncio.new_event_loop();
+            asyncio.set_event_loop(loop)
         if loop.is_running():
             future = asyncio.run_coroutine_threadsafe(super().chat(prompt, LLMRole.CHAT), loop)
             return future.result(timeout=30)
@@ -569,4 +676,5 @@ class LLMClient(EnhancedLLMClient):
             return loop.run_until_complete(super().chat(prompt, LLMRole.CHAT))
 
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
-        async for chunk in super().stream_chat(prompt, role): yield chunk
+        async for chunk in super().stream_chat(prompt, role):
+            yield chunk

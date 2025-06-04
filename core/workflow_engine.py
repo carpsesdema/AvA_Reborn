@@ -1,13 +1,13 @@
-# core/workflow_engine.py - FIXED & OPTIMIZED for Smooth Operation
+# core/workflow_engine.py - Enhanced with Conversation Context Support
 
 import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List
 from PySide6.QtCore import QObject, Signal, QTimer
 
 from core.workflow_services import (
-    PlannerService, CoderService, WorkflowOrchestrator
+    EnhancedPlannerService, EnhancedCoderService, WorkflowOrchestrator
 )
 from core.assembler_service import AssemblerService
 
@@ -74,7 +74,7 @@ class ContextCache:
 
 
 class WorkflowEngine(QObject):
-    """🎼 Main Workflow Engine - OPTIMIZED for Smooth Streaming & Responsiveness"""
+    """🎼 Enhanced Workflow Engine with Conversation Context Intelligence"""
 
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
@@ -91,12 +91,12 @@ class WorkflowEngine(QObject):
         self.output_dir = Path("./generated_projects")
         self.output_dir.mkdir(exist_ok=True)
 
-        # Initialize modular AI services
-        self.planner_service = PlannerService(llm_client, rag_manager)
-        self.coder_service = CoderService(llm_client, rag_manager)
+        # Initialize ENHANCED modular AI services
+        self.planner_service = EnhancedPlannerService(llm_client, rag_manager)
+        self.coder_service = EnhancedCoderService(llm_client, rag_manager)
         self.assembler_service = AssemblerService(llm_client, rag_manager)
 
-        # Create orchestrator with the separate assembler
+        # Create enhanced orchestrator
         self.orchestrator = WorkflowOrchestrator(
             self.planner_service,
             self.coder_service,
@@ -127,22 +127,26 @@ class WorkflowEngine(QObject):
             self.code_viewer.file_changed.connect(self._on_file_changed)
 
     def _log_service_info(self):
-        """Log information about the modular services"""
-        self.terminal.log("🤖 Enhanced Modular AI Services Initialized:")
-        self.terminal.log("   🧠 PlannerService: High-level planning & review")
-        self.terminal.log("   ⚙️ CoderService: Parallel micro-task execution")
-        self.terminal.log("   📄 AssemblerService: Code assembly & integration")
-        self.terminal.log("   🎼 WorkflowOrchestrator: Parallel file processing")
+        """Log information about the enhanced modular services"""
+        self.terminal.log("🤖 Enhanced AI Services with Context Intelligence:")
+        self.terminal.log("   🧠 EnhancedPlannerService: Context-aware planning & review")
+        self.terminal.log("   ⚙️ EnhancedCoderService: Intelligent code generation")
+        self.terminal.log("   📄 AssemblerService: Professional code assembly")
+        self.terminal.log("   🎼 WorkflowOrchestrator: Context-driven workflow")
 
         if hasattr(self.llm_client, 'get_role_assignments'):
             assignments = self.llm_client.get_role_assignments()
-            self.terminal.log("🎯 Role Assignments:")
+            self.terminal.log("🎯 Enhanced Role Assignments:")
             self.terminal.log(f"   🧠 Planner: {assignments.get('planner', 'Not assigned')}")
             self.terminal.log(f"   ⚙️ Coder: {assignments.get('coder', 'Not assigned')}")
             self.terminal.log(f"   📄 Assembler: {assignments.get('assembler', 'Not assigned')}")
 
     def execute_workflow(self, user_prompt: str):
-        """FIXED: Execute the enhanced modular workflow with proper async handling"""
+        """Execute standard workflow (compatibility method)"""
+        self.execute_enhanced_workflow(user_prompt, [])
+
+    def execute_enhanced_workflow(self, user_prompt: str, conversation_history: List = None):
+        """Execute ENHANCED workflow with conversation context"""
 
         # Validation
         if not self._is_build_request(user_prompt):
@@ -151,18 +155,21 @@ class WorkflowEngine(QObject):
 
         # Check if workflow is already running
         if self.workflow_active:
-            self.terminal.log("⚠️ Workflow already running - please wait for completion")
+            self.terminal.log("⚠️ Enhanced workflow already running - please wait for completion")
             return
 
-        self.terminal.log("🚀 Starting Enhanced Modular Workflow...")
+        self.terminal.log("🚀 Starting Enhanced Context-Aware Workflow...")
         self.terminal.log(f"📝 Build request: {user_prompt}")
+
+        if conversation_history:
+            self.terminal.log(f"🧠 Using conversation context: {len(conversation_history)} messages")
 
         # Display system status
         cache_stats = self.context_cache.get_stats()
         self.terminal.log(f"📊 Context cache: {cache_stats['cache_size']} items, {cache_stats['hit_rate']:.1%} hit rate")
 
         if self.rag_manager and self.rag_manager.is_ready:
-            self.terminal.log("🧠 RAG system ready - enhancing all services")
+            self.terminal.log("🧠 RAG system ready - enhancing all services with 700k chunks")
         else:
             self.terminal.log("⚠️ RAG system not ready - using base knowledge")
 
@@ -177,31 +184,35 @@ class WorkflowEngine(QObject):
             "completed_tasks": 0
         }
 
-        # FIXED: Use asyncio.create_task instead of QThread
-        # This runs in the main qasync event loop, avoiding event loop conflicts
+        # ENHANCED: Use asyncio.create_task with conversation context
         try:
             self.current_workflow_task = asyncio.create_task(
-                self._execute_enhanced_workflow_async(user_prompt)
+                self._execute_enhanced_workflow_async(user_prompt, conversation_history or [])
             )
         except Exception as e:
-            self.terminal.log(f"❌ Failed to start workflow task: {e}")
+            self.terminal.log(f"❌ Failed to start enhanced workflow task: {e}")
             self.workflow_active = False
             self._update_workflow_stage("error", f"Failed to start: {e}")
 
-    async def _execute_enhanced_workflow_async(self, user_prompt: str):
-        """Enhanced async workflow with modular services - OPTIMIZED for smooth execution"""
+    async def _execute_enhanced_workflow_async(self, user_prompt: str, conversation_history: List):
+        """Enhanced async workflow with conversation context intelligence"""
         try:
             # Update workflow stage
-            self._update_workflow_stage("planning", "Initializing modular services...")
+            self._update_workflow_stage("planning", "Initializing context-aware services...")
 
             # OPTIMIZATION: Add small delays to allow UI updates
             await asyncio.sleep(0.1)
 
-            # Execute workflow using orchestrator
-            self._update_workflow_stage("generation", "Processing files in parallel...")
+            # Execute workflow using enhanced orchestrator with conversation context
+            self._update_workflow_stage("generation", "Processing with conversation intelligence...")
             await asyncio.sleep(0.1)  # Allow UI to update
 
-            result = await self.orchestrator.execute_workflow(user_prompt, self.output_dir)
+            # CRITICAL: Pass conversation history to orchestrator
+            result = await self.orchestrator.execute_workflow(
+                user_prompt,
+                self.output_dir,
+                conversation_history
+            )
 
             # Stage 4: Project finalization
             if result["success"]:
@@ -209,35 +220,42 @@ class WorkflowEngine(QObject):
                 await asyncio.sleep(0.1)  # Allow UI to update
                 self._setup_code_viewer_project(result)
 
-            self._update_workflow_stage("complete", "Modular workflow completed!")
-            self.terminal.log("✅ Enhanced modular workflow completed successfully!")
+            self._update_workflow_stage("complete", "Enhanced context-aware workflow completed!")
+
+            if result["success"]:
+                self.terminal.log("✅ Enhanced context-aware workflow completed successfully!")
+                self.terminal.log(
+                    f"📁 Generated: {result.get('project_name', 'Project')} with {result.get('file_count', 0)} files")
+            else:
+                self.terminal.log(f"❌ Enhanced workflow failed: {result.get('error', 'Unknown error')}")
 
             # OPTIMIZATION: Emit completion signal after small delay
             await asyncio.sleep(0.1)
             self.workflow_completed.emit(result)
 
         except asyncio.CancelledError:
-            self.terminal.log("⚠️ Workflow was cancelled")
-            self._update_workflow_stage("cancelled", "Workflow cancelled by user")
-            error_result = {"success": False, "error": "Workflow cancelled", "cancelled": True}
+            self.terminal.log("⚠️ Enhanced workflow was cancelled")
+            self._update_workflow_stage("cancelled", "Enhanced workflow cancelled by user")
+            error_result = {"success": False, "error": "Enhanced workflow cancelled", "cancelled": True}
             self.workflow_completed.emit(error_result)
 
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
 
-            self.terminal.log(f"❌ Enhanced workflow failed: {e}")
+            self.terminal.log(f"❌ Enhanced context-aware workflow failed: {e}")
             self.terminal.log("📝 Full error traceback:")
             # Split traceback into lines for better terminal display
             for line in error_traceback.split('\n'):
                 if line.strip():
                     self.terminal.log(f"   {line}")
 
-            self._update_workflow_stage("error", f"Workflow failed: {e}")
+            self._update_workflow_stage("error", f"Enhanced workflow failed: {e}")
             error_result = {
                 "success": False,
                 "error": str(e),
-                "traceback": error_traceback
+                "traceback": error_traceback,
+                "enhanced": True
             }
             self.workflow_completed.emit(error_result)
 
@@ -249,7 +267,7 @@ class WorkflowEngine(QObject):
     def cancel_workflow(self):
         """OPTIMIZATION: Allow users to cancel running workflows"""
         if self.current_workflow_task and not self.current_workflow_task.done():
-            self.terminal.log("🛑 Cancelling workflow...")
+            self.terminal.log("🛑 Cancelling enhanced workflow...")
             self.current_workflow_task.cancel()
             self.workflow_active = False
             return True
@@ -272,7 +290,7 @@ class WorkflowEngine(QObject):
         question_words = ['what', 'how', 'why', 'when', 'where', 'who']
         if any(prompt_lower.startswith(word) for word in question_words):
             build_question_patterns = ['how to build', 'how to create', 'how to make', 'what should i build']
-            if not any(pattern in prompt_lower for pattern in build_question_patterns):
+            if not any(pattern in build_question_patterns for pattern in build_question_patterns):
                 return False
 
         # Require explicit build keywords
@@ -341,11 +359,12 @@ class WorkflowEngine(QObject):
             "cache_stats": cache_stats,
             "workflow_active": self.workflow_active,
             "services": {
-                "planner": "ModularPlannerService",
-                "coder": "ParallelCoderService",
-                "assembler": "RobustAssemblerService",
-                "orchestrator": "ParallelWorkflowOrchestrator"
-            }
+                "planner": "EnhancedPlannerService",
+                "coder": "EnhancedCoderService",
+                "assembler": "AssemblerService",
+                "orchestrator": "EnhancedWorkflowOrchestrator"
+            },
+            "enhanced": True
         }
 
     def is_workflow_running(self) -> bool:
