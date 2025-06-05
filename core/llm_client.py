@@ -98,6 +98,16 @@ class EnhancedLLMClient:
         """Initialize available models with their configurations"""
         # User-specified Gemini models
         if os.getenv("GEMINI_API_KEY"):
+            # ADD THE NEW MODEL HERE!
+            self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
+                provider="gemini",
+                model="gemini-2.5-pro-preview-06-05",  # The new model name
+                api_key=os.getenv("GEMINI_API_KEY"),
+                temperature=0.3,
+                max_tokens=8000,
+                suitable_roles=[LLMRole.PLANNER, LLMRole.REVIEWER, LLMRole.CHAT]  # Great for high-level reasoning
+            )
+
             self.models["gemini-2.5-pro-preview-05-06"] = ModelConfig(
                 provider="gemini",
                 model="gemini-2.5-pro-preview-05-06",
@@ -662,12 +672,12 @@ class LLMClient(EnhancedLLMClient):
     def __init__(self):
         super().__init__()
 
-    def chat(self, prompt: str) -> str:  # Synchronous wrapper
+    def chat(self, prompt: str, **kwargs) -> str:  # Synchronous wrapper
         print("Warning: Synchronous LLMClient.chat() called. Prefer async.")
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop();
+            loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         if loop.is_running():
             future = asyncio.run_coroutine_threadsafe(super().chat(prompt, LLMRole.CHAT), loop)

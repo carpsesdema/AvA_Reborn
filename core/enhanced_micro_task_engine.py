@@ -16,9 +16,12 @@ class SimpleTaskSpec:
     """Streamlined task specification - focused on results"""
     id: str
     description: str
-    expected_lines: int
+    expected_lines: int  # We'll use a default for now or make it optional
     context: str
     exact_requirements: str
+    # ADDED: To carry over the component type specified by the Planner
+    component_type: Optional[str] = "unknown"
+    file_path: Optional[str] = None  # To associate task with its file
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -27,19 +30,16 @@ class SimpleTaskSpec:
             "expected_lines": self.expected_lines,
             "context": self.context,
             "exact_requirements": self.exact_requirements,
-            "type": "code_chunk"
+            "component_type": self.component_type,
+            "file_path": self.file_path,
+            "type": "code_chunk"  # Preserving original 'type' field for compatibility downstream
         }
 
 
 class StreamlinedMicroTaskEngine:
     """
     🚀 Streamlined Micro-Task Engine - RESULTS FOCUSED
-
-    Creates 3-5 logical code chunks with:
-    - Domain-aware context
-    - Professional-grade prompts
-    - Fast execution
-    - Real results
+    Dynamically creates micro-tasks based on detailed Planner output.
     """
 
     def __init__(self, llm_client, project_state_manager, domain_context_manager):
@@ -47,266 +47,195 @@ class StreamlinedMicroTaskEngine:
         self.project_state = project_state_manager
         self.domain_context = domain_context_manager
 
-    async def create_smart_tasks(self, file_path: str, file_spec: Dict[str, Any],
-                                 project_context: Dict[str, Any]) -> List[SimpleTaskSpec]:
-        """Create 3-5 logical code chunks with professional context"""
+    async def create_smart_tasks(self,
+                                 planner_json_plan: Dict[str, Any],
+                                 project_overall_context: Dict[str, Any]  # e.g., project type, RAG context
+                                 ) -> List[SimpleTaskSpec]:
+        """
+        Dynamically create SimpleTaskSpec objects based on the Planner's JSON output.
+        The Planner's JSON is expected to have a detailed breakdown of components
+        for each file, following the structure defined in the Planner's personality prompt.
+        """
+        all_micro_tasks: List[SimpleTaskSpec] = []
+        project_name = planner_json_plan.get("project_name", "default_project")
 
-        try:
-            # Detect domain
-            domain = self._detect_domain_fast(file_path, file_spec, project_context)
+        # The planner_json_plan structure is assumed to be:
+        # {
+        #   "project_name": "...",
+        #   "files": {
+        #     "file1.py": {
+        #       "purpose": "...",
+        #       "components": [
+        #         { "task_id": "func1", "description": "...", "component_type": "function",
+        #           "inputs": [...], "outputs": "...", "core_logic_steps": [...],
+        #           "error_conditions_to_handle": [...], "interactions": [...], "critical_notes": "..." },
+        #         // ... more components
+        #       ]
+        #     },
+        #     "file2.py": { ... }
+        #   }
+        # }
 
-            # Get domain-specific task template
-            if "gui" in domain or "calculator" in file_spec.get('description', '').lower():
-                return await self._create_gui_tasks(file_path, file_spec, project_context)
-            elif "api" in domain:
-                return await self._create_api_tasks(file_path, file_spec, project_context)
-            elif "cli" in domain:
-                return await self._create_cli_tasks(file_path, file_spec, project_context)
-            else:
-                return await self._create_generic_tasks(file_path, file_spec, project_context)
+        files_to_process = planner_json_plan.get("files", {})
+        if not files_to_process:
+            print("[ERROR] Planner provided no files in the plan. Using fallback task generation.")
+            # Create a single fallback task if the planner's output is not as expected.
+            # This needs a defined 'file_spec' which isn't directly available here.
+            # For a true fallback, this engine might need more context or the calling workflow
+            # should handle the empty plan from the Planner.
+            # For now, let's assume the workflow handles an empty task list.
+            return self._create_fallback_tasks_for_project(planner_json_plan)
 
-        except Exception as e:
-            print(f"[ERROR] Task creation failed: {e}")
-            return self._create_fallback_tasks(file_path, file_spec)
+        for file_path_str, file_spec in files_to_process.items():
+            file_purpose = file_spec.get("purpose", f"Functionality for {file_path_str}")
+            components = file_spec.get("components", [])
 
-    def _detect_domain_fast(self, file_path: str, file_spec: Dict, project_context: Dict) -> str:
-        """Fast domain detection"""
-        description = (file_spec.get('description', '') + ' ' + file_path).lower()
+            if not components:
+                # If Planner didn't break down components for a file, create one umbrella task.
+                print(f"[INFO] No components detailed by Planner for {file_path_str}. Creating umbrella task.")
+                umbrella_task = self._create_umbrella_task_for_file(
+                    file_path_str,
+                    file_purpose,
+                    project_name,
+                    file_spec.get("description", file_purpose)  # Use file_spec.description if available
+                )
+                all_micro_tasks.append(umbrella_task)
+                continue
 
-        if any(word in description for word in ['gui', 'calculator', 'pyside', 'tkinter', 'qt']):
-            return "gui"
-        elif any(word in description for word in ['api', 'flask', 'fastapi', 'django']):
-            return "api"
-        elif any(word in description for word in ['cli', 'command', 'script']):
-            return "cli"
-        else:
-            return "generic"
+            for i, component_spec in enumerate(components):
+                task_id = component_spec.get("task_id", f"comp_{i}")
+                full_task_id = f"{Path(file_path_str).stem}_{task_id}"
+                description = component_spec.get("description", "Implement component.")
+                component_type = component_spec.get("component_type", "unknown")
 
-    async def _create_gui_tasks(self, file_path: str, file_spec: Dict, project_context: Dict) -> List[SimpleTaskSpec]:
-        """Create GUI-specific tasks (3-4 chunks)"""
+                # Estimate lines or use a default. Planner ideally provides this.
+                expected_lines = component_spec.get("expected_lines",
+                                                    20 + len(component_spec.get("core_logic_steps", [])) * 3)
 
-        description = file_spec.get('description', 'GUI application')
+                context_str = f"File: {file_path_str} ({file_purpose}) within Project: {project_name}. Component: {description}"
 
-        tasks = [
-            SimpleTaskSpec(
-                id="chunk_1_imports_setup",
-                description="Import required GUI modules and create main application class",
-                expected_lines=25,
-                context=f"Creating {description}",
-                exact_requirements="""
-- Import PySide6 or tkinter modules
-- Create main application class with proper inheritance
-- Set up window properties (title, size, theme)
-- Initialize layout structure
-- Include proper error handling and logging
-"""
-            ),
+                # Construct detailed exact_requirements from Planner's component spec
+                req_parts = [f"COMPONENT TYPE: {component_type}"]
 
-            SimpleTaskSpec(
-                id="chunk_2_ui_components",
-                description="Create all UI components and layout",
-                expected_lines=35,
-                context=f"Building UI for {description}",
-                exact_requirements="""
-- Create all necessary widgets/components
-- Set up proper layout management
-- Apply styling and themes
-- Configure widget properties and connections
-- Ensure responsive design principles
-"""
-            ),
+                if "inputs" in component_spec:
+                    inputs_str = "\n  ".join(component_spec["inputs"]) if isinstance(component_spec["inputs"],
+                                                                                     list) else str(
+                        component_spec["inputs"])
+                    req_parts.append(f"INPUTS:\n  {inputs_str}")
 
-            SimpleTaskSpec(
-                id="chunk_3_event_logic",
-                description="Implement event handlers and business logic",
-                expected_lines=30,
-                context=f"Adding functionality to {description}",
-                exact_requirements="""
-- Implement all event handlers and callbacks
-- Add business logic and calculations
-- Include input validation and error handling
-- Ensure proper state management
-- Add keyboard shortcuts if applicable
-"""
-            ),
+                if "outputs" in component_spec:
+                    req_parts.append(f"OUTPUTS/SIDE EFFECTS:\n  {component_spec['outputs']}")
 
-            SimpleTaskSpec(
-                id="chunk_4_main_execution",
-                description="Create main execution block with proper initialization",
-                expected_lines=15,
-                context=f"Finalizing {description}",
-                exact_requirements="""
-- Create main execution block with if __name__ == '__main__'
-- Proper application initialization and error handling
-- Resource cleanup and graceful shutdown
-- Cross-platform compatibility considerations
-"""
-            )
-        ]
+                if "core_logic_steps" in component_spec and component_spec["core_logic_steps"]:
+                    steps_str = "\n  - ".join(component_spec["core_logic_steps"])
+                    req_parts.append(f"CORE LOGIC STEPS:\n  - {steps_str}")
 
-        return tasks
+                if "error_conditions_to_handle" in component_spec and component_spec["error_conditions_to_handle"]:
+                    errors_str = "\n  - ".join(component_spec["error_conditions_to_handle"])
+                    req_parts.append(f"ERROR CONDITIONS TO HANDLE:\n  - {errors_str}")
 
-    async def _create_api_tasks(self, file_path: str, file_spec: Dict, project_context: Dict) -> List[SimpleTaskSpec]:
-        """Create API-specific tasks"""
+                if "interactions" in component_spec and component_spec["interactions"]:
+                    interactions_str = "\n  - ".join(component_spec["interactions"])
+                    req_parts.append(f"INTERACTIONS WITH OTHER COMPONENTS:\n  - {interactions_str}")
 
-        description = file_spec.get('description', 'API application')
+                if "critical_notes" in component_spec and component_spec["critical_notes"]:
+                    req_parts.append(f"CRITICAL NOTES:\n  {component_spec['critical_notes']}")
 
-        tasks = [
-            SimpleTaskSpec(
-                id="chunk_1_setup",
-                description="Import modules and create API application setup",
-                expected_lines=20,
-                context=f"Setting up {description}",
-                exact_requirements="""
-- Import Flask/FastAPI/Django modules
-- Create application instance with configuration
-- Set up error handling and logging
-- Configure CORS and security settings
-"""
-            ),
+                exact_requirements_str = "\n\n".join(req_parts)
 
-            SimpleTaskSpec(
-                id="chunk_2_routes",
-                description="Implement API routes and endpoints",
-                expected_lines=40,
-                context=f"Creating API endpoints for {description}",
-                exact_requirements="""
-- Define all API routes with proper HTTP methods
-- Implement request validation and parsing
-- Add authentication and authorization
-- Include comprehensive error handling
-- Proper response formatting
-"""
-            ),
+                micro_task = SimpleTaskSpec(
+                    id=full_task_id,
+                    description=description,
+                    expected_lines=expected_lines,
+                    context=context_str,
+                    exact_requirements=exact_requirements_str,
+                    component_type=component_type,
+                    file_path=file_path_str
+                )
+                all_micro_tasks.append(micro_task)
 
-            SimpleTaskSpec(
-                id="chunk_3_main",
-                description="Create main execution with proper server setup",
-                expected_lines=15,
-                context=f"Finalizing {description}",
-                exact_requirements="""
-- Main execution block with server configuration
-- Environment-based configuration
-- Graceful shutdown handling
-- Production-ready settings
-"""
-            )
-        ]
+        if not all_micro_tasks and files_to_process:  # If we iterated files but still no tasks (e.g. all files had no components)
+            print(
+                "[WARNING] No micro-tasks generated despite files being present in plan. This might indicate an issue with Planner's output format.")
+            # Potentially add a single project-wide fallback task here if truly nothing was generated.
+            # For now, an empty list will be returned, and the workflow engine needs to handle it.
 
-        return tasks
+        return all_micro_tasks
 
-    async def _create_cli_tasks(self, file_path: str, file_spec: Dict, project_context: Dict) -> List[SimpleTaskSpec]:
-        """Create CLI-specific tasks"""
+    def _create_umbrella_task_for_file(self, file_path_str: str, file_purpose: str, project_name: str,
+                                       file_description: str) -> SimpleTaskSpec:
+        """Creates a single task to implement an entire file if Planner provides no component breakdown."""
+        task_id = f"{Path(file_path_str).stem}_implement_all"
+        description = f"Fully implement {file_path_str} as per its purpose: {file_purpose}. Details: {file_description}"
+        context_str = f"File: {file_path_str} ({file_purpose}) within Project: {project_name}."
 
-        description = file_spec.get('description', 'CLI application')
+        # General requirements for a full file implementation
+        exact_requirements_str = f"""
+        GOAL: Implement the entire functionality for the file '{file_path_str}'.
+        PURPOSE: {file_purpose}
+        DESCRIPTION FROM PLANNER: {file_description}
 
-        tasks = [
-            SimpleTaskSpec(
-                id="chunk_1_setup",
-                description="Import modules and set up argument parsing",
-                expected_lines=25,
-                context=f"Setting up {description}",
-                exact_requirements="""
-- Import argparse/click modules
-- Set up command-line argument parsing
-- Configure logging and error handling
-- Define help text and usage information
-"""
-            ),
+        EXPECTATIONS:
+        - Write complete, professional, and production-ready Python code.
+        - Include all necessary imports at the top of the file.
+        - Define all required classes, functions, and variables.
+        - Implement comprehensive error handling (try-except blocks, specific exceptions where appropriate).
+        - Add clear docstrings for all public classes, functions, and methods.
+        - Include comments for any non-obvious logic.
+        - Ensure the code is modular and follows Python best practices (PEP 8).
+        - If this is a main executable file, include an `if __name__ == \"__main__\":` block.
+        - If this file interacts with other planned files, ensure interfaces are consistent (even if stubs for now).
+        - CRITICAL: Adhere to any overarching architectural patterns, security guidelines (e.g., avoiding 'eval' on user input if applicable), or coding standards defined by the Planner for the project.
+        """
+        return SimpleTaskSpec(
+            id=task_id,
+            description=description,
+            expected_lines=100,  # Default for a full file
+            context=context_str,
+            exact_requirements=exact_requirements_str.strip(),
+            component_type="full_file",
+            file_path=file_path_str
+        )
 
-            SimpleTaskSpec(
-                id="chunk_2_commands",
-                description="Implement core command functionality",
-                expected_lines=35,
-                context=f"Building commands for {description}",
-                exact_requirements="""
-- Implement all command handlers
-- Add input validation and error handling
-- Include progress indicators where appropriate
-- Proper output formatting and user feedback
-"""
-            ),
+    def _create_fallback_tasks_for_project(self, planner_json_plan: Dict[str, Any]) -> List[SimpleTaskSpec]:
+        """Fallback if Planner's plan is unusable or completely empty."""
+        project_name = planner_json_plan.get("project_name", "unspecified_project")
+        project_description = planner_json_plan.get("description", "An AI-generated project.")
 
-            SimpleTaskSpec(
-                id="chunk_3_main",
-                description="Create main execution with command routing",
-                expected_lines=20,
-                context=f"Finalizing {description}",
-                exact_requirements="""
-- Main execution block with command routing
-- Global error handling and cleanup
-- Exit code management
-- Cross-platform compatibility
-"""
-            )
-        ]
+        print(f"[FALLBACK] Creating a single task for the entire project: {project_name}")
 
-        return tasks
-
-    async def _create_generic_tasks(self, file_path: str, file_spec: Dict, project_context: Dict) -> List[
-        SimpleTaskSpec]:
-        """Create generic tasks for any file"""
-
-        description = file_spec.get('description', 'Python module')
-
-        tasks = [
-            SimpleTaskSpec(
-                id="chunk_1_setup",
-                description="Import modules and set up basic structure",
-                expected_lines=20,
-                context=f"Setting up {description}",
-                exact_requirements="""
-- Import all required modules
-- Set up logging and configuration
-- Define constants and global variables
-- Include proper docstrings and type hints
-"""
-            ),
-
-            SimpleTaskSpec(
-                id="chunk_2_core_logic",
-                description="Implement main functionality",
-                expected_lines=40,
-                context=f"Building core logic for {description}",
-                exact_requirements="""
-- Implement main classes and functions
-- Add comprehensive error handling
-- Include input validation
-- Proper documentation and type hints
-- Follow best practices and patterns
-"""
-            ),
-
-            SimpleTaskSpec(
-                id="chunk_3_main",
-                description="Create main execution block",
-                expected_lines=15,
-                context=f"Finalizing {description}",
-                exact_requirements="""
-- Main execution block if appropriate
-- Example usage or demonstration
-- Proper error handling and cleanup
-"""
-            )
-        ]
-
-        return tasks
-
-    def _create_fallback_tasks(self, file_path: str, file_spec: Dict) -> List[SimpleTaskSpec]:
-        """Simple fallback when everything else fails"""
+        # Try to find at least one file name if provided, otherwise default to main.py
+        main_file_name = "main.py"
+        files_data = planner_json_plan.get("files", {})
+        if files_data and isinstance(files_data, dict):
+            main_file_name = next(iter(files_data.keys()), "main.py")
 
         return [
             SimpleTaskSpec(
-                id="fallback_complete",
-                description=f"Implement complete {file_path} functionality",
-                expected_lines=50,
-                context=f"Creating {file_path}",
+                id=f"{project_name}_full_project_implementation",
+                description=f"Implement the complete project: {project_name}. Description: {project_description}",
+                expected_lines=200,  # A wild guess for a whole project
+                context=f"Project: {project_name}. Task: Implement all described functionality.",
                 exact_requirements=f"""
-- Implement all required functionality for {file_path}
-- Include proper imports and structure
-- Add error handling and documentation
-- Follow Python best practices
-- Make it production-ready
-"""
+                PROJECT GOAL: Create a fully functional application for '{project_name}'.
+                PROJECT DESCRIPTION: {project_description}
+
+                OVERALL REQUIREMENTS:
+                - Implement all features as implied by the project description.
+                - Create necessary file structures if not already defined (though aim for a single file if complexity allows for this fallback).
+                - Ensure the application is runnable and produces meaningful output or interaction.
+                - Write clean, robust, and well-documented Python code.
+                - Adhere to Python best practices (PEP 8).
+                - Implement error handling.
+                - If it's a GUI application, ensure it's user-friendly. If CLI, ensure clear usage.
+                - CRITICAL: Avoid unsafe practices like 'eval()' on raw user input.
+                """,
+                component_type="full_project_fallback",
+                file_path=main_file_name  # Assign to a primary file
             )
         ]
+
+    # Removed _detect_domain_fast, _create_gui_tasks, _create_api_tasks,
+    # _create_cli_tasks, _create_generic_tasks as they are replaced by dynamic generation.
+    # The _create_fallback_tasks (original one taking file_path, file_spec) is also replaced
+    # by _create_umbrella_task_for_file and _create_fallback_tasks_for_project.

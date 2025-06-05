@@ -80,8 +80,8 @@ class ConfigManager:
                 "code_models": ["claude-3-5-sonnet-20241022"]
             },
             "google": {
-                "chat_models": ["gemini-2.0-flash-exp", "gemini-1.5-pro"],
-                "code_models": ["gemini-2.0-flash-exp"]
+                "chat_models": [ "gemini-2.5-pro-preview-06-05"],
+                "code_models": ["gemini-2.5-pro-preview-06-05"]
             },
             "ollama": {
                 "chat_models": ["llama3.2", "qwen2.5"],

@@ -1,4 +1,3 @@
-# core/workflow_services.py
 import asyncio
 import json
 import hashlib  # Not used directly here, but good for context if services use it
@@ -419,20 +418,38 @@ Generate ONLY the Python code snippet for this task:
         try:
             raw_code_stream = []
             stream_generator = None
+            accumulated_code = ""
+            last_emit_time = 0
+
             try:
                 stream_generator = self.llm_client.stream_chat(code_prompt, LLMRole.CODER)
                 self.stream_emitter("Coder", "status", "AI is now generating code...", 2)
-                idx = 0
+
                 async for chunk in stream_generator:
                     raw_code_stream.append(chunk)
-                    # Stream code chunks directly to terminal with "Coder" agent
-                    self.stream_emitter("Coder", "code_chunk", chunk, 2)
-                    idx += 1
-                    if idx > 500:  # Safety break for very verbose code generation
-                        self.stream_emitter("Coder", "warning", "Code generation stream is very long, might truncate.",
-                                            2)
-                        break
-                    await asyncio.sleep(0.001)  # Tiny sleep to allow UI updates if many small chunks
+                    accumulated_code += chunk
+
+                    # Only emit code in meaningful chunks (lines or logical blocks)
+                    current_time = asyncio.get_event_loop().time()
+                    if ('\n' in chunk or len(accumulated_code) > 100 or
+                            current_time - last_emit_time > 0.5):  # Every half second max
+
+                        # Find complete lines to show
+                        lines = accumulated_code.split('\n')
+                        if len(lines) > 1:
+                            # Show complete lines, keep the last incomplete one
+                            complete_lines = '\n'.join(lines[:-1])
+                            if complete_lines.strip():
+                                self.stream_emitter("Coder", "code_chunk", complete_lines, 2)
+                                accumulated_code = lines[-1]  # Keep the incomplete line
+                                last_emit_time = current_time
+
+                    await asyncio.sleep(0.001)
+
+                # Emit any remaining code
+                if accumulated_code.strip():
+                    self.stream_emitter("Coder", "code_chunk", accumulated_code, 2)
+
             finally:
                 if stream_generator and hasattr(stream_generator, 'aclose'):
                     try:
@@ -549,21 +566,302 @@ Generate ONLY the Python code snippet for this task:
         return results
 
 
+class EnhancedAssemblerService:
+    """🔧 Production-Ready Code Assembly Service with Review"""
+
+    def __init__(self, llm_client, stream_emitter: Callable, rag_manager=None):
+        self.llm_client = llm_client
+        self.rag_manager = rag_manager
+        self.stream_emitter = stream_emitter
+
+    async def assemble_file(self, file_path: str, task_results: List[dict], plan: dict, context_cache) -> Tuple[
+        str, bool, str]:
+        """Assemble code chunks into a complete file with AI review"""
+
+        self.stream_emitter("Assembler", "thought", f"Time to put the pieces together for '{file_path}'...", 1)
+
+        # Extract and validate code from task results
+        code_chunks = []
+        for result in task_results:
+            task = result.get("task", {})
+            code = result.get("code", "")
+            task_id = task.get("id", "unknown")
+
+            if code and code.strip():
+                self.stream_emitter("Assembler", "info", f"Adding code from task '{task_id}' ({len(code)} chars)", 2)
+                # Clean separator for better readability
+                code_chunks.append(f"# {'-' * 20} {task_id} {'-' * 20}\n{code}\n")
+            else:
+                self.stream_emitter("Assembler", "warning", f"Task '{task_id}' produced no code - skipping", 2)
+
+        if not code_chunks:
+            self.stream_emitter("Assembler", "error", f"No code chunks to assemble for '{file_path}'!", 1)
+            return self._create_emergency_file(file_path, plan), False, "No code chunks available for assembly"
+
+        # Assemble the raw code
+        self.stream_emitter("Assembler", "thought", "Combining all the code chunks into a cohesive file...", 1)
+        raw_assembled = "\n".join(code_chunks)
+
+        # Clean and organize the assembled code
+        self.stream_emitter("Assembler", "thought_detail", "Cleaning up the assembled code and organizing structure...",
+                            2)
+        cleaned_code = self._clean_and_organize_code(raw_assembled, file_path)
+
+        # AI Review Phase
+        self.stream_emitter("Assembler", "thought", f"Now asking the AI Reviewer to check '{file_path}' for quality...",
+                            1)
+        review_approved, review_feedback = await self._ai_review_code(file_path, cleaned_code, plan)
+
+        if review_approved:
+            self.stream_emitter("Assembler", "success", f"✅ Assembly complete for '{file_path}' - Review: APPROVED", 1)
+        else:
+            self.stream_emitter("Assembler", "warning",
+                                f"⚠️ Assembly complete for '{file_path}' - Review: NEEDS ATTENTION", 1)
+            self.stream_emitter("Assembler", "info", f"Review feedback: {review_feedback[:100]}...", 2)
+
+        return cleaned_code, review_approved, review_feedback
+
+    def _clean_and_organize_code(self, raw_code: str, file_path: str) -> str:
+        """Clean and organize the assembled code"""
+
+        self.stream_emitter("Assembler", "thought_detail", "Organizing imports, removing duplicates, and formatting...",
+                            2)
+
+        # Split into lines for processing
+        lines = raw_code.split('\n')
+
+        # Organize sections
+        imports = []
+        docstring_lines = []
+        class_defs = []
+        function_defs = []
+        main_block = []
+        other_code = []
+
+        current_section = "other"
+        in_main_block = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Skip separator comments
+            if stripped.startswith("# ---") and "---" in stripped:
+                continue
+
+            # Detect imports
+            if stripped.startswith(('import ', 'from ')):
+                if line not in imports:  # Avoid duplicates
+                    imports.append(line)
+                continue
+
+            # Detect main block
+            if 'if __name__ == "__main__"' in stripped or 'if __name__ == \'__main__\'' in stripped:
+                in_main_block = True
+                main_block.append(line)
+                continue
+
+            if in_main_block:
+                main_block.append(line)
+                continue
+
+            # Detect class definitions
+            if stripped.startswith('class '):
+                current_section = "class"
+                class_defs.append(line)
+                continue
+
+            # Detect function definitions
+            if stripped.startswith('def '):
+                current_section = "function"
+                function_defs.append(line)
+                continue
+
+            # Add to current section
+            if current_section == "class":
+                class_defs.append(line)
+            elif current_section == "function":
+                function_defs.append(line)
+            else:
+                other_code.append(line)
+
+        # Reconstruct the file in proper order
+        final_lines = []
+
+        # Add file header comment
+        if file_path:
+            final_lines.append(f'"""')
+            final_lines.append(f'{file_path}')
+            final_lines.append(f'Generated by AvA on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+            final_lines.append(f'"""')
+            final_lines.append('')
+
+        # Add imports (sorted and deduplicated)
+        if imports:
+            unique_imports = list(dict.fromkeys(imports))  # Remove duplicates while preserving order
+            final_lines.extend(unique_imports)
+            final_lines.append('')
+
+        # Add other code (constants, etc.)
+        if other_code:
+            final_lines.extend(other_code)
+            final_lines.append('')
+
+        # Add classes
+        if class_defs:
+            final_lines.extend(class_defs)
+            final_lines.append('')
+
+        # Add functions
+        if function_defs:
+            final_lines.extend(function_defs)
+            final_lines.append('')
+
+        # Add main block
+        if main_block:
+            final_lines.extend(main_block)
+
+        return '\n'.join(final_lines)
+
+    async def _ai_review_code(self, file_path: str, code: str, plan: dict) -> Tuple[bool, str]:
+        """Get AI review of the assembled code"""
+
+        self.stream_emitter("Assembler", "thought_detail", "Preparing detailed review prompt for the AI...", 2)
+
+        review_prompt = f"""
+You are a senior code reviewer examining this Python file for quality and correctness.
+
+FILE: {file_path}
+PROJECT CONTEXT: {plan.get('description', 'Python application')}
+
+CODE TO REVIEW:
+```python
+{code}
+```
+Provide a thorough review focusing on:
+
+Code functionality and correctness
+Python best practices and PEP 8 compliance
+Error handling and edge cases
+Code organization and readability
+Security considerations
+Respond with JSON:
+{{
+"approved": true/false,
+"overall_quality": "excellent|good|fair|poor",
+"critical_issues": ["issue1", "issue2"],
+"suggestions": ["suggestion1", "suggestion2"],
+"summary": "Brief overall assessment"
+}}
+Be thorough but practical. Minor style issues shouldn't fail approval.
+"""
+        try:
+            self.stream_emitter("Assembler", "status", "AI Reviewer is analyzing the code...", 2)
+
+            # Get AI review using the reviewer role
+            review_response = ""
+            stream_generator = None
+            try:
+                stream_generator = self.llm_client.stream_chat(review_prompt, LLMRole.REVIEWER)
+                response_chunks = []
+                idx = 0
+                async for chunk in stream_generator:
+                    response_chunks.append(chunk)
+                    if idx % 10 == 0:
+                        self.stream_emitter("Assembler", "llm_chunk", f"Receiving review analysis... (chunk {idx + 1})",
+                                            3)
+                    idx += 1
+                    if idx > 200: break  # Safety break for reviews
+                    await asyncio.sleep(0.001)
+                review_response = ''.join(response_chunks)
+            finally:
+                if stream_generator and hasattr(stream_generator, 'aclose'):
+                    try:
+                        await stream_generator.aclose()
+                    except Exception:
+                        pass
+
+            self.stream_emitter("Assembler", "thought_detail",
+                                f"AI review received ({len(review_response)} chars). Parsing results...", 2)
+
+            # Parse the JSON response
+            try:
+                # Extract JSON from response
+                start_idx = review_response.find('{')
+                end_idx = review_response.rfind('}') + 1
+                if start_idx >= 0 and end_idx > start_idx:
+                    json_str = review_response[start_idx:end_idx]
+                    review_data = json.loads(json_str)
+
+                    approved = review_data.get('approved', False)
+                    summary = review_data.get('summary', 'AI review completed')
+                    critical_issues = review_data.get('critical_issues', [])
+
+                    if approved:
+                        self.stream_emitter("Assembler", "success",
+                                            f"AI Reviewer: Code quality is {review_data.get('overall_quality', 'good')}",
+                                            2)
+                    else:
+                        self.stream_emitter("Assembler", "warning",
+                                            f"AI Reviewer found {len(critical_issues)} critical issues", 2)
+                        for issue in critical_issues[:3]:  # Show first 3 issues
+                            self.stream_emitter("Assembler", "info", f"Issue: {issue}", 3)
+
+                    return approved, summary
+
+                else:
+                    self.stream_emitter("Assembler", "warning", "Could not parse AI review JSON - using fallback", 2)
+
+            except json.JSONDecodeError as e:
+                self.stream_emitter("Assembler", "warning", f"AI review JSON parsing failed: {e}", 2)
+
+        except Exception as e:
+            self.stream_emitter("Assembler", "warning", f"AI review failed ({e}) - proceeding with basic validation", 2)
+
+        # Fallback: Basic validation
+        approved = len(code.strip()) > 50 and ('def ' in code or 'class ' in code)
+        feedback = "Basic validation: " + ("Code structure looks reasonable" if approved else "Code seems incomplete")
+
+        return approved, feedback
+
+    def _create_emergency_file(self, file_path: str, plan: dict) -> str:
+        """Create emergency fallback file when assembly fails"""
+
+        self.stream_emitter("Assembler", "warning", f"Creating emergency fallback for '{file_path}'", 2)
+
+        project_name = plan.get('project_name', 'Generated Project')
+        description = plan.get('description', 'Python application')
+
+        return f'''"""
+{file_path}
+Emergency fallback file for {project_name}
+{description}
+Generated by AvA on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""
+def main():
+    """Main function - implement your logic here"""
+    print("Emergency fallback - please implement the required functionality")
+    # TODO: Add proper implementation
+if __name__ == "__main__":
+    main()
+'''
+
+
 PlannerService = EnhancedPlannerService
 CoderService = EnhancedCoderService
+AssemblerService = EnhancedAssemblerService
 
 
 class WorkflowOrchestrator:
     """🎼 Enhanced Orchestrator with Conversation Intelligence"""
 
-    def __init__(self, planner_service: EnhancedPlannerService, coder_service: EnhancedCoderService, assembler_service,
+    def __init__(self, planner_service: EnhancedPlannerService, coder_service: EnhancedCoderService,
+                 assembler_service: EnhancedAssemblerService,
                  terminal_emitter: Callable = None):
         self.planner = planner_service
         self.coder = coder_service
         self.assembler = assembler_service
         self.emit_stream_log = terminal_emitter if terminal_emitter else lambda agent, type_key, content, indent: print(
             f"[{agent}] {type_key} (indent {indent}): {content}")
-
         # Allow ContextCache to be properly imported or defined
         try:
             from core.enhanced_workflow_engine import ContextCache
@@ -588,14 +886,11 @@ class WorkflowOrchestrator:
                                conversation_history: List[Dict] = None) -> dict:
         try:
             self.emit_stream_log("Orchestrator", "stage_start", "🚀 Kicking off the AvA Super-Workflow!", 0)
-
             if conversation_history and hasattr(self.planner, 'add_conversation_context'):
                 self.set_conversation_context(conversation_history)  # This will pass only user messages
-
             self.emit_stream_log("Orchestrator", "thought", "Asking the Planner to draft the grand design...", 1)
             # Pass the full conversation history to the planner for its own analysis
             plan = await self.planner.create_project_plan(user_prompt, self.context_cache, conversation_history)
-
             if not isinstance(plan, dict) or 'files' not in plan or not isinstance(plan['files'], dict):
                 self.emit_stream_log("Orchestrator", "error",
                                      "The Planner's blueprint seems incomplete. Can't proceed.", 0)
@@ -644,7 +939,6 @@ class WorkflowOrchestrator:
                 "file_count": len(successful_files), "enhanced": True,
                 "details": generated_files_details  # Include detailed results
             }
-
         except Exception as e:
             self.emit_stream_log("Orchestrator", "error", f"❌ The Super-Workflow hit a major snag: {e}", 0)
             # import traceback # Already imported at top level of engine
@@ -668,14 +962,12 @@ class WorkflowOrchestrator:
         task_results = await self.coder.execute_tasks_parallel(
             tasks, f"File context for {file_path_str}", self.context_cache, coder_progress_callback
         )
-
         self.emit_stream_log("Orchestrator", "thought",
                              f"Coder finished. Assembler is now putting pieces of '{file_path_str}' together and reviewing...",
                              2)
         assembled_code, review_approved, review_feedback = await self.assembler.assemble_file(
             file_path_str, task_results, plan, self.context_cache
         )
-
         self.emit_stream_log("Orchestrator", "file_op", f"Saving final version of '{file_path_str}'...", 2)
         full_path_obj = project_dir / file_path_str
         full_path_obj.parent.mkdir(parents=True, exist_ok=True)

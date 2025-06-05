@@ -64,7 +64,7 @@ class AvAApplication(QObject):
 
         # Streamlined Configuration
         self.current_config = {
-            "chat_model": "Gemini: gemini-2.5-pro-preview-05-06",
+            "chat_model": "gemini-2.5-pro-preview-06-05",
             "code_model": "qwen2.5-coder:14b",
             "temperature": 0.7
         }
