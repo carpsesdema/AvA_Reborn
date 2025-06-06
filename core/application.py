@@ -147,7 +147,7 @@ class AvAApplication(QObject):
         self.llm_client = EnhancedLLMClient()
         available_models = self.llm_client.get_available_models()
         self.logger.info(f"Available LLM models: {available_models}")
-        if not available_models or available_models == ["No LLM services available"]:
+        if not available_models or "No LLM services available" in available_models[0]:
             self.logger.warning("[WARN] No LLM services available!")
 
     async def _initialize_rag_manager_async(self):
@@ -309,8 +309,7 @@ class AvAApplication(QObject):
         self.logger.info(f"Context: {len(conversation_history)} messages")
         current_status = self.get_status()
 
-        if not current_status["llm_models"] or current_status["llm_models"] == ["LLM Client not init"] or \
-                current_status["llm_models"] == ["No LLM services available"]:
+        if not current_status["llm_models"] or "No LLM services available" in current_status["llm_models"][0]:
             error_msg = "No LLM services available. Please configure API keys."
             if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
                 self.terminal_window.stream_log_rich("Application", "error", f"Workflow Halted: {error_msg}", "0")

@@ -12,7 +12,7 @@ from core.llm_client import LLMRole, EnhancedLLMClient
 # --- Prompt Templates ---
 # Prompts are dedented to allow for clean in-code formatting without sending leading whitespace to the LLM.
 
-# NEW: High-level prompt for just the file structure
+# High-level prompt for just the file structure
 STRUCTURER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the STRUCTURER AI. Your single, focused task is to analyze a user's request and determine the necessary file structure for the project. You only think about what files are needed and what their high-level purpose is.
 
@@ -40,7 +40,7 @@ STRUCTURER_PROMPT_TEMPLATE = textwrap.dedent("""
     **IMPORTANT: Your _entire_ output must be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json before or after the JSON. The system will fail if it receives anything other than the raw, valid JSON object.**
 """)
 
-# NEW: Detailed prompt for a single file's components
+# Detailed prompt for a single file's components
 DETAILED_FILE_PLAN_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the PLANNER AI, a master software architect. Your task is to create a detailed component-level plan for a SINGLE file within a larger project.
 
@@ -50,6 +50,9 @@ DETAILED_FILE_PLAN_PROMPT_TEMPLATE = textwrap.dedent("""
 
     CONTEXT OF OTHER PROJECT FILES PLANNED SO FAR:
     {other_files_context}
+
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {rag_context}
 
     Your output MUST be a single, valid JSON object containing a 'components' array. Each object in the array represents a single class, method, or function for the file `{file_path}`.
 
@@ -85,13 +88,15 @@ DETAILED_FILE_PLAN_PROMPT_TEMPLATE = textwrap.dedent("""
 **IMPORTANT: Your _entire_ output must be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json before or after the JSON. The system will fail if it receives anything other than the raw, valid JSON object.**
 """)
 
-# RE-ADDED a Coder prompt template
+# Coder prompt template
 CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are an expert Python developer. Your task is to generate a single, complete, and production-ready Python code snippet for the micro-task detailed in the SPECIFICATIONS below.
 
     PROJECT CONTEXT: {project_context_description}
     FILE CONTEXT: This snippet will be part of '{file_path}'
-    {correction_feedback}
+    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
+    {rag_context}
+
     SPECIFICATIONS:
     ```json
     {task_specs_json}
@@ -100,16 +105,40 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     CRITICAL INSTRUCTIONS:
     1.  Generate ONLY the Python code required to fulfill THIS SPECIFIC micro-task.
     2.  Adhere strictly to every detail in the 'core_logic_steps', 'interactions', and 'critical_notes' from the specifications.
-    3.  If feedback is provided above, you MUST address it in your new code.
-    4.  Ensure the code is clean, efficient, well-commented (docstrings for public elements, comments for complex logic), and follows PEP 8.
-    5.  Do NOT generate a full file or surrounding code unless the task 'component_type' is 'full_file'.
-    6.  If the task specifies "DO NOT use eval()", you MUST follow that rule.
-    7.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
+    3.  Ensure the code is clean, efficient, well-commented (docstrings for public elements, comments for complex logic), and follows PEP 8.
+    4.  Do NOT generate a full file or surrounding code unless the task 'component_type' is 'full_file'.
+    5.  If the task specifies "DO NOT use eval()", you MUST follow that rule.
+    6.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
 
     Generate ONLY the required Python code snippet for this task:
 """)
 
-# RE-ADDED a Reviewer prompt template
+ASSEMBLY_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the ASSEMBLER AI. Your job is to take a collection of Python code snippets and intelligently assemble them into a single, complete, and professional Python file.
+
+    FILE PATH: `{file_path}`
+    FILE PURPOSE: {file_purpose}
+
+    PROJECT CONTEXT:
+    {project_context_summary}
+
+    CODE SNIPPETS TO ASSEMBLE:
+    ---
+    {raw_assembled_code}
+    ---
+
+    **CRITICAL INSTRUCTIONS:**
+    1.  **Combine Snippets:** Logically arrange the provided code snippets into a cohesive file.
+    2.  **Class Assembly:** When snippets include a class definition and its methods, you MUST place the method definitions (def method_name...) INSIDE the class block with correct indentation. Do not define methods outside the class they belong to.
+    3.  **Manage Imports:** Consolidate all necessary `import` statements at the top of the file, removing duplicates. Follow PEP 8 import order (standard library, third-party, local modules).
+    4.  **Local Imports:** Correctly formulate local imports based on the project context. For example, if a file is `calculator_model.py`, a local import should be `from calculator_model import ...`.
+    5.  **Add Documentation:** Write a professional, file-level docstring that summarizes the file's purpose. Ensure all public classes and functions from the snippets retain their docstrings.
+    6.  **Ensure Consistency:** Maintain consistent formatting (4-space indentation) and PEP 8 compliance throughout the entire file.
+
+    **Your final output MUST be ONLY the raw, complete, and clean Python code for the file `{file_path}`. Do not include any conversational text, explanations, or markdown formatting.**
+""")
+
+# Reviewer prompt template
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are a senior code reviewer examining this Python file for quality, correctness, and adherence to the plan.
 
@@ -120,7 +149,29 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     ```python
     {code}
     ```
-    Provide a thorough review as a JSON object with keys: "approved" (boolean), "overall_quality" (string: "excellent", "good", "fair", "poor"), "critical_issues" (list of strings), "suggestions" (list of strings), and "summary" (string).
+    Provide a thorough review as a JSON object with keys: "approved" (boolean), "overall_quality" (string: "excellent", "good", "fair", "poor"), "critical_issues" (list of strings), "suggestions" (list of strings), and "summary" (string). Your feedback must be specific and actionable.
+""")
+
+# NEW: Patcher prompt template
+PATCHER_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are a senior developer tasked with fixing code based on a review. Your job is to take the original code, analyze the review feedback, and produce a new, corrected version of the code that resolves all the issues.
+
+    ORIGINAL CODE FOR `{file_path}`:
+    ```python
+    {original_code}
+    ```
+
+    CODE REVIEW FEEDBACK (Issues to fix):
+    ```
+    {review_feedback}
+    ```
+
+    **CRITICAL INSTRUCTIONS:**
+    1.  Carefully read every point in the code review feedback.
+    2.  Modify the original code to address ALL critical issues and suggestions.
+    3.  Do NOT add new features or change logic that was not mentioned in the feedback.
+    4.  Preserve the overall structure and functionality of the original code.
+    5.  Your output MUST be ONLY the full, corrected, and clean Python code for the file `{file_path}`. Do not include explanations, apologies, or markdown formatting.
 """)
 
 
@@ -159,16 +210,22 @@ class BaseAIService:
             self.stream_emitter(agent_name, "debug", f"Failed to parse text: {json_text[:200]}...", 4)
             return {}
 
-    async def _get_intelligent_rag_context(self, requirements: str) -> str:
-        if not self.rag_manager or not self.rag_manager.is_ready: return "No RAG context available."
-        req_lower = requirements.lower()
-        query = f"PySide6 View-Controller-Model architecture example" if "pyside" in req_lower or "gui" in req_lower else f"Python code examples for a {req_lower}"
+    async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
+        if not self.rag_manager or not self.rag_manager.is_ready:
+            return "No RAG context available."
         try:
-            results = self.rag_manager.query_context(query, k=2)
-            return "\n\n".join([f"# Relevant Example:\n{r.get('content', '')[:500]}..." for r in results if
-                                r.get('content')]) or "No specific examples found."
-        except Exception:
-            return "Could not query knowledge base."
+            results = self.rag_manager.query_context(query, k=k)
+            if not results:
+                return "No specific examples found in the knowledge base."
+            context = "\n\n---\n\n".join(
+                [
+                    f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```\n{r.get('content', '')[:700]}...\n```"
+                    for r in results if r.get('content')]
+            )
+            return context
+        except Exception as e:
+            self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
+            return "Could not query knowledge base due to an error."
 
 
 class StructureService(BaseAIService):
@@ -180,7 +237,8 @@ class StructureService(BaseAIService):
         requirements.append(user_prompt)
         full_requirements = " ".join(req.strip() for req in requirements if req.strip())
 
-        rag_context = await self._get_intelligent_rag_context(full_requirements)
+        rag_query = f"High-level project structure for a {full_requirements[:80]}"
+        rag_context = await self._get_intelligent_rag_context(rag_query, k=1)
         plan_prompt = STRUCTURER_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
 
         response_text = await self.llm_client.chat(plan_prompt, LLMRole.STRUCTURER)
@@ -202,11 +260,15 @@ class EnhancedPlannerService(BaseAIService):
                                         other_files_context: str) -> dict:
         self.stream_emitter("Planner", "thought", f"Phase 2: Creating detailed plan for `{file_path}`...", 1)
 
+        rag_query = f"Component breakdown and architecture for a file like '{file_path}' with purpose: {file_purpose}"
+        rag_context = await self._get_intelligent_rag_context(rag_query, k=2)
+
         plan_prompt = DETAILED_FILE_PLAN_PROMPT_TEMPLATE.format(
             project_description=project_description,
             file_path=file_path,
             file_purpose=file_purpose,
-            other_files_context=other_files_context
+            other_files_context=other_files_context,
+            rag_context=rag_context
         )
 
         response_text = await self.llm_client.chat(plan_prompt, LLMRole.PLANNER)
@@ -234,25 +296,21 @@ class EnhancedCoderService(BaseAIService):
         task_id, task_desc = task.get("task_id", "unknown_task"), task.get("description", "N/A")
         self.stream_emitter("Coder", "thought", f"Focusing on task '{task_id}': {task_desc[:60]}...", 2)
 
-        feedback_text = ""
-        if project_context.get("feedback_for_coder"):
-            feedback_text = f"CORRECTION FEEDBACK FROM PREVIOUS ATTEMPT:\n{project_context['feedback_for_coder']}\n"
-            self.stream_emitter("Coder", "warning", "Applying feedback from previous attempt.", 2)
+        rag_query = f"Python code snippet for: {task_desc}"
+        rag_context = await self._get_intelligent_rag_context(rag_query, k=1)
 
         code_prompt = CODER_PROMPT_TEMPLATE.format(
             project_context_description=project_context.get('description', ''),
             file_path=task.get('file_path', ''),
-            correction_feedback=feedback_text,
+            rag_context=rag_context,
             task_specs_json=json.dumps(task, indent=2)
         )
         self.stream_emitter("Coder", "thought", f"Writing code for '{task_id}'...", 2)
 
         all_chunks = []
         try:
-            # Use stream_chat to get real-time output
             async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
                 all_chunks.append(chunk)
-                # Emit each chunk to the terminal for live streaming
                 self.stream_emitter("Coder", "llm_chunk", chunk, 3)
 
             raw_code = "".join(all_chunks)
@@ -275,7 +333,7 @@ class EnhancedCoderService(BaseAIService):
         self.stream_emitter("Coder", "status", f"Preparing to code {len(component_tasks)} tasks for {file_path}.", 2)
         results = []
         for i, task in enumerate(component_tasks):
-            task["file_path"] = file_path  # Ensure file_path is in the task spec
+            task["file_path"] = file_path
             self.stream_emitter("Coder", "status",
                                 f"Starting task {i + 1}/{len(component_tasks)}: '{task.get('task_id', '')}'...", 2)
             code = await self.execute_task(task, project_context)
@@ -284,69 +342,7 @@ class EnhancedCoderService(BaseAIService):
 
 
 class EnhancedAssemblerService(BaseAIService):
-    """🔧 Production-Ready Code Assembly Service with Review"""
-
-    async def assemble_file(self, file_path: str, task_results: List[dict], plan: dict, file_spec: dict) -> Tuple[
-        str, bool, str]:
-        self.stream_emitter("Assembler", "thought", f"Assembling '{file_path}'...", 2)
-        if not task_results:
-            self.stream_emitter("Assembler", "error", f"No code to assemble for '{file_path}'!", 2)
-            return f'# FALLBACK: No code generated for {file_path}', False, "No code chunks available"
-
-        raw_assembled_code = "\n\n".join(res['code'] for res in task_results)
-
-        file_purpose = "N/A"
-        for f in plan.get('files', []):
-            if f.get('filename') == file_path:
-                file_purpose = f.get('purpose', 'N/A')
-                break
-
-        component_summary = "\n".join(
-            [f"- {c.get('component_type', 'component')}: {c.get('description', 'N/A')}" for c in
-             file_spec.get('components', [])])
-
-        other_files_summary = "\n".join(
-            [f"- {f.get('filename')}: {f.get('purpose')}" for f in plan.get('files', []) if
-             f.get('filename') != file_path]
-        )
-
-        assembly_prompt = textwrap.dedent(f"""
-            **Task: Assemble Code File**
-
-            **File Path:** `{file_path}`
-            **File Purpose:** {file_purpose}
-            **Project File Structure Context:**
-            {other_files_summary}
-
-            **Input Code Snippets:**
-            ---
-            {raw_assembled_code}
-            ---
-
-            **Instructions:**
-            1.  Combine the input snippets into a single, cohesive Python file.
-            2.  Consolidate all imports at the top, following PEP 8.
-            3.  **Use the correct module names for local imports based on the Project File Structure Context.** For example, if a file is `calculator_model.py`, the import should be `from calculator_model import ...`.
-            4.  Add a professional file-level docstring summarizing the file's purpose.
-            5.  Ensure all public classes and functions have docstrings.
-            6.  Ensure consistent formatting (4-space indentation) and PEP 8 compliance.
-
-            **CRITICAL: Your output MUST be ONLY the raw, complete Python code for the file `{file_path}`. Do not include any conversational text, explanations, or markdown formatting.**
-        """)
-
-        self.stream_emitter("Assembler", "thought", f"Asking AI Assembler to intelligently merge code...", 2)
-        cleaned_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
-
-        self.stream_emitter("Assembler", "thought", f"Requesting AI review for '{file_path}'...", 2)
-        review_approved, review_feedback = await self._ai_review_code(file_path, cleaned_code, plan)
-
-        if review_approved:
-            self.stream_emitter("Assembler", "success", f"✅ Assembly for '{file_path}' - Review: APPROVED", 2)
-        else:
-            self.stream_emitter("Assembler", "warning", f"⚠️ Assembly for '{file_path}' - Review: NEEDS ATTENTION", 2)
-            self.stream_emitter("Assembler", "info", f"Feedback: {review_feedback[:100]}...", 3)
-
-        return self.clean_llm_output(cleaned_code), review_approved, review_feedback
+    """🔧 Assembles, Reviews, and Patches code."""
 
     def clean_llm_output(self, code: str) -> str:
         """Removes markdown fences from code output."""
@@ -356,17 +352,73 @@ class EnhancedAssemblerService(BaseAIService):
             code = code.rsplit("```", 1)[0]
         return code.strip()
 
-    async def _ai_review_code(self, file_path: str, code: str, plan: dict) -> Tuple[bool, str]:
-        self.stream_emitter("Assembler", "thought_detail", "Preparing review prompt...", 3)
-        review_prompt = REVIEWER_PROMPT_TEMPLATE.format(file_path=file_path,
-                                                        project_description=plan.get('project_description', ''),
-                                                        code=code)
-        try:
-            review_response = await self.llm_client.chat(review_prompt, LLMRole.REVIEWER)
-            review_data = self._parse_json_from_response(review_response, "Reviewer")
-            approved = review_data.get('approved', False)
-            summary = review_data.get('summary', 'AI review completed.')
-            return approved, summary
-        except Exception as e:
-            self.stream_emitter("Assembler", "warning", f"AI review failed ({e}). Using basic validation.", 3)
-            return len(code.strip()) > 10, "Basic validation: Code is not empty."
+    def _format_feedback_for_prompt(self, review_data: dict) -> str:
+        """Helper to format JSON review feedback into a string for the Patcher."""
+        summary = review_data.get('summary', 'No summary provided.')
+        issues = review_data.get('critical_issues', [])
+        suggestions = review_data.get('suggestions', [])
+
+        # Ensure issues and suggestions are lists of strings
+        def to_str_list(items):
+            if not items:
+                return []
+            return [str(item) for item in items]
+
+        issues_str = "\n- ".join(to_str_list(issues)) if issues else "None"
+        suggestions_str = "\n- ".join(to_str_list(suggestions)) if suggestions else "None"
+
+        return f"Review Summary: {summary}\n\nCritical Issues to Fix:\n- {issues_str}\n\nSuggestions to Apply:\n- {suggestions_str}"
+
+    async def assemble_and_review_file(self, file_path: str, task_results: List[dict], plan: dict,
+                                       file_spec: dict) -> str:
+        self.stream_emitter("Assembler", "thought", f"Assembling '{file_path}'...", 2)
+        if not task_results:
+            self.stream_emitter("Assembler", "error", f"No code to assemble for '{file_path}'!", 2)
+            return f'# FALLBACK: No code generated for {file_path}'
+
+        # Stage 1: Initial Assembly
+        raw_assembled_code = "\n\n".join(res['code'] for res in task_results)
+        file_purpose = file_spec.get("purpose", "N/A")
+
+        project_context_summary = f"Project: {plan.get('project_name', 'N/A')}\nDescription: {plan.get('project_description', 'N/A')}"
+
+        assembly_prompt = ASSEMBLY_PROMPT_TEMPLATE.format(
+            file_path=file_path, file_purpose=file_purpose,
+            project_context_summary=project_context_summary, raw_assembled_code=raw_assembled_code
+        )
+        self.stream_emitter("Assembler", "thought", "Asking AI Assembler to intelligently merge code...", 2)
+        assembled_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
+        cleaned_assembled_code = self.clean_llm_output(assembled_code)
+
+        # Stage 2: AI Review
+        self.stream_emitter("Reviewer", "thought", f"Requesting AI review for '{file_path}'...", 2)
+        review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
+            file_path=file_path, project_description=plan.get('project_description', ''), code=cleaned_assembled_code
+        )
+        review_response_text = await self.llm_client.chat(review_prompt, LLMRole.REVIEWER)
+        review_data = self._parse_json_from_response(review_response_text, "Reviewer")
+
+        if not review_data:
+            self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Accepting code as-is.",
+                                2)
+            return cleaned_assembled_code
+
+        # Stage 3: Patching (if necessary)
+        if review_data.get('approved'):
+            self.stream_emitter("Reviewer", "success", f"✅ Review for '{file_path}': APPROVED", 2)
+            return cleaned_assembled_code
+        else:
+            self.stream_emitter("Reviewer", "warning", f"⚠️ Review for '{file_path}': Needs patching.", 2)
+
+            feedback_details = self._format_feedback_for_prompt(review_data)
+            self.stream_emitter("Reviewer", "info", f"Feedback: {feedback_details}", 3)
+
+            patch_prompt = PATCHER_PROMPT_TEMPLATE.format(
+                file_path=file_path,
+                original_code=cleaned_assembled_code,
+                review_feedback=feedback_details
+            )
+            self.stream_emitter("Reviewer", "thought", "Applying patches...", 2)
+            patched_code = await self.llm_client.chat(patch_prompt, LLMRole.REVIEWER)  # Use best model to patch
+            self.stream_emitter("Reviewer", "success", "Patches applied. Final code generated.", 2)
+            return self.clean_llm_output(patched_code)

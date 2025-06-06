@@ -1,4 +1,4 @@
-# enhanced_workflow_engine.py - COMPLETE WORKING FILE with Role-Based LLM
+# enhanced_workflow_engine.py - FINAL, STREAMLINED VERSION
 
 import asyncio
 import json
@@ -52,7 +52,7 @@ class EnhancedWorkflowEngine(QObject):
 
         self._connect_terminal_signals()
         self.logger.info(
-            "✅ Enhanced Workflow Engine initialized with Structurer -> Planner -> Coder -> Assembler flow.")
+            "✅ Enhanced Workflow Engine initialized with Structurer -> Planner -> Coder -> Assembler/Reviewer flow.")
 
     def _connect_terminal_signals(self):
         if not self.terminal_window: return
@@ -68,6 +68,7 @@ class EnhancedWorkflowEngine(QObject):
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
         self.logger.info(f"🚀 Starting Conversational AI workflow: {user_prompt[:100]}...")
+        workflow_start_time = datetime.now()
         self.workflow_started.emit(user_prompt)
         self.detailed_log_event.emit("WorkflowEngine", "stage_start", "🚀 Initializing Conversational AI workflow", "0")
 
@@ -95,7 +96,7 @@ class EnhancedWorkflowEngine(QObject):
 
             completed_file_plans = {}
             results = {"files_created": [], "project_dir": str(project_dir)}
-            project_context = {"description": project_description, "feedback_for_coder": None}
+            project_context = {"description": project_description}
 
             for i, file_info in enumerate(files_to_process):
                 filename = file_info["filename"]
@@ -119,46 +120,28 @@ class EnhancedWorkflowEngine(QObject):
                 file_spec['path'] = filename
                 completed_file_plans[filename] = file_spec
 
-                max_attempts = 3
-                for attempt in range(max_attempts):
-                    self.detailed_log_event.emit("WorkflowEngine", "status",
-                                                 f"Starting generation for '{filename}' (Attempt {attempt + 1}/{max_attempts})...",
-                                                 1)
+                # Execute coding tasks for the file
+                task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
 
-                    task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
-                    assembled_code, review_ok, review_msg = await self.assembler_service.assemble_file(filename,
-                                                                                                       task_results,
-                                                                                                       high_level_plan,
-                                                                                                       file_spec)
-                    if review_ok:
-                        self.detailed_log_event.emit("WorkflowEngine", "success", f"Code for '{filename}' approved.", 1)
-                        break  # Exit the loop on success
-                    else:
-                        project_context[
-                            "feedback_for_coder"] = f"Review failed. You MUST fix the following issues: {review_msg}"
-                        self.detailed_log_event.emit("WorkflowEngine", "warning",
-                                                     f"Review failed for '{filename}'. Retrying with feedback...", 1)
-
-                else:  # This 'else' belongs to the 'for' loop, it runs if the loop completes without a 'break'
-                    self.detailed_log_event.emit("WorkflowEngine", "error",
-                                                 f"Halting workflow. Code for '{filename}' failed all review attempts.",
-                                                 1)
-                    raise Exception(
-                        f"Failed to generate acceptable code for '{filename}' after {max_attempts} attempts.")
+                # Assemble, review, and patch the file in one go
+                final_code = await self.assembler_service.assemble_and_review_file(filename,
+                                                                                  task_results,
+                                                                                  high_level_plan,
+                                                                                  file_spec)
 
                 file_path_obj = project_dir / filename
                 file_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                file_path_obj.write_text(assembled_code, encoding='utf-8')
+                file_path_obj.write_text(final_code, encoding='utf-8')
                 self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
                 self.file_generated.emit(str(file_path_obj))
                 results["files_created"].append(filename)
-                project_context["feedback_for_coder"] = None  # Reset feedback for next file
 
             self._update_task_progress(4, 5)
 
             # --- Stage 3: Finalization ---
             self.workflow_progress.emit("finalization", "Finalizing project...")
-            final_result = await self._finalize_project(results)
+            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
+            final_result = await self._finalize_project(results, elapsed_time)
             self._update_task_progress(5, 5)
 
             self.workflow_progress.emit("complete", "AI workflow completed successfully")
@@ -170,10 +153,11 @@ class EnhancedWorkflowEngine(QObject):
 
         except Exception as e:
             self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
+            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
             self.workflow_progress.emit("error", f"AI workflow failed: {str(e)}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Workflow Error: {str(e)}", "0")
             self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
-            self.workflow_completed.emit({"success": False, "error": str(e)})
+            self.workflow_completed.emit({"success": False, "error": str(e), "elapsed_time": elapsed_time})
             raise
 
     def _update_task_progress(self, completed: int, total: int):
@@ -181,7 +165,7 @@ class EnhancedWorkflowEngine(QObject):
         self.workflow_stats["workflow_state"]["total_tasks"] = total
         self.task_progress.emit(completed, total)
 
-    async def _finalize_project(self, results: Dict[str, Any]) -> Dict[str, Any]:
+    async def _finalize_project(self, results: Dict[str, Any], elapsed_time: float) -> Dict[str, Any]:
         self.detailed_log_event.emit("WorkflowEngine", "thought", "Creating project summary...", "1")
         await asyncio.sleep(0.1)
 
@@ -191,9 +175,12 @@ class EnhancedWorkflowEngine(QObject):
             self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project loaded into UI: {project_dir}", "1")
 
         final_result = {
-            "success": True, "project_name": Path(project_dir).name if project_dir else "Unknown",
-            "project_dir": project_dir, "file_count": len(results.get("files_created", [])),
-            "files_created": results.get("files_created", [])
+            "success": True,
+            "project_name": Path(project_dir).name if project_dir else "Unknown",
+            "project_dir": project_dir,
+            "file_count": len(results.get("files_created", [])),
+            "files_created": results.get("files_created", []),
+            "elapsed_time": elapsed_time
         }
         self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
         return final_result
