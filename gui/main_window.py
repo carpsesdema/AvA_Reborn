@@ -570,17 +570,17 @@ Let me know if you'd like to try again or need help with something else."""
         if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
             assignments = self.ava_app.llm_client.get_role_assignments()
 
-            def get_short_name(role_value_str):
+            def get_short_model_name(role_value_str):
                 model_key = assignments.get(role_value_str)
                 if not model_key or not hasattr(self.ava_app.llm_client, 'models'):
                     return 'N/A'
                 mc = self.ava_app.llm_client.models.get(model_key)
                 return mc.model.split('/')[-1][:6] if mc else 'N/A'
 
-            p_model = get_short_name(LLMRole.PLANNER.value)
-            c_model = get_short_name(LLMRole.CODER.value)
-            a_model = get_short_name(LLMRole.ASSEMBLER.value)
-            r_model = get_short_name(LLMRole.REVIEWER.value)
+            p_model = get_short_model_name(LLMRole.PLANNER.value)
+            c_model = get_short_model_name(LLMRole.CODER.value)
+            a_model = get_short_model_name(LLMRole.ASSEMBLER.value)
+            r_model = get_short_model_name(LLMRole.REVIEWER.value)
 
             specialists_text = f"P:{p_model} C:{c_model} A:{a_model} R:{r_model}"
             all_assigned = all(m != 'N/A' for m in [p_model, c_model, a_model, r_model])
@@ -680,10 +680,10 @@ What would you like to work on?""")
                 mc = self.ava_app.llm_client.models.get(model_key)
                 return mc.model.split('/')[-1][:6] if mc else 'N/A'
 
-            p_short = get_short_name(LLMRole.PLANNER.value)
-            c_short = get_short_name(LLMRole.CODER.value)
-            a_short = get_short_name(LLMRole.ASSEMBLER.value)
-            r_short = get_short_name(LLMRole.REVIEWER.value)
+            p_short = get_short_model_name(LLMRole.PLANNER.value)
+            c_short = get_short_model_name(LLMRole.CODER.value)
+            a_short = get_short_model_name(LLMRole.ASSEMBLER.value)
+            r_short = get_short_model_name(LLMRole.REVIEWER.value)
 
             base_title += f" (P:{p_short} C:{c_short} A:{a_short} R:{r_short})"
 
