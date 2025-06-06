@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtWidgets import QApplication
 
-from core.llm_client import LLMClient
+from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
 
 # Import the components
@@ -144,7 +144,7 @@ class AvAApplication(QObject):
 
     def _initialize_core_services(self):
         self.logger.info("Initializing core services...")
-        self.llm_client = LLMClient()
+        self.llm_client = EnhancedLLMClient()
         available_models = self.llm_client.get_available_models()
         self.logger.info(f"Available LLM models: {available_models}")
         if not available_models or available_models == ["No LLM services available"]:

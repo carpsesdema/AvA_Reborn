@@ -90,13 +90,17 @@ class WorkflowProgressWidget(QWidget):
 
     def update_progress(self, completed: int, total: int):
         if total > 0:
-            progress = int((completed / total) * 100); self.progress_bar.setValue(progress); self.task_label.setText(
+            progress = int((completed / total) * 100);
+            self.progress_bar.setValue(progress);
+            self.task_label.setText(
                 f"Tasks: {completed}/{total} ({progress}%)")
         else:
-            self.progress_bar.setValue(0); self.task_label.setText("Tasks: 0/0")
+            self.progress_bar.setValue(0);
+            self.task_label.setText("Tasks: 0/0")
 
     def reset_progress(self):
-        self.update_stage("idle", "Workflow: Idle"); self.update_progress(0, 0)
+        self.update_stage("idle", "Workflow: Idle");
+        self.update_progress(0, 0)
 
 
 class StreamingIndicator(QWidget):
@@ -139,9 +143,8 @@ class StreamingIndicator(QWidget):
 class StreamingTerminal(QWidget):
     def __init__(self):
         super().__init__()
-        # self.message_queue = queue.Queue() # Not used with direct signal connection
+        self._last_stream_message_info = None
         self._init_ui()
-        # self.progress_display = StreamingProgressDisplay(self) # Pass self; No longer needed directly by terminal widget itself
 
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -187,46 +190,59 @@ class StreamingTerminal(QWidget):
         self.text_area.append(
             "<div style='color: #7c3aed; font-weight: bold; margin-bottom: 8px;'>╭─────────────────── AvA Development Terminal ───────────────────╮<br/>│               Real-time streaming & progress               │<br/>│                    Ready for workflows! 🚀                │<br/>╰────────────────────────────────────────────────────────────╯</div>")
 
-    # This is the new SLOT that receives detailed logs
-    @Slot(str, str, str, str)  # agent_name, type_key, content, indent_level_str
+    @Slot(str, str, str, str)
     def stream_log_rich(self, agent_name: str, type_key: str, content: str, indent_level_str: str):
-        indent_level = 0
-        try:
-            indent_level = int(indent_level_str)
-        except ValueError:
-            pass
+        # If the message is not an LLM chunk, reset the tracking for our streaming logic
+        if type_key != "llm_chunk":
+            self._last_stream_message_info = None
 
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # Added milliseconds
-        indent_px = indent_level * 20  # pixels for indentation
+        cursor = self.text_area.textCursor()
+        cursor.movePosition(QTextCursor.End)
 
-        # Define colors and icons (can be expanded)
-        agent_colors = {
-            "Planner": "#DA70D6",  # Orchid
-            "Coder": "#6495ED",  # CornflowerBlue
-            "Assembler": "#FFA500",  # Orange
-            "Reviewer": "#32CD32",  # LimeGreen
-            "WorkflowEngine": "#7c3aed",  # Original AvA Purple
-            "Orchestrator": "#FF69B4",  # HotPink
-            "System": "#B0C4DE"  # LightSteelBlue
-        }
-        type_icons = {
-            "thought": "💡", "thought_detail": "💭",
-            "code_chunk": "```", "status": "ℹ️", "error": "❌",
-            "warning": "⚠️", "success": "✅", "file_op": "📁",
-            "llm_chunk": "💬", "stage_start": "▶️", "stage_end": "⏹️",
-            "fallback": "🔄", "debug": "🐞", "info": "🔹"
-        }
+        if type_key == "llm_chunk":
+            current_info = (agent_name, indent_level_str)
+            escaped_content = html.escape(content).replace('\n', '<br />')
+
+            # Check if this chunk belongs to the previous message
+            if self._last_stream_message_info == current_info:
+                # If so, just insert the text without any header
+                cursor.insertHtml(f'<span style="color: #98c379;">{escaped_content}</span>')
+            else:
+                # Otherwise, it's a new stream. Print a header first.
+                self._last_stream_message_info = current_info
+                indent_px = int(indent_level_str) * 20
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                agent_colors = {"Planner": "#DA70D6", "Coder": "#6495ED"}
+                agent_color = agent_colors.get(agent_name, "#6495ED")
+                header_html = f"""
+                <div style="margin: 1px 0; padding-left: {indent_px}px; font-family: 'JetBrains Mono', monospace;">
+                    <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
+                    <span style="color: {agent_color}; font-weight: bold;">{agent_name}</span>
+                    <span style="color: #8b949e;"> 💬 </span><span style="color: #98c379;">{escaped_content}</span>
+                </div>"""
+                self.text_area.append(header_html)
+
+            if self.auto_scroll_checkbox.isChecked():
+                self._scroll_to_bottom()
+            return
+
+        # --- This part handles all non-streaming messages ---
+        indent_level = int(indent_level_str)
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        indent_px = indent_level * 20
+
+        agent_colors = {"Planner": "#DA70D6", "Coder": "#6495ED", "Assembler": "#FFA500", "Reviewer": "#32CD32",
+                        "WorkflowEngine": "#7c3aed", "Orchestrator": "#FF69B4", "System": "#B0C4DE",
+                        "Terminal": "#3fb950"}
+        type_icons = {"thought": "💡", "thought_detail": "💭", "code_chunk": "```", "status": "ℹ️", "error": "❌",
+                      "warning": "⚠️", "success": "✅", "file_op": "📁", "stage_start": "▶️", "stage_end": "⏹️",
+                      "fallback": "🔄", "debug": "🐞", "info": "🔹"}
 
         agent_color = agent_colors.get(agent_name, "#c9d1d9")
         icon = type_icons.get(type_key, "")
-
-        # Basic HTML escaping for content
         escaped_content = html.escape(content)
 
-        # Special formatting for code chunks
         if type_key == "code_chunk":
-            # For code chunks, a lighter agent name, then the code block
-            # The `overflow-wrap: anywhere;` and `white-space: pre-wrap;` are important
             formatted_message = f"""
             <div style="margin: 1px 0; padding-left: {indent_px}px; font-family: 'JetBrains Mono', monospace;">
                 <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
@@ -234,22 +250,11 @@ class StreamingTerminal(QWidget):
                 <div style="background:#161b22; color:#bae67e; padding: 5px 8px; border-radius:4px; margin-top: 2px; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere;">{escaped_content}</div>
             </div>
             """
-        elif type_key == "llm_chunk":  # For non-code LLM outputs like plans
-            formatted_message = f"""
-            <div style="margin: 1px 0; padding-left: {indent_px}px; font-family: 'JetBrains Mono', monospace;">
-                <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
-                <span style="color: {agent_color}; font-weight: bold;">{agent_name}</span>
-                <span style="color: #8b949e;"> {icon}</span>
-                <span style="color: #98c379;">{escaped_content}</span>
-            </div>"""
-        else:  # General thoughts, statuses
-            content_color_map = {
-                "error": "#f85149", "warning": "#d29922", "success": "#3fb950",
-                "stage_start": agent_color, "stage_end": agent_color
-            }
+        else:
+            content_color_map = {"error": "#f85149", "warning": "#d29922", "success": "#3fb950",
+                                 "stage_start": agent_color, "stage_end": agent_color}
             content_color = content_color_map.get(type_key, "#c9d1d9")
             font_weight = "bold" if type_key in ["stage_start", "stage_end", "success", "error"] else "normal"
-
             formatted_message = f"""
             <div style="margin: 1px 0; padding-left: {indent_px}px; font-family: 'JetBrains Mono', monospace;">
                 <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
@@ -262,24 +267,24 @@ class StreamingTerminal(QWidget):
         self.text_area.append(formatted_message)
         if self.auto_scroll_checkbox.isChecked(): self._scroll_to_bottom()
 
-    # Fallback log for simpler stream_log calls if `detailed_log_event` is not fully adopted by a caller
-    @Slot(str, int)  # content, indent
+    @Slot(str, int)
     def stream_log(self, message: str, indent: int = 0):
-        # This is a simplified version. Call stream_log_rich with default agent/type
         self.stream_log_rich("System", "info", message, str(indent))
 
     def _scroll_to_bottom(self):
-        cursor = self.text_area.textCursor(); cursor.movePosition(QTextCursor.End); self.text_area.setTextCursor(cursor)
+        cursor = self.text_area.textCursor();
+        cursor.movePosition(QTextCursor.End);
+        self.text_area.setTextCursor(cursor)
 
     def add_separator(self, title: str = ""):
         separator_html = f"<div style='color: #484f58; text-align: center; margin: 5px 0;'>{html.escape('─' * 15)} {html.escape(title)} {html.escape('─' * 15) if title else html.escape('─' * 35)}</div>"
-        self.text_area.append(separator_html)  # Use append for HTML
+        self.text_area.append(separator_html)
 
-    @Slot(str, str)  # stage, description
+    @Slot(str, str)
     def update_workflow_progress(self, stage: str, description: str):
         self.workflow_progress.update_stage(stage, description)
 
-    @Slot(int, int)  # completed, total
+    @Slot(int, int)
     def update_task_progress(self, completed: int, total: int):
         self.workflow_progress.update_progress(completed, total)
 
@@ -292,7 +297,7 @@ class StreamingTerminal(QWidget):
         self.perf_status.setText(f"Perf: {speed_info}")
 
     def start_file_generation(self, file_path: str):
-        from pathlib import Path  # Ensure Path is imported
+        from pathlib import Path
         self.streaming_indicator.start_streaming(f"Gen: {Path(file_path).name}")
 
     def complete_file_generation(self, file_path: str, success: bool):
@@ -300,12 +305,15 @@ class StreamingTerminal(QWidget):
 
     @Slot()
     def clear_terminal(self):
-        self.text_area.clear(); self._add_initial_message(); self.workflow_progress.reset_progress(); self.streaming_indicator.stop_streaming()
+        self.text_area.clear();
+        self._add_initial_message();
+        self.workflow_progress.reset_progress();
+        self.streaming_indicator.stop_streaming()
 
     @Slot()
     def save_log(self):
         try:
-            from PySide6.QtWidgets import QFileDialog  # Local import
+            from PySide6.QtWidgets import QFileDialog
             filename, _ = QFileDialog.getSaveFileName(self, "Save Log",
                                                       f"ava_term_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
                                                       "HTML Files (*.html);;Text Files (*.txt)")
