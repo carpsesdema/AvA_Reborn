@@ -95,7 +95,7 @@ class EnhancedWorkflowEngine(QObject):
 
             completed_file_plans = {}
             results = {"files_created": [], "project_dir": str(project_dir)}
-            project_context = {"description": project_description}
+            project_context = {"description": project_description, "feedback_for_coder": None}
 
             for i, file_info in enumerate(files_to_process):
                 filename = file_info["filename"]
@@ -115,16 +115,36 @@ class EnhancedWorkflowEngine(QObject):
                                                  f"Skipping file {filename} due to planning failure.", 1)
                     continue
 
-                # Add purpose and path to the spec for context building and downstream use
                 file_spec['purpose'] = file_purpose
                 file_spec['path'] = filename
                 completed_file_plans[filename] = file_spec
 
-                task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
-                assembled_code, review_ok, review_msg = await self.assembler_service.assemble_file(filename,
-                                                                                                   task_results,
-                                                                                                   high_level_plan,
-                                                                                                   file_spec)
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    self.detailed_log_event.emit("WorkflowEngine", "status",
+                                                 f"Starting generation for '{filename}' (Attempt {attempt + 1}/{max_attempts})...",
+                                                 1)
+
+                    task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
+                    assembled_code, review_ok, review_msg = await self.assembler_service.assemble_file(filename,
+                                                                                                       task_results,
+                                                                                                       high_level_plan,
+                                                                                                       file_spec)
+                    if review_ok:
+                        self.detailed_log_event.emit("WorkflowEngine", "success", f"Code for '{filename}' approved.", 1)
+                        break  # Exit the loop on success
+                    else:
+                        project_context[
+                            "feedback_for_coder"] = f"Review failed. You MUST fix the following issues: {review_msg}"
+                        self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                                     f"Review failed for '{filename}'. Retrying with feedback...", 1)
+
+                else:  # This 'else' belongs to the 'for' loop, it runs if the loop completes without a 'break'
+                    self.detailed_log_event.emit("WorkflowEngine", "error",
+                                                 f"Halting workflow. Code for '{filename}' failed all review attempts.",
+                                                 1)
+                    raise Exception(
+                        f"Failed to generate acceptable code for '{filename}' after {max_attempts} attempts.")
 
                 file_path_obj = project_dir / filename
                 file_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +152,7 @@ class EnhancedWorkflowEngine(QObject):
                 self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
                 self.file_generated.emit(str(file_path_obj))
                 results["files_created"].append(filename)
+                project_context["feedback_for_coder"] = None  # Reset feedback for next file
 
             self._update_task_progress(4, 5)
 

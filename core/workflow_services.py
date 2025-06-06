@@ -91,7 +91,7 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
 
     PROJECT CONTEXT: {project_context_description}
     FILE CONTEXT: This snippet will be part of '{file_path}'
-
+    {correction_feedback}
     SPECIFICATIONS:
     ```json
     {task_specs_json}
@@ -100,10 +100,11 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     CRITICAL INSTRUCTIONS:
     1.  Generate ONLY the Python code required to fulfill THIS SPECIFIC micro-task.
     2.  Adhere strictly to every detail in the 'core_logic_steps', 'interactions', and 'critical_notes' from the specifications.
-    3.  Ensure the code is clean, efficient, well-commented (docstrings for public elements, comments for complex logic), and follows PEP 8.
-    4.  Do NOT generate a full file or surrounding code unless the task 'component_type' is 'full_file'.
-    5.  If the task specifies "DO NOT use eval()", you MUST follow that rule.
-    6.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
+    3.  If feedback is provided above, you MUST address it in your new code.
+    4.  Ensure the code is clean, efficient, well-commented (docstrings for public elements, comments for complex logic), and follows PEP 8.
+    5.  Do NOT generate a full file or surrounding code unless the task 'component_type' is 'full_file'.
+    6.  If the task specifies "DO NOT use eval()", you MUST follow that rule.
+    7.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
 
     Generate ONLY the required Python code snippet for this task:
 """)
@@ -232,9 +233,16 @@ class EnhancedCoderService(BaseAIService):
     async def execute_task(self, task: dict, project_context: dict) -> str:
         task_id, task_desc = task.get("task_id", "unknown_task"), task.get("description", "N/A")
         self.stream_emitter("Coder", "thought", f"Focusing on task '{task_id}': {task_desc[:60]}...", 2)
+
+        feedback_text = ""
+        if project_context.get("feedback_for_coder"):
+            feedback_text = f"CORRECTION FEEDBACK FROM PREVIOUS ATTEMPT:\n{project_context['feedback_for_coder']}\n"
+            self.stream_emitter("Coder", "warning", "Applying feedback from previous attempt.", 2)
+
         code_prompt = CODER_PROMPT_TEMPLATE.format(
             project_context_description=project_context.get('description', ''),
             file_path=task.get('file_path', ''),
+            correction_feedback=feedback_text,
             task_specs_json=json.dumps(task, indent=2)
         )
         self.stream_emitter("Coder", "thought", f"Writing code for '{task_id}'...", 2)

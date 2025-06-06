@@ -90,16 +90,16 @@ class WorkflowProgressWidget(QWidget):
 
     def update_progress(self, completed: int, total: int):
         if total > 0:
-            progress = int((completed / total) * 100);
-            self.progress_bar.setValue(progress);
+            progress = int((completed / total) * 100)
+            self.progress_bar.setValue(progress)
             self.task_label.setText(
                 f"Tasks: {completed}/{total} ({progress}%)")
         else:
-            self.progress_bar.setValue(0);
+            self.progress_bar.setValue(0)
             self.task_label.setText("Tasks: 0/0")
 
     def reset_progress(self):
-        self.update_stage("idle", "Workflow: Idle");
+        self.update_stage("idle", "Workflow: Idle")
         self.update_progress(0, 0)
 
 
@@ -192,6 +192,14 @@ class StreamingTerminal(QWidget):
 
     @Slot(str, str, str, str)
     def stream_log_rich(self, agent_name: str, type_key: str, content: str, indent_level_str: str):
+        if not indent_level_str.strip():
+            indent_level = 0
+        else:
+            try:
+                indent_level = int(indent_level_str)
+            except ValueError:
+                indent_level = 0
+
         # If the message is not an LLM chunk, reset the tracking for our streaming logic
         if type_key != "llm_chunk":
             self._last_stream_message_info = None
@@ -210,24 +218,25 @@ class StreamingTerminal(QWidget):
             else:
                 # Otherwise, it's a new stream. Print a header first.
                 self._last_stream_message_info = current_info
-                indent_px = int(indent_level_str) * 20
+                indent_px = indent_level * 20
                 timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 agent_colors = {"Planner": "#DA70D6", "Coder": "#6495ED"}
                 agent_color = agent_colors.get(agent_name, "#6495ED")
+                # Insert the header, which also moves the cursor
                 header_html = f"""
                 <div style="margin: 1px 0; padding-left: {indent_px}px; font-family: 'JetBrains Mono', monospace;">
                     <span style="color: #6e7681; font-size: 10px;">[{timestamp}]</span>
                     <span style="color: {agent_color}; font-weight: bold;">{agent_name}</span>
-                    <span style="color: #8b949e;"> 💬 </span><span style="color: #98c379;">{escaped_content}</span>
-                </div>"""
-                self.text_area.append(header_html)
+                    <span style="color: #8b949e;"> 💬 </span>"""
+                self.text_area.append(header_html)  # append adds a newline, which separates headers
+                # Now insert the first chunk of text without an extra newline
+                cursor.insertHtml(f'<span style="color: #98c379;">{escaped_content}</span>')
 
             if self.auto_scroll_checkbox.isChecked():
                 self._scroll_to_bottom()
             return
 
         # --- This part handles all non-streaming messages ---
-        indent_level = int(indent_level_str)
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         indent_px = indent_level * 20
 
@@ -272,8 +281,8 @@ class StreamingTerminal(QWidget):
         self.stream_log_rich("System", "info", message, str(indent))
 
     def _scroll_to_bottom(self):
-        cursor = self.text_area.textCursor();
-        cursor.movePosition(QTextCursor.End);
+        cursor = self.text_area.textCursor()
+        cursor.movePosition(QTextCursor.End)
         self.text_area.setTextCursor(cursor)
 
     def add_separator(self, title: str = ""):
@@ -305,9 +314,9 @@ class StreamingTerminal(QWidget):
 
     @Slot()
     def clear_terminal(self):
-        self.text_area.clear();
-        self._add_initial_message();
-        self.workflow_progress.reset_progress();
+        self.text_area.clear()
+        self._add_initial_message()
+        self.workflow_progress.reset_progress()
         self.streaming_indicator.stop_streaming()
 
     @Slot()
