@@ -286,7 +286,7 @@ class StreamingTerminal(QWidget):
         self.text_area.setTextCursor(cursor)
 
     def add_separator(self, title: str = ""):
-        separator_html = f"<div style='color: #484f58; text-align: center; margin: 5px 0;'>{html.escape('─' * 15)} {html.escape(title)} {html.escape('─' * 15) if title else html.escape('─' * 35)}</div>"
+        separator_html = f"<div style='color: #484f58; text-align: center; margin: 5px 0;'>{html.escape('─' * 15)} {html.escape(title)} {html.escape('─' * 35) if title else html.escape('─' * 35)}</div>"
         self.text_area.append(separator_html)
 
     @Slot(str, str)

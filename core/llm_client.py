@@ -157,27 +157,43 @@ class EnhancedLLMClient:
         print("Assigning hardcoded models for consistent testing...")
 
         fixed_assignments = {
-            LLMRole.STRUCTURER: "gemini-2.5-flash-preview-05-20",  # Use a fast, reliable model for this simple task
+            LLMRole.STRUCTURER: "gemini-2.5-pro-preview-06-05",  # Structuring is important, use the best model.
             LLMRole.PLANNER: "gemini-2.5-pro-preview-06-05",
-            LLMRole.CODER: "ollama-codellama:13b",
-            LLMRole.ASSEMBLER: "ollama-codellama:13b-instruct",
+            LLMRole.CODER: "ollama-codellama:13b",  # As requested, for specialized coding
+            LLMRole.ASSEMBLER: "gemini-2.5-flash-preview-05-20",
             LLMRole.REVIEWER: "gemini-2.5-pro-preview-06-05",
             LLMRole.CHAT: "gemini-2.5-flash-preview-05-20"
         }
 
         self.role_assignments = {}
-        for role, model_key in fixed_assignments.items():
-            if model_key in self.models:
-                self.role_assignments[role] = model_key
-                print(f"✅ Assigned {model_key} to role {role.value}")
-            else:  # Fallback for local dev if ollama models are not present
-                fallback_model = "gemini-2.5-pro-preview-06-05" if "pro" in model_key else "gemini-2.5-flash-preview-05-20"
-                if fallback_model in self.models:
-                    self.role_assignments[role] = fallback_model
-                    print(f"⚠️ Model '{model_key}' not found. Falling back to {fallback_model} for role {role.value}.")
-                else:
-                    self.role_assignments[role] = None
-                    print(f"❌ FATAL: Model '{model_key}' and fallback not found. Role {role.value} is unassigned.")
+        available_model_keys = list(self.models.keys())
+
+        for role, primary_model_key in fixed_assignments.items():
+            if primary_model_key in self.models:
+                self.role_assignments[role] = primary_model_key
+                print(f"✅ Assigned {primary_model_key} to role {role.value}")
+            else:
+                # Fallback logic
+                fallback_found = False
+                # Try to find any other suitable model
+                for model_key in available_model_keys:
+                    if role in self.models[model_key].suitable_roles:
+                        self.role_assignments[role] = model_key
+                        print(
+                            f"⚠️ Model '{primary_model_key}' not found. Falling back to suitable model {model_key} for role {role.value}.")
+                        fallback_found = True
+                        break
+
+                if not fallback_found:
+                    # If still no suitable model, assign first available model as last resort
+                    if available_model_keys:
+                        self.role_assignments[role] = available_model_keys[0]
+                        print(
+                            f"⚠️ Models '{primary_model_key}' and other suitable models not found. Falling back to first available model {available_model_keys[0]} for role {role.value}.")
+                    else:
+                        self.role_assignments[role] = None
+                        print(f"❌ FATAL: No models available. Role {role.value} is unassigned.")
+
         self._apply_temperatures_from_presets()
 
     def _apply_temperatures_from_presets(self):
@@ -191,12 +207,16 @@ class EnhancedLLMClient:
             for role_str, presets_list in all_presets_data.items():
                 try:
                     role_enum = LLMRole(role_str)
-                    assigned_model_key = self.role_assignments.get(role_enum)
-                    if assigned_model_key and assigned_model_key in self.models and presets_list:
-                        user_preset = next((p for p in presets_list if p.get("author", "User") == "User"), None)
-                        preset_to_load = user_preset or presets_list[0]
-                        if "temperature" in preset_to_load:
+                    # Find the active preset for the role (User-created takes precedence)
+                    user_preset = next((p for p in presets_list if p.get("author", "User") == "User"), None)
+                    preset_to_load = user_preset or (presets_list[0] if presets_list else None)
+
+                    if preset_to_load and "temperature" in preset_to_load:
+                        # Apply temperature to the model currently assigned to this role
+                        assigned_model_key = self.role_assignments.get(role_enum)
+                        if assigned_model_key and assigned_model_key in self.models:
                             self.models[assigned_model_key].temperature = float(preset_to_load["temperature"])
+
                 except (ValueError, KeyError):
                     continue
         except Exception as e:
@@ -520,7 +540,7 @@ class EnhancedLLMClient:
         available = []
         if not self.role_assignments: return ["No models assigned to roles yet."]
         for role_enum, model_name_key in self.role_assignments.items():
-            if model_name_key in self.models:
+            if model_name_key and model_name_key in self.models:
                 config = self.models[model_name_key]
                 available.append(f"{role_enum.value.title()}: {config.provider}/{config.model}")
             else:

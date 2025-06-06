@@ -68,6 +68,7 @@ class EnhancedWorkflowEngine(QObject):
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
         self.logger.info(f"🚀 Starting Conversational AI workflow: {user_prompt[:100]}...")
+        workflow_start_time = datetime.now()
         self.workflow_started.emit(user_prompt)
         self.detailed_log_event.emit("WorkflowEngine", "stage_start", "🚀 Initializing Conversational AI workflow", "0")
 
@@ -158,7 +159,8 @@ class EnhancedWorkflowEngine(QObject):
 
             # --- Stage 3: Finalization ---
             self.workflow_progress.emit("finalization", "Finalizing project...")
-            final_result = await self._finalize_project(results)
+            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
+            final_result = await self._finalize_project(results, elapsed_time)
             self._update_task_progress(5, 5)
 
             self.workflow_progress.emit("complete", "AI workflow completed successfully")
@@ -170,10 +172,11 @@ class EnhancedWorkflowEngine(QObject):
 
         except Exception as e:
             self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
+            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
             self.workflow_progress.emit("error", f"AI workflow failed: {str(e)}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Workflow Error: {str(e)}", "0")
             self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
-            self.workflow_completed.emit({"success": False, "error": str(e)})
+            self.workflow_completed.emit({"success": False, "error": str(e), "elapsed_time": elapsed_time})
             raise
 
     def _update_task_progress(self, completed: int, total: int):
@@ -181,7 +184,7 @@ class EnhancedWorkflowEngine(QObject):
         self.workflow_stats["workflow_state"]["total_tasks"] = total
         self.task_progress.emit(completed, total)
 
-    async def _finalize_project(self, results: Dict[str, Any]) -> Dict[str, Any]:
+    async def _finalize_project(self, results: Dict[str, Any], elapsed_time: float) -> Dict[str, Any]:
         self.detailed_log_event.emit("WorkflowEngine", "thought", "Creating project summary...", "1")
         await asyncio.sleep(0.1)
 
@@ -191,9 +194,12 @@ class EnhancedWorkflowEngine(QObject):
             self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project loaded into UI: {project_dir}", "1")
 
         final_result = {
-            "success": True, "project_name": Path(project_dir).name if project_dir else "Unknown",
-            "project_dir": project_dir, "file_count": len(results.get("files_created", [])),
-            "files_created": results.get("files_created", [])
+            "success": True,
+            "project_name": Path(project_dir).name if project_dir else "Unknown",
+            "project_dir": project_dir,
+            "file_count": len(results.get("files_created", [])),
+            "files_created": results.get("files_created", []),
+            "elapsed_time": elapsed_time
         }
         self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
         return final_result

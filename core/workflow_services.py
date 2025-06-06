@@ -109,6 +109,30 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     Generate ONLY the required Python code snippet for this task:
 """)
 
+ASSEMBLY_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the ASSEMBLER AI. Your job is to take a collection of Python code snippets and intelligently assemble them into a single, complete, and professional Python file.
+
+    FILE PATH: `{file_path}`
+    FILE PURPOSE: {file_purpose}
+
+    PROJECT CONTEXT:
+    {project_context_summary}
+
+    CODE SNIPPETS TO ASSEMBLE:
+    ---
+    {raw_assembled_code}
+    ---
+
+    **CRITICAL INSTRUCTIONS:**
+    1.  **Combine Snippets:** Logically arrange the provided code snippets into a cohesive file.
+    2.  **Manage Imports:** Consolidate all necessary `import` statements at the top of the file, removing duplicates. Follow PEP 8 import order (standard library, third-party, local modules).
+    3.  **Local Imports:** Correctly formulate local imports based on the project context. For example, if a file is `calculator_model.py`, a local import should be `from calculator_model import ...`.
+    4.  **Add Documentation:** Write a professional, file-level docstring that summarizes the file's purpose. Ensure all public classes and functions from the snippets retain their docstrings.
+    5.  **Ensure Consistency:** Maintain consistent formatting (4-space indentation) and PEP 8 compliance throughout the entire file.
+
+    **Your final output MUST be ONLY the raw, complete, and clean Python code for the file `{file_path}`. Do not include any conversational text, explanations, or markdown formatting.**
+""")
+
 # RE-ADDED a Reviewer prompt template
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are a senior code reviewer examining this Python file for quality, correctness, and adherence to the plan.
@@ -295,58 +319,31 @@ class EnhancedAssemblerService(BaseAIService):
 
         raw_assembled_code = "\n\n".join(res['code'] for res in task_results)
 
-        file_purpose = "N/A"
-        for f in plan.get('files', []):
-            if f.get('filename') == file_path:
-                file_purpose = f.get('purpose', 'N/A')
-                break
+        file_purpose = file_spec.get("purpose", "N/A")
 
-        component_summary = "\n".join(
-            [f"- {c.get('component_type', 'component')}: {c.get('description', 'N/A')}" for c in
-             file_spec.get('components', [])])
+        project_context_summary = f"Project: {plan.get('project_name', 'N/A')}\nDescription: {plan.get('project_description', 'N/A')}"
 
-        other_files_summary = "\n".join(
-            [f"- {f.get('filename')}: {f.get('purpose')}" for f in plan.get('files', []) if
-             f.get('filename') != file_path]
+        assembly_prompt = ASSEMBLY_PROMPT_TEMPLATE.format(
+            file_path=file_path,
+            file_purpose=file_purpose,
+            project_context_summary=project_context_summary,
+            raw_assembled_code=raw_assembled_code
         )
 
-        assembly_prompt = textwrap.dedent(f"""
-            **Task: Assemble Code File**
-
-            **File Path:** `{file_path}`
-            **File Purpose:** {file_purpose}
-            **Project File Structure Context:**
-            {other_files_summary}
-
-            **Input Code Snippets:**
-            ---
-            {raw_assembled_code}
-            ---
-
-            **Instructions:**
-            1.  Combine the input snippets into a single, cohesive Python file.
-            2.  Consolidate all imports at the top, following PEP 8.
-            3.  **Use the correct module names for local imports based on the Project File Structure Context.** For example, if a file is `calculator_model.py`, the import should be `from calculator_model import ...`.
-            4.  Add a professional file-level docstring summarizing the file's purpose.
-            5.  Ensure all public classes and functions have docstrings.
-            6.  Ensure consistent formatting (4-space indentation) and PEP 8 compliance.
-
-            **CRITICAL: Your output MUST be ONLY the raw, complete Python code for the file `{file_path}`. Do not include any conversational text, explanations, or markdown formatting.**
-        """)
-
         self.stream_emitter("Assembler", "thought", f"Asking AI Assembler to intelligently merge code...", 2)
-        cleaned_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
+        assembled_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
+        cleaned_assembled_code = self.clean_llm_output(assembled_code)
 
-        self.stream_emitter("Assembler", "thought", f"Requesting AI review for '{file_path}'...", 2)
-        review_approved, review_feedback = await self._ai_review_code(file_path, cleaned_code, plan)
+        self.stream_emitter("Reviewer", "thought", f"Requesting AI review for '{file_path}'...", 2)
+        review_approved, review_feedback = await self._ai_review_code(file_path, cleaned_assembled_code, plan)
 
         if review_approved:
-            self.stream_emitter("Assembler", "success", f"✅ Assembly for '{file_path}' - Review: APPROVED", 2)
+            self.stream_emitter("Reviewer", "success", f"✅ Review for '{file_path}': APPROVED", 2)
         else:
-            self.stream_emitter("Assembler", "warning", f"⚠️ Assembly for '{file_path}' - Review: NEEDS ATTENTION", 2)
-            self.stream_emitter("Assembler", "info", f"Feedback: {review_feedback[:100]}...", 3)
+            self.stream_emitter("Reviewer", "warning", f"⚠️ Review for '{file_path}': NEEDS ATTENTION", 2)
+            self.stream_emitter("Reviewer", "info", f"Feedback: {review_feedback[:100]}...", 3)
 
-        return self.clean_llm_output(cleaned_code), review_approved, review_feedback
+        return cleaned_assembled_code, review_approved, review_feedback
 
     def clean_llm_output(self, code: str) -> str:
         """Removes markdown fences from code output."""
@@ -357,16 +354,33 @@ class EnhancedAssemblerService(BaseAIService):
         return code.strip()
 
     async def _ai_review_code(self, file_path: str, code: str, plan: dict) -> Tuple[bool, str]:
-        self.stream_emitter("Assembler", "thought_detail", "Preparing review prompt...", 3)
+        self.stream_emitter("Reviewer", "thought_detail", "Preparing review prompt...", 3)
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(file_path=file_path,
                                                         project_description=plan.get('project_description', ''),
                                                         code=code)
         try:
             review_response = await self.llm_client.chat(review_prompt, LLMRole.REVIEWER)
             review_data = self._parse_json_from_response(review_response, "Reviewer")
+
+            if not review_data:
+                self.stream_emitter("Reviewer", "error", "Failed to parse JSON review from Reviewer AI.", 3)
+                return False, "Review failed: Could not parse response."
+
             approved = review_data.get('approved', False)
             summary = review_data.get('summary', 'AI review completed.')
+
+            # Combine feedback for a more useful message on failure
+            if not approved:
+                issues = review_data.get('critical_issues', [])
+                suggestions = review_data.get('suggestions', [])
+                feedback_details = "Critical Issues:\n- " + "\n- ".join(issues) if issues else "None"
+                feedback_details += "\n\nSuggestions:\n- " + "\n- ".join(suggestions) if suggestions else "None"
+                summary = f"Review Summary: {summary}\n\n{feedback_details}"
+
             return approved, summary
+
         except Exception as e:
-            self.stream_emitter("Assembler", "warning", f"AI review failed ({e}). Using basic validation.", 3)
-            return len(code.strip()) > 10, "Basic validation: Code is not empty."
+            self.stream_emitter("Reviewer", "error", f"AI review failed with an exception: ({e}).", 3)
+            # Basic validation as a fallback
+            is_valid = len(code.strip()) > 10 and "def " in code or "class " in code
+            return is_valid, f"AI review process failed. Fallback validation: {'Passed' if is_valid else 'Failed'}."

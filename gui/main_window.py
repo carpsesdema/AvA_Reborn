@@ -619,7 +619,7 @@ Let me know if you'd like to try again or need help with something else."""
             self.ava_app._open_code_viewer()
         elif action == "new_session":
             self.chat_interface.chat_display.clear()
-            self.chat_interface.chat_display.add_assistant_message("""🆕 **New Session Started!**
+            self.chat_interface.chat_display.add_assistant_response("""🆕 **New Session Started!**
 
 Ready to build something amazing? Just describe what you want to create:
 
@@ -680,10 +680,10 @@ What would you like to work on?""")
                 mc = self.ava_app.llm_client.models.get(model_key)
                 return mc.model.split('/')[-1][:6] if mc else 'N/A'
 
-            p_short = get_short_model_name(LLMRole.PLANNER.value)
-            c_short = get_short_model_name(LLMRole.CODER.value)
-            a_short = get_short_model_name(LLMRole.ASSEMBLER.value)
-            r_short = get_short_model_name(LLMRole.REVIEWER.value)
+            p_short = get_short_name(LLMRole.PLANNER.value)
+            c_short = get_short_name(LLMRole.CODER.value)
+            a_short = get_short_name(LLMRole.ASSEMBLER.value)
+            r_short = get_short_name(LLMRole.REVIEWER.value)
 
             base_title += f" (P:{p_short} C:{c_short} A:{a_short} R:{r_short})"
 
