@@ -210,6 +210,32 @@ class BaseAIService:
             self.stream_emitter(agent_name, "debug", f"Failed to parse text: {json_text[:200]}...", 4)
             return {}
 
+    async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
+        """Helper to stream a response, show progress, and parse the final JSON."""
+        self.stream_emitter(agent_name, "thought", f"Generating {role.value} response...", 2)
+
+        all_chunks = []
+        try:
+            async for chunk in self.llm_client.stream_chat(prompt, role):
+                all_chunks.append(chunk)
+                # Stream raw chunks to terminal for live feedback
+                self.stream_emitter(agent_name, "llm_chunk", chunk, 3)
+
+            response_text = "".join(all_chunks)
+
+            if not response_text.strip():
+                self.stream_emitter(agent_name, "error", "LLM returned an empty response.", 2)
+                return {}
+
+            return self._parse_json_from_response(response_text, agent_name)
+
+        except Exception as e:
+            self.stream_emitter(agent_name, "error", f"Error during streaming/collection: {e}", 2)
+            # Try to parse what we got so far
+            if all_chunks:
+                return self._parse_json_from_response("".join(all_chunks), agent_name)
+            return {}
+
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
         if not self.rag_manager or not self.rag_manager.is_ready:
             return "No RAG context available."
@@ -241,8 +267,8 @@ class StructureService(BaseAIService):
         rag_context = await self._get_intelligent_rag_context(rag_query, k=1)
         plan_prompt = STRUCTURER_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
 
-        response_text = await self.llm_client.chat(plan_prompt, LLMRole.STRUCTURER)
-        plan = self._parse_json_from_response(response_text, "Structurer")
+        # UPDATED: Use streaming call
+        plan = await self._stream_and_collect_json(plan_prompt, LLMRole.STRUCTURER, "Structurer")
 
         if not plan or not plan.get("files"):
             self.stream_emitter("Structurer", "error",
@@ -271,8 +297,8 @@ class EnhancedPlannerService(BaseAIService):
             rag_context=rag_context
         )
 
-        response_text = await self.llm_client.chat(plan_prompt, LLMRole.PLANNER)
-        file_plan = self._parse_json_from_response(response_text, "Planner")
+        # UPDATED: Use streaming call
+        file_plan = await self._stream_and_collect_json(plan_prompt, LLMRole.PLANNER, "Planner")
 
         if not file_plan or not file_plan.get("components"):
             self.stream_emitter("Planner", "error", f"Detailed planning for `{file_path}` failed.", 2)
@@ -395,8 +421,8 @@ class EnhancedAssemblerService(BaseAIService):
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
             file_path=file_path, project_description=plan.get('project_description', ''), code=cleaned_assembled_code
         )
-        review_response_text = await self.llm_client.chat(review_prompt, LLMRole.REVIEWER)
-        review_data = self._parse_json_from_response(review_response_text, "Reviewer")
+        # UPDATED: Use streaming call for review
+        review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
 
         if not review_data:
             self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Accepting code as-is.",

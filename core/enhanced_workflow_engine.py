@@ -6,7 +6,7 @@ import logging
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -82,7 +82,6 @@ class EnhancedWorkflowEngine(QObject):
                 raise Exception("Structuring failed. Could not determine a valid file structure.")
 
             project_name = high_level_plan.get("project_name", "ai_project")
-            project_description = high_level_plan.get("project_description", "An AI-generated project.")
             files_to_process = high_level_plan.get('files', [])
             total_files = len(files_to_process)
 
@@ -90,51 +89,24 @@ class EnhancedWorkflowEngine(QObject):
             project_dir.mkdir(parents=True, exist_ok=True)
             self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project directory created: {project_dir}", "1")
 
-            # --- Stage 2: Detailed Planning, Coding, and Assembly (Iterative per File) ---
-            self.workflow_progress.emit("generation", f"Phase 2: Processing {total_files} files...")
+            # --- Stage 2: Detailed Planning, Coding, and Assembly (Parallel per File) ---
+            self.workflow_progress.emit("generation", f"Phase 2: Processing {total_files} files in parallel...")
             self._update_task_progress(2, 5)
 
-            completed_file_plans = {}
             results = {"files_created": [], "project_dir": str(project_dir)}
-            project_context = {"description": project_description}
 
-            for i, file_info in enumerate(files_to_process):
-                filename = file_info["filename"]
-                file_purpose = file_info["purpose"]
-                self.detailed_log_event.emit("WorkflowEngine", "info",
-                                             f"Processing file {i + 1}/{total_files}: {filename}", "1")
+            # Create a list of tasks to run in parallel
+            processing_tasks = [
+                self._process_single_file(file_info, high_level_plan, project_dir)
+                for file_info in files_to_process
+            ]
 
-                other_files_context = json.dumps(
-                    {k: {"purpose": v["purpose"]} for k, v in completed_file_plans.items()}, indent=2)
+            # Run all file processing tasks concurrently
+            # The results will be a list of filenames or None for failures
+            files_processed_results = await asyncio.gather(*processing_tasks)
 
-                file_spec = await self.planner_service.create_detailed_file_plan(filename, file_purpose,
-                                                                                 project_description,
-                                                                                 other_files_context)
-
-                if not file_spec or 'components' not in file_spec:
-                    self.detailed_log_event.emit("WorkflowEngine", "error",
-                                                 f"Skipping file {filename} due to planning failure.", 1)
-                    continue
-
-                file_spec['purpose'] = file_purpose
-                file_spec['path'] = filename
-                completed_file_plans[filename] = file_spec
-
-                # Execute coding tasks for the file
-                task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
-
-                # Assemble, review, and patch the file in one go
-                final_code = await self.assembler_service.assemble_and_review_file(filename,
-                                                                                  task_results,
-                                                                                  high_level_plan,
-                                                                                  file_spec)
-
-                file_path_obj = project_dir / filename
-                file_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                file_path_obj.write_text(final_code, encoding='utf-8')
-                self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
-                self.file_generated.emit(str(file_path_obj))
-                results["files_created"].append(filename)
+            # Filter out None results from failed files to get the list of successfully created files
+            results["files_created"] = [f for f in files_processed_results if f]
 
             self._update_task_progress(4, 5)
 
@@ -159,6 +131,62 @@ class EnhancedWorkflowEngine(QObject):
             self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
             self.workflow_completed.emit({"success": False, "error": str(e), "elapsed_time": elapsed_time})
             raise
+
+    # New helper method for parallel processing
+    async def _process_single_file(self, file_info: dict, high_level_plan: dict, project_dir: Path) -> Optional[str]:
+        """Processes a single file from planning to writing, designed for parallel execution."""
+        filename = file_info.get("filename")
+        file_purpose = file_info.get("purpose")
+        if not filename or not file_purpose:
+            return None
+
+        project_description = high_level_plan.get("project_description", "An AI-generated project.")
+
+        self.detailed_log_event.emit("WorkflowEngine", "info", f"Starting pipeline for: {filename}", "1")
+
+        try:
+            # The context of other files is the high-level plan itself, removing sequential dependency.
+            other_files_context_list = [
+                f"- {f['filename']}: {f['purpose']}" for f in high_level_plan.get('files', []) if
+                f['filename'] != filename
+            ]
+            other_files_context = "\n".join(
+                other_files_context_list) if other_files_context_list else "This is a single-file project."
+
+            # --- PLAN ---
+            file_spec = await self.planner_service.create_detailed_file_plan(
+                filename, file_purpose, project_description, other_files_context
+            )
+            if not file_spec or 'components' not in file_spec:
+                self.detailed_log_event.emit("WorkflowEngine", "error",
+                                             f"Skipping file {filename} due to planning failure.", "1")
+                return None
+
+            file_spec['purpose'] = file_purpose
+            file_spec['path'] = filename
+
+            # --- CODE ---
+            project_context = {"description": project_description}
+            task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
+
+            # --- ASSEMBLE/REVIEW/PATCH ---
+            final_code = await self.assembler_service.assemble_and_review_file(
+                filename, task_results, high_level_plan, file_spec
+            )
+
+            # --- WRITE ---
+            file_path_obj = project_dir / filename
+            file_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            file_path_obj.write_text(final_code, encoding='utf-8')
+
+            self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
+            self.file_generated.emit(str(file_path_obj))
+
+            return filename  # Return filename on success
+        except Exception as e:
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Error processing file {filename}: {e}", "1")
+            self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "2")
+            return None
 
     def _update_task_progress(self, completed: int, total: int):
         self.workflow_stats["workflow_state"]["completed_tasks"] = completed
