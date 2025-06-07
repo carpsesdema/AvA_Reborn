@@ -237,17 +237,42 @@ class BaseAIService:
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
+        """
+        Generates a dynamic RAG query based on keywords in the user's request
+        to provide more relevant context.
+        """
         if not self.rag_manager or not self.rag_manager.is_ready:
             return "No RAG context available."
+
+        self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
+        lower_query = query.lower()
+        gamedev_keywords = ["game", "player", "ursina", "pygame"]
+
+        # Default general-purpose query
+        dynamic_query = f"Python code example for {query}"
+
+        # Check for specific libraries first, as they are more precise
+        if "ursina" in lower_query:
+            dynamic_query = f"Ursina engine example for {query}"
+        elif "pygame" in lower_query:
+            dynamic_query = f"Pygame sprite class for {query}"
+        # Then check for other general gamedev keywords
+        elif any(keyword in lower_query for keyword in gamedev_keywords):
+            dynamic_query = f"Python game development example for {query}"
+
+        self.stream_emitter("RAG", "info", f"Dynamic query: '{dynamic_query}'", 4)
+
         try:
-            results = self.rag_manager.query_context(query, k=k)
+            # This call is synchronous but is safe to call from an async method
+            results = self.rag_manager.query_context(dynamic_query, k=k)
             if not results:
                 return "No specific examples found in the knowledge base."
-            context = "\n\n---\n\n".join(
-                [
-                    f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```\n{r.get('content', '')[:700]}...\n```"
-                    for r in results if r.get('content')]
-            )
+
+            # Format the results into a string for the prompt
+            context = "\n\n---\n\n".join([
+                f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```\n{r.get('content', '')[:700]}...\n```"
+                for r in results if r.get('content')
+            ])
             return context
         except Exception as e:
             self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
@@ -263,11 +288,9 @@ class StructureService(BaseAIService):
         requirements.append(user_prompt)
         full_requirements = " ".join(req.strip() for req in requirements if req.strip())
 
-        rag_query = f"High-level project structure for a {full_requirements[:80]}"
-        rag_context = await self._get_intelligent_rag_context(rag_query, k=1)
+        rag_context = await self._get_intelligent_rag_context(full_requirements, k=1)
         plan_prompt = STRUCTURER_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
 
-        # UPDATED: Use streaming call
         plan = await self._stream_and_collect_json(plan_prompt, LLMRole.STRUCTURER, "Structurer")
 
         if not plan or not plan.get("files"):
@@ -297,7 +320,6 @@ class EnhancedPlannerService(BaseAIService):
             rag_context=rag_context
         )
 
-        # UPDATED: Use streaming call
         file_plan = await self._stream_and_collect_json(plan_prompt, LLMRole.PLANNER, "Planner")
 
         if not file_plan or not file_plan.get("components"):
@@ -322,8 +344,7 @@ class EnhancedCoderService(BaseAIService):
         task_id, task_desc = task.get("task_id", "unknown_task"), task.get("description", "N/A")
         self.stream_emitter("Coder", "thought", f"Focusing on task '{task_id}': {task_desc[:60]}...", 2)
 
-        rag_query = f"Python code snippet for: {task_desc}"
-        rag_context = await self._get_intelligent_rag_context(rag_query, k=1)
+        rag_context = await self._get_intelligent_rag_context(task_desc, k=1)
 
         code_prompt = CODER_PROMPT_TEMPLATE.format(
             project_context_description=project_context.get('description', ''),
@@ -421,7 +442,6 @@ class EnhancedAssemblerService(BaseAIService):
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
             file_path=file_path, project_description=plan.get('project_description', ''), code=cleaned_assembled_code
         )
-        # UPDATED: Use streaming call for review
         review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
 
         if not review_data:
