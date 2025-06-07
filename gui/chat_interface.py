@@ -514,6 +514,43 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         )
         self.chat_scroll.add_bubble(bubble)
 
+    def clear_chat(self):
+        """Removes all bubbles from the chat display."""
+        content_layout = self.chat_scroll.content_layout
+        while content_layout.count() > 0:
+            item = content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        content_layout.addStretch()
+        self.conversation_history = []
+
+    def load_history(self, history: list):
+        """Clears the chat and loads a new history."""
+        self.clear_chat()
+        self.conversation_history = history
+
+        # Re-populate the chat with the loaded history
+        for message_data in history:
+            role = message_data.get("role")
+            message = message_data.get("message")
+            # Parse timestamp if available, otherwise use now()
+            ts_str = message_data.get("timestamp")
+            try:
+                timestamp = datetime.fromisoformat(ts_str) if ts_str else datetime.now()
+            except (ValueError, TypeError):
+                timestamp = datetime.now()
+
+            # Recreate the bubble.
+            if role == "user":
+                bubble = ChatBubble(message=message, sender="You", role=role, timestamp=timestamp)
+                self.chat_scroll.add_bubble(bubble)
+            elif role == "assistant":
+                bubble = ChatBubble(message=message, sender="AvA", role=role, timestamp=timestamp)
+                self.chat_scroll.add_bubble(bubble)
+            elif role == "streaming": # Or 'workflow'
+                bubble = ChatBubble(message=f"🔄 {message}", sender="AvA", role=role, timestamp=timestamp)
+                self.chat_scroll.add_bubble(bubble)
+
     def update_specialists_status(self, text: str, status: str = "ready"):
         """Update specialists status"""
         self.specialists_text.setText(text)

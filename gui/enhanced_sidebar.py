@@ -225,6 +225,8 @@ class ChatActionsPanel(StyledPanel):
         button_groups = [
             # Session Management
             ("Session", [
+                ("💾 Save Session", "save_session"),
+                ("📂 Load Session", "load_session"),
                 ("💬 New Session", "new_session"),
                 ("📊 View LLM Log", "view_log"),
             ]),

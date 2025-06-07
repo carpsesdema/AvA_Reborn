@@ -69,7 +69,7 @@ class AvAMainWindow(QMainWindow):
 
         # Sidebar and chat interface
         self.sidebar = AvALeftSidebar()
-        self.chat_interface = ChatInterface() # <-- Using the new widget-based interface
+        self.chat_interface = ChatInterface()  # <-- Using the new widget-based interface
 
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.chat_interface, 1)
@@ -196,6 +196,16 @@ class AvAMainWindow(QMainWindow):
 
     def _handle_sidebar_action(self, action: str):
         """Handle sidebar action triggers"""
+        # NEW: Handle save and load actions
+        if action == "save_session":
+            if hasattr(self.ava_app, 'save_session'):
+                self.ava_app.save_session()
+            return
+        if action == "load_session":
+            if hasattr(self.ava_app, 'load_session'):
+                self.ava_app.load_session()
+            return
+
         action_messages = {
             "new_session": "🔄 Starting new session...",
             "view_log": "📊 Opening LLM log viewer...",
@@ -368,3 +378,33 @@ Let me know if you'd like to try again or need help with something else."""
         if hasattr(self.sidebar, 'update_rag_status_display'):
             self.sidebar.update_rag_status_display(status_text)
         self.chat_interface.update_rag_status(status_text, status_color)
+
+    def load_chat_history(self, history: list):
+        """
+        Clears the current chat and loads a new conversation history.
+        This is a public method called by AvAApplication when a session is loaded.
+        """
+        self.chat_interface.conversation_history = history
+
+        # Clear the visual chat bubbles
+        while self.chat_interface.chat_scroll.content_layout.count() > 0:
+            item = self.chat_interface.chat_scroll.content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Re-add the stretch
+        self.chat_interface.chat_scroll.content_layout.addStretch()
+
+        # Re-populate the chat with the loaded history
+        for message_data in history:
+            role = message_data.get("role")
+            message = message_data.get("message")
+
+            # Recreate the bubble. This assumes the bubble can be created from this data.
+            # You might need to adjust the ChatBubble constructor or how you store timestamps.
+            if role == "user":
+                self.chat_interface.add_user_message(message)
+            elif role == "assistant":
+                self.chat_interface.add_assistant_response(message)
+            elif role == "streaming":  # Or 'workflow', depending on your history
+                self.chat_interface.add_workflow_status(message)

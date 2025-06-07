@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
+import json  # New import for session handling
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 
 from PySide6.QtCore import QObject, Signal, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog  # New imports for dialogs
 
 from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
@@ -15,11 +16,12 @@ from core.enhanced_workflow_engine import EnhancedWorkflowEngine
 # Import the components
 from gui.main_window import AvAMainWindow
 from windows.code_viewer import CodeViewerWindow
-from gui.terminals import TerminalWindow # This is actually StreamingTerminal
+from gui.terminals import TerminalWindow  # This is actually StreamingTerminal
 
 # Try to import RAG manager - gracefully handle if not available
 try:
     from core.rag_manager import RAGManager
+
     RAG_MANAGER_AVAILABLE = True
 except ImportError as e:
     RAG_MANAGER_AVAILABLE = False
@@ -59,6 +61,7 @@ class AvAApplication(QObject):
         self.workspace_dir.mkdir(exist_ok=True)
 
         self.current_project = "Default Project"
+        self.current_project_path = self.workspace_dir  # Keep track of the project path
         self.current_session = "Main Chat"
         self.active_workflows = {}
 
@@ -190,21 +193,18 @@ class AvAApplication(QObject):
                 )
             if hasattr(self.main_window, 'new_project_requested'):
                 self.main_window.new_project_requested.connect(self.create_new_project_dialog)
+            if hasattr(self.main_window.sidebar, 'action_triggered'):
+                self.main_window.sidebar.action_triggered.connect(self._handle_sidebar_action)
 
-        # Connect workflow signals
+        # Connect workflow signals to the main window
+        if self.workflow_engine and self.main_window:
+            self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
+
         self.workflow_started.connect(self._on_workflow_started)
         self.workflow_completed.connect(self._on_workflow_completed)
         self.error_occurred.connect(self._on_error_occurred)
 
         if self.workflow_engine:
-            if self.main_window:
-                self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
-                self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
-
-            # Connect progress updates to terminal
-            if self.terminal_window and hasattr(self.terminal_window, 'update_workflow_progress'):
-                self.workflow_engine.workflow_progress.connect(self.terminal_window.update_workflow_progress)
-
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
 
@@ -229,7 +229,6 @@ class AvAApplication(QObject):
             self.terminal_window.setGeometry(screen_geo.width() - 920, screen_geo.height() - 450, 900, 400)
         if self.code_viewer:
             self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
-
 
     def _update_performance_stats(self):
         """Update performance statistics"""
@@ -262,7 +261,8 @@ class AvAApplication(QObject):
                     "collections": {}}
 
         if RAG_MANAGER_AVAILABLE:
-            if self.rag_manager and hasattr(self.rag_manager, 'is_ready') and hasattr(self.rag_manager, 'current_status'):
+            if self.rag_manager and hasattr(self.rag_manager, 'is_ready') and hasattr(self.rag_manager,
+                                                                                      'current_status'):
                 rag_info["ready"] = self.rag_manager.is_ready
                 rag_info["status_text"] = self.rag_manager.current_status
                 if hasattr(self.rag_manager, 'get_collection_info') and callable(
@@ -337,19 +337,36 @@ class AvAApplication(QObject):
                 asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(
                     user_prompt, conversation_context=conversation_history
                 ))
-            else: # Fallback
+            else:  # Fallback
                 self.workflow_engine.execute_workflow(user_prompt)
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {e}", exc_info=True)
             self.error_occurred.emit("workflow_execution_error", str(e))
-            if workflow_id in self.active_workflows: # Check if key exists before updating
+            if workflow_id in self.active_workflows:  # Check if key exists before updating
                 self.active_workflows[workflow_id]["status"] = "failed"
                 self.active_workflows[workflow_id]["error"] = str(e)
-
 
     def _handle_workflow_request(self, user_prompt: str):
         self.logger.info(f"Standard workflow request: {user_prompt[:100]}...")
         self._handle_enhanced_workflow_request(user_prompt, [])
+
+    def _handle_sidebar_action(self, action: str):
+        """Handle sidebar action triggers from the main window."""
+        if action == "save_session":
+            self.save_session()
+        elif action == "load_session":
+            self.load_session()
+        elif action == "new_session":
+            self.new_session()
+        elif action == "open_terminal":
+            self._open_terminal()
+        elif action == "open_code_viewer":
+            self._open_code_viewer()
+        else:
+            message = f"Action '{action}' not implemented yet."
+            if self.main_window:
+                self.main_window.chat_interface.add_assistant_response(message)
+            self.logger.warning(message)
 
     def _open_terminal(self):
         if self.terminal_window:
@@ -370,7 +387,8 @@ class AvAApplication(QObject):
 
     def _on_project_loaded(self, project_path: str):
         self.logger.info(f"Project loaded: {project_path}")
-        self.current_project = Path(project_path).name
+        self.current_project_path = Path(project_path)
+        self.current_project = self.current_project_path.name
         if self.main_window and hasattr(self.main_window, 'update_project_display'):
             self.main_window.update_project_display(self.current_project)
         self._open_code_viewer()
@@ -380,6 +398,9 @@ class AvAApplication(QObject):
 
     def _on_workflow_completed(self, result: dict):
         self.logger.info(f"[OK] Workflow completed: {result.get('project_name', 'N/A')}")
+        # Update the current project path upon successful workflow completion
+        if result.get("success") and "project_dir" in result:
+            self._on_project_loaded(result["project_dir"])
         for wf_id, wf_data in self.active_workflows.items():
             if wf_data["status"] == "running":
                 wf_data["status"] = "completed" if result.get("success") else "failed"
@@ -391,7 +412,6 @@ class AvAApplication(QObject):
         if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
             self.terminal_window.stream_log_rich("Application", "error", f"Error in {component}: {error_message}", "0")
 
-
     def _on_rag_status_changed(self, status_text: str, color: str):
         self.logger.info(f"RAG Status: {status_text}")
         self.rag_status_changed.emit(status_text, color)
@@ -400,6 +420,96 @@ class AvAApplication(QObject):
         msg = f"RAG: {files_processed} files added to {collection_id}"
         self.logger.info(f"RAG Upload: {msg}")
         self.rag_status_changed.emit(msg, "#4ade80")
+
+    def new_session(self):
+        """Clears the chat and starts a fresh session."""
+        if self.main_window:
+            self.main_window.chat_interface.clear_chat()
+            self.main_window.chat_interface._add_welcome_message()
+            self.current_project = "Default Project"
+            self.current_project_path = self.workspace_dir
+            self.main_window.update_project_display(self.current_project)
+            QMessageBox.information(self.main_window, "New Session", "Chat history has been cleared.")
+        self.logger.info("New session started.")
+
+    def save_session(self):
+        """Saves the current chat session to a file."""
+        if not self.main_window: return
+
+        history = self.main_window.chat_interface.conversation_history
+        session_data = {
+            "version": "1.0",
+            "timestamp": datetime.now().isoformat(),
+            "project_name": self.current_project,
+            "project_path": str(self.current_project_path),
+            "conversation_history": history
+        }
+
+        # If a real project is active, save inside it. Otherwise, ask where to save.
+        if self.current_project != "Default Project" and self.current_project_path.exists():
+            session_dir = self.current_project_path / ".sessions"
+            session_dir.mkdir(exist_ok=True)
+            file_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            save_path = session_dir / file_name
+        else:
+            file_name, _ = QFileDialog.getSaveFileName(
+                self.main_window,
+                "Save Session",
+                str(self.workspace_dir),
+                "JSON Files (*.json)"
+            )
+            if not file_name:
+                return
+            save_path = Path(file_name)
+
+        try:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, indent=2)
+            QMessageBox.information(self.main_window, "Session Saved", f"Session saved to:\n{save_path}")
+            self.logger.info(f"Session saved to {save_path}")
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Error", f"Failed to save session: {e}")
+            self.logger.error(f"Failed to save session: {e}", exc_info=True)
+
+    def load_session(self):
+        """Loads a chat session from a file."""
+        if not self.main_window: return
+
+        file_name, _ = QFileDialog.getOpenFileName(
+            self.main_window,
+            "Load Session",
+            str(self.workspace_dir),
+            "JSON Files (*.json)"
+        )
+
+        if not file_name:
+            return
+
+        try:
+            with open(file_name, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+
+            # Validate session data
+            if "conversation_history" not in session_data or "project_path" not in session_data:
+                raise ValueError("Invalid session file format.")
+
+            # Load the chat history into the UI
+            self.main_window.chat_interface.load_history(session_data["conversation_history"])
+
+            # Restore project context
+            project_path = session_data.get("project_path")
+            self._on_project_loaded(project_path)
+
+            # Update code viewer if it exists
+            if self.code_viewer:
+                self.code_viewer.load_project(project_path)
+
+            QMessageBox.information(self.main_window, "Session Loaded", f"Session loaded from:\n{file_name}")
+            self.logger.info(f"Session loaded from {file_name}")
+
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Error", f"Failed to load session: {e}")
+            self.logger.error(f"Failed to load session: {e}", exc_info=True)
 
     def update_configuration(self, config_updates: dict):
         self.current_config.update(config_updates)
@@ -410,7 +520,6 @@ class AvAApplication(QObject):
         if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
             self.terminal_window.stream_log_rich("Application", "info", "✨ New Project creation started.", "0")
 
-        from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
         if not self.main_window: return
 
         try:
@@ -437,7 +546,7 @@ class AvAApplication(QObject):
                 project_path.mkdir(parents=True, exist_ok=True)
 
             self.current_project = project_name
-            self.workspace_dir = project_path # Update current workspace to new project dir
+            self.current_project_path = project_path  # Update current project path
 
             (project_path / "README.md").write_text(f"# {project_name}\n\nA new project created with AvA.\n")
             (project_path / "main.py").write_text(
@@ -449,13 +558,16 @@ class AvAApplication(QObject):
                 self.terminal_window.stream_log_rich("Application", "success", success_msg, "0")
 
             if self.main_window:
+                # Start a new session for the new project
+                self.new_session()
                 self.main_window.chat_interface.add_assistant_response(
                     f"{success_msg}\n\nLocation: {project_path}\n\nReady to build! Describe what you want to create."
                 )
                 if hasattr(self.main_window, 'update_project_display'):
                     self.main_window.update_project_display(project_name)
 
-            self._open_code_viewer()
+            self._on_project_loaded(str(project_path))
+
             if self.code_viewer and hasattr(self.code_viewer, 'load_project'):
                 self.code_viewer.load_project(str(project_path))
 
