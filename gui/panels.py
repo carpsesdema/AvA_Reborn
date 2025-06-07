@@ -44,6 +44,7 @@ class StyledPanel(QFrame):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(10)
+        self.content_layout.addStretch(1) # This will push the panel's content to the top
 
         self.main_layout.addWidget(self.content_widget)
         self.setLayout(self.main_layout)
@@ -76,12 +77,14 @@ class StyledPanel(QFrame):
         self.main_layout.addLayout(header_layout)
 
     def add_widget(self, widget):
-        """Add widget to content area"""
-        self.content_layout.addWidget(widget)
+        """Add widget to content area, before the stretch"""
+        # Insert widget before the last item, which is the stretch
+        self.content_layout.insertWidget(self.content_layout.count() - 1, widget)
 
     def add_layout(self, layout):
-        """Add layout to content area"""
-        self.content_layout.addLayout(layout)
+        """Add layout to content area, before the stretch"""
+        # Insert layout before the last item, which is the stretch
+        self.content_layout.insertLayout(self.content_layout.count() - 1, layout)
 
 
 class ModernPanel(StyledPanel):

@@ -1,18 +1,12 @@
 # gui/main_window.py - Enhanced with Modern Chat Bubbles and Sleek Design
 
-import asyncio
-import inspect
-import html
-from datetime import datetime
-
-from PySide6.QtCore import Signal, Slot, QTimer, Qt
+from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QLabel, QTextEdit, QSplitter, QTabWidget, QFrame
+    QMainWindow, QWidget, QHBoxLayout
 )
-from PySide6.QtGui import QFont
 
-from gui.components import ModernButton, StatusIndicator, Colors, Typography
+from gui.chat_interface import ChatInterface  # <-- The star of the show!
+from gui.components import Colors
 from gui.enhanced_sidebar import AvALeftSidebar
 from gui.model_config_dialog import ModelConfigurationDialog
 
@@ -26,333 +20,6 @@ except ImportError:
         ASSEMBLER = "assembler"
         REVIEWER = "reviewer"
         CHAT = "chat"
-
-
-class ChatDisplay(QTextEdit):
-    """Modern chat display with beautiful message bubbles"""
-
-    def __init__(self):
-        super().__init__()
-        self.setReadOnly(True)
-        self.setStyleSheet(f"""
-            QTextEdit {{
-                background: {Colors.PRIMARY_BG};
-                border: 1px solid {Colors.BORDER_DEFAULT};
-                border-radius: 12px;
-                color: {Colors.TEXT_PRIMARY};
-                padding: 16px;
-                font-family: "Segoe UI";
-                font-size: 13px;
-                line-height: 1.6;
-            }}
-            QScrollBar:vertical {{
-                background: {Colors.SECONDARY_BG};
-                width: 8px;
-                border-radius: 4px;
-                margin: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {Colors.BORDER_DEFAULT};
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {Colors.ACCENT_BLUE};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                border: none;
-                background: none;
-                height: 0px;
-            }}
-        """)
-
-        welcome_msg = """Hello! I'm AvA, your fast professional AI development assistant.
-
-🚀 **Ready to build something amazing?**
-
-I use specialized AI agents:
-- **Planner** - Creates smart project architecture
-- **Coder** - Generates clean, professional code  
-- **Assembler** - Integrates everything seamlessly
-- **Reviewer** - Ensures quality and best practices
-
-✨ **Just tell me what you want to build!**
-Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer tool" """
-
-        self.append(self._format_message("AvA", welcome_msg, "assistant"))
-
-    def add_user_message(self, message: str):
-        """Add a user message with modern bubble styling"""
-        self.append(self._format_message("You", message, "user"))
-
-    def add_assistant_message(self, message: str):
-        """Add assistant response with modern bubble styling"""
-        self.append(self._format_message("AvA", message, "assistant"))
-
-    def add_streaming_message(self, message: str):
-        """Add streaming message with special formatting"""
-        self.append(self._format_message("AvA", f"🔄 {message}", "streaming"))
-
-    def _format_message(self, sender: str, message: str, role: str) -> str:
-        """Format message with modern bubble design"""
-        timestamp = datetime.now().strftime("%H:%M")
-
-        # Define bubble styling based on role
-        if role == "user":
-            bubble_bg = f"""
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {Colors.ACCENT_BLUE}, stop:1 #1f6feb);
-            """
-            text_color = Colors.TEXT_PRIMARY
-            sender_color = Colors.TEXT_PRIMARY
-            time_color = "rgba(240, 246, 252, 0.8)"
-            icon = "👤"
-            align = "margin-left: 60px; margin-right: 20px;"
-            border_radius = "18px 18px 4px 18px"
-
-        elif role == "streaming":
-            bubble_bg = f"""
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {Colors.ACCENT_ORANGE}, stop:1 #d18616);
-            """
-            text_color = Colors.TEXT_PRIMARY
-            sender_color = Colors.TEXT_PRIMARY
-            time_color = "rgba(240, 246, 252, 0.8)"
-            icon = "⚡"
-            align = "margin-left: 20px; margin-right: 60px;"
-            border_radius = "18px 18px 18px 4px"
-
-        else:  # assistant
-            bubble_bg = f"""
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {Colors.ELEVATED_BG}, stop:1 {Colors.SECONDARY_BG});
-            """
-            text_color = Colors.TEXT_PRIMARY
-            sender_color = Colors.ACCENT_GREEN
-            time_color = Colors.TEXT_MUTED
-            icon = "🤖"
-            align = "margin-left: 20px; margin-right: 60px;"
-            border_radius = "18px 18px 18px 4px"
-
-        # Escape HTML in message content
-        escaped_message = html.escape(message).replace("\n", "<br>")
-
-        # Create modern bubble HTML
-        bubble_html = f"""
-        <div style="{align} margin-bottom: 16px;">
-            <div style="
-                {bubble_bg}
-                border: 1px solid {Colors.BORDER_DEFAULT};
-                border-radius: {border_radius};
-                padding: 16px 20px;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-                position: relative;
-            ">
-                <div style="
-                    display: flex; 
-                    align-items: center; 
-                    justify-content: space-between; 
-                    margin-bottom: 8px;
-                    font-weight: 600;
-                ">
-                    <span style="color: {sender_color}; display: flex; align-items: center;">
-                        <span style="margin-right: 8px; font-size: 14px;">{icon}</span>
-                        <span style="font-size: 13px;">{sender}</span>
-                    </span>
-                    <span style="color: {time_color}; font-size: 11px; font-weight: normal;">
-                        {timestamp}
-                    </span>
-                </div>
-                <div style="
-                    color: {text_color}; 
-                    line-height: 1.5;
-                    font-size: 13px;
-                    word-wrap: break-word;
-                ">
-                    {escaped_message}
-                </div>
-            </div>
-        </div>
-        """
-
-        return bubble_html
-
-
-class ChatInterface(QWidget):
-    """Modern chat interface with improved styling"""
-
-    message_sent = Signal(str)
-    workflow_requested = Signal(str, list)
-
-    def __init__(self):
-        super().__init__()
-        self.conversation_history = []
-        self._init_ui()
-
-    def _init_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
-
-        # Chat display
-        self.chat_display = ChatDisplay()
-        layout.addWidget(self.chat_display, 1)
-
-        # Input area with modern styling
-        input_frame = QFrame()
-        input_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {Colors.SECONDARY_BG};
-                border: 1px solid {Colors.BORDER_DEFAULT};
-                border-radius: 12px;
-                padding: 4px;
-            }}
-            QFrame:focus-within {{
-                border-color: {Colors.ACCENT_BLUE};
-            }}
-        """)
-
-        input_layout = QHBoxLayout(input_frame)
-        input_layout.setContentsMargins(12, 8, 8, 8)
-        input_layout.setSpacing(12)
-
-        # Message input field
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Type your message...")
-        self.input_field.setFont(Typography.body())
-        self.input_field.setStyleSheet(f"""
-            QLineEdit {{
-                background: transparent;
-                border: none;
-                color: {Colors.TEXT_PRIMARY};
-                padding: 8px 12px;
-                font-size: 13px;
-                selection-background-color: {Colors.ACCENT_BLUE};
-            }}
-            QLineEdit::placeholder {{
-                color: {Colors.TEXT_MUTED};
-            }}
-        """)
-        self.input_field.returnPressed.connect(self._send_message)
-
-        # Send button
-        self.send_button = ModernButton("Send", button_type="primary")
-        self.send_button.setMaximumWidth(80)
-        self.send_button.clicked.connect(self._send_message)
-
-        input_layout.addWidget(self.input_field, 1)
-        input_layout.addWidget(self.send_button)
-
-        layout.addWidget(input_frame)
-
-        # Modern status bar
-        status_bar_layout = QHBoxLayout()
-        status_bar_layout.setContentsMargins(0, 12, 0, 0)
-        status_bar_layout.setSpacing(16)
-
-        # AI Specialists status
-        self.specialists_indicator = StatusIndicator("ready")
-        self.specialists_status_text = QLabel("AI Specialists: Ready")
-        self.specialists_status_text.setFont(Typography.body_small())
-        self.specialists_status_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-
-        specialist_layout = QHBoxLayout()
-        specialist_layout.setSpacing(6)
-        specialist_layout.addWidget(self.specialists_indicator)
-        specialist_layout.addWidget(self.specialists_status_text)
-
-        status_bar_layout.addLayout(specialist_layout)
-        status_bar_layout.addStretch(1)
-
-        # Performance indicator
-        self.performance_indicator = StatusIndicator("offline")
-        self.performance_text = QLabel("Performance: Ready")
-        self.performance_text.setFont(Typography.body_small())
-        self.performance_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-
-        performance_layout = QHBoxLayout()
-        performance_layout.setSpacing(6)
-        performance_layout.addWidget(self.performance_indicator)
-        performance_layout.addWidget(self.performance_text)
-
-        status_bar_layout.addLayout(performance_layout)
-
-        # RAG Status
-        self.rag_status_indicator = StatusIndicator("working")
-        self.rag_status_text_label = QLabel("RAG: Initializing...")
-        self.rag_status_text_label.setFont(Typography.body_small())
-        self.rag_status_text_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-
-        rag_layout = QHBoxLayout()
-        rag_layout.setSpacing(6)
-        rag_layout.addWidget(self.rag_status_indicator)
-        rag_layout.addWidget(self.rag_status_text_label)
-
-        status_bar_layout.addLayout(rag_layout)
-
-        layout.addLayout(status_bar_layout)
-        self.setLayout(layout)
-
-        # Apply main styling
-        self.setStyleSheet(f"""
-            ChatInterface {{
-                background: {Colors.PRIMARY_BG};
-            }}
-        """)
-
-    def _send_message(self):
-        """Send message with improved flow"""
-        message = self.input_field.text().strip()
-        if not message:
-            return
-
-        # Add to chat display
-        self.chat_display.add_user_message(message)
-        self.input_field.clear()
-
-        # Store in conversation history
-        self.conversation_history.append({
-            "role": "user",
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        })
-
-        # Keep last 10 messages for context
-        if len(self.conversation_history) > 10:
-            self.conversation_history.pop(0)
-
-        # Emit with conversation context
-        self.message_sent.emit(message)
-
-    def add_assistant_response(self, response: str):
-        """Add assistant response to chat and history"""
-        self.chat_display.add_assistant_message(response)
-
-        # Store in conversation history
-        self.conversation_history.append({
-            "role": "assistant",
-            "message": response,
-            "timestamp": datetime.now().isoformat()
-        })
-
-    def add_workflow_status(self, status: str):
-        """Add workflow status update"""
-        self.chat_display.add_streaming_message(status)
-
-    def update_specialists_status(self, text: str, status: str = "ready"):
-        """Update specialists status"""
-        self.specialists_status_text.setText(text)
-        self.specialists_indicator.update_status(status)
-
-    def update_performance_status(self, text: str, status: str = "ready"):
-        """Update performance status"""
-        self.performance_text.setText(text)
-        self.performance_indicator.update_status(status)
-
-    def update_rag_status(self, text: str, status: str = "working"):
-        """Update RAG status"""
-        self.rag_status_text_label.setText(text)
-        self.rag_status_indicator.update_status(status)
 
 
 class AvAMainWindow(QMainWindow):
@@ -402,7 +69,7 @@ class AvAMainWindow(QMainWindow):
 
         # Sidebar and chat interface
         self.sidebar = AvALeftSidebar()
-        self.chat_interface = ChatInterface()
+        self.chat_interface = ChatInterface() # <-- Using the new widget-based interface
 
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.chat_interface, 1)
@@ -461,12 +128,11 @@ class AvAMainWindow(QMainWindow):
     def handle_user_message(self, message: str):
         """Enhanced message handling with streaming workflow integration"""
 
+        # The chat_interface now handles adding the user message bubble itself.
+        # We just need to decide what to do with the message.
         if self._is_build_request(message):
-            # Show immediate feedback
             self.chat_interface.add_workflow_status("Analyzing your request...")
-            # Start workflow with conversation context
             self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history.copy())
-            # Emit the simpler signal for the core application to connect to
             self.workflow_requested.emit(message)
         else:
             self._handle_casual_chat(message)

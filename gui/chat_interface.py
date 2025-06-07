@@ -1,5 +1,7 @@
 # gui/chat_interface.py - Modern Chat Interface with Beautiful Bubbles
 
+import re
+import html
 from datetime import datetime
 
 from PySide6.QtCore import Signal, Qt, QTimer
@@ -24,6 +26,57 @@ class ChatBubble(QFrame):
         self._setup_ui()
         self._apply_style()
 
+    def _markdown_to_html(self, text: str) -> str:
+        """
+        A safe, simple markdown-to-HTML converter for chat bubbles.
+        Supports: **bold**, *italic*, bullet points, and ```code blocks```.
+        """
+        # 1. Extract and format code blocks first
+        code_blocks = []
+
+        def extract_code(match):
+            code_content = html.escape(match.group(1).strip())
+            placeholder = f"##CODE_BLOCK_{len(code_blocks)}##"
+            code_blocks.append(code_content)
+            return placeholder
+
+        text = re.sub(r"```(?:python\n|py\n|bash\n|sh\n)?([\s\S]+?)```", extract_code, text)
+
+        # 2. Escape the remaining text to prevent any HTML injection
+        text = html.escape(text)
+
+        # 3. Apply simple markdown formatting for bold and italic
+        text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text, flags=re.DOTALL)
+        text = re.sub(r"\*(.*?)\*", r"<i>\1</i>", text, flags=re.DOTALL)
+
+        # 4. Handle bullet points
+        text = re.sub(r"^\s*[-*]\s*(.*)", r"• \1", text, flags=re.MULTILINE)
+
+        # 5. Handle newlines
+        text = text.replace("\n", "<br>")
+
+        # 6. Re-insert formatted code blocks
+        code_font_family = Typography.code().family()
+        code_block_style = f"""
+        <div style="
+            background: {Colors.PRIMARY_BG};
+            border: 1px solid {Colors.BORDER_MUTED};
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0px;
+            font-family: '{code_font_family}', 'Consolas', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #d1d5db;
+            font-size: 12px;
+        "><code>{{code}}</code></div>
+        """
+        for i, code in enumerate(code_blocks):
+            formatted_code = code_block_style.format(code=code)
+            text = text.replace(f"##CODE_BLOCK_{i}##", formatted_code)
+
+        return text
+
     def _setup_ui(self):
         """Setup the bubble UI structure"""
         self.setContentsMargins(0, 0, 0, 0)
@@ -40,10 +93,10 @@ class ChatBubble(QFrame):
             # User messages align right
             main_layout.addStretch()
             main_layout.addWidget(bubble_content)
-            main_layout.addSpacing(20)
+            main_layout.addSpacing(10)  # Reduced spacing
         else:
             # Assistant messages align left
-            main_layout.addSpacing(20)
+            main_layout.addSpacing(10)  # Reduced spacing
             main_layout.addWidget(bubble_content)
             main_layout.addStretch()
 
@@ -52,7 +105,8 @@ class ChatBubble(QFrame):
     def _create_bubble_content(self):
         """Create the actual bubble content widget"""
         bubble = QFrame()
-        bubble.setMaximumWidth(600)  # Limit bubble width
+        bubble.setObjectName("bubbleWidget")
+        bubble.setMaximumWidth(650)  # Limit bubble width
         bubble.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 
         layout = QVBoxLayout(bubble)
@@ -65,6 +119,7 @@ class ChatBubble(QFrame):
 
         # Sender name with icon
         sender_label = QLabel()
+        sender_label.setObjectName("senderLabel")
         if self.role == "user":
             icon = "👤"
             name = "You"
@@ -80,6 +135,7 @@ class ChatBubble(QFrame):
 
         # Timestamp
         time_label = QLabel(self.timestamp.strftime("%H:%M"))
+        time_label.setObjectName("timeLabel")
         time_label.setFont(Typography.body_small())
 
         header_layout.addWidget(sender_label)
@@ -88,7 +144,10 @@ class ChatBubble(QFrame):
 
         # Message content
         content_label = QLabel()
-        content_label.setText(self.message)
+        content_label.setObjectName("contentLabel")
+        html_message = self._markdown_to_html(self.message)
+        content_label.setText(html_message)
+        content_label.setTextFormat(Qt.RichText)
         content_label.setWordWrap(True)
         content_label.setFont(Typography.body())
         content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -107,6 +166,7 @@ class ChatBubble(QFrame):
             text_color = Colors.TEXT_PRIMARY
             sender_color = Colors.TEXT_PRIMARY
             time_color = "rgba(240, 246, 252, 0.7)"
+            bubble_radius = "border-top-left-radius: 18px; border-top-right-radius: 18px; border-bottom-left-radius: 18px; border-bottom-right-radius: 4px;"
 
         elif self.role == "streaming":
             # Streaming bubble - orange accent
@@ -114,6 +174,7 @@ class ChatBubble(QFrame):
             text_color = Colors.TEXT_PRIMARY
             sender_color = Colors.TEXT_PRIMARY
             time_color = "rgba(240, 246, 252, 0.7)"
+            bubble_radius = "border-top-left-radius: 18px; border-top-right-radius: 18px; border-bottom-left-radius: 4px; border-bottom-right-radius: 18px;"
 
         else:
             # Assistant bubble - elevated background
@@ -121,31 +182,43 @@ class ChatBubble(QFrame):
             text_color = Colors.TEXT_PRIMARY
             sender_color = Colors.ACCENT_GREEN
             time_color = Colors.TEXT_MUTED
+            bubble_radius = "border-top-left-radius: 18px; border-top-right-radius: 18px; border-bottom-left-radius: 4px; border-bottom-right-radius: 18px;"
 
         self.setStyleSheet(f"""
             ChatBubble {{
                 background: transparent;
                 border: none;
             }}
-            ChatBubble QFrame {{
+            #bubbleWidget {{
                 background: {bubble_bg};
                 border: 1px solid {Colors.BORDER_DEFAULT};
-                border-radius: 16px;
+                {bubble_radius}
                 margin: 2px;
             }}
-            ChatBubble QLabel {{
-                background: transparent;
-                border: none;
+            #senderLabel {{
+                background: transparent; border: none;
+                color: {sender_color};
+                font-weight: 600;
+            }}
+            #timeLabel {{
+                background: transparent; border: none;
+                color: {time_color};
+                font-size: 10px;
+            }}
+            #contentLabel {{
+                background: transparent; border: none;
                 color: {text_color};
+                font-size: 13px;
+                line-height: 1.6;
+            }}
+            #contentLabel a {{
+                color: {Colors.TEXT_PRIMARY};
+                text-decoration: underline;
+            }}
+             #contentLabel a:hover {{
+                color: #ffffff;
             }}
         """)
-
-        # Special styling for header elements
-        for label in self.findChildren(QLabel):
-            if "👤" in label.text() or "🤖" in label.text() or "⚡" in label.text():
-                label.setStyleSheet(f"color: {sender_color}; font-weight: 600;")
-            elif ":" in label.text() and len(label.text()) == 5:  # Time format
-                label.setStyleSheet(f"color: {time_color}; font-size: 10px;")
 
 
 class ChatScrollArea(QScrollArea):
@@ -164,7 +237,7 @@ class ChatScrollArea(QScrollArea):
         # Create content widget
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(20, 20, 20, 20)
+        self.content_layout.setContentsMargins(10, 20, 10, 20)
         self.content_layout.setSpacing(16)
         self.content_layout.addStretch()  # Push messages to bottom initially
 
@@ -174,14 +247,14 @@ class ChatScrollArea(QScrollArea):
         self.setStyleSheet(f"""
             QScrollArea {{
                 background: {Colors.PRIMARY_BG};
-                border: none;
+                border: 1px solid {Colors.BORDER_DEFAULT};
                 border-radius: 12px;
             }}
             QScrollBar:vertical {{
-                background: {Colors.SECONDARY_BG};
+                background: {Colors.PRIMARY_BG};
                 width: 8px;
                 border-radius: 4px;
-                margin: 4px;
+                margin: 0px;
             }}
             QScrollBar::handle:vertical {{
                 background: {Colors.BORDER_DEFAULT};
@@ -256,7 +329,6 @@ class ModernChatInput(QFrame):
                 background: {Colors.SECONDARY_BG};
                 border: 1px solid {Colors.BORDER_DEFAULT};
                 border-radius: 12px;
-                margin: 4px;
             }}
             QLineEdit {{
                 background: transparent;
@@ -312,6 +384,7 @@ class ChatInterface(QWidget):
         # Status bar
         status_layout = QHBoxLayout()
         status_layout.setContentsMargins(0, 8, 0, 0)
+        status_layout.setSpacing(16)
 
         # AI Specialists status
         self.specialists_indicator = StatusIndicator("ready")
@@ -319,9 +392,10 @@ class ChatInterface(QWidget):
         self.specialists_text.setFont(Typography.body_small())
         self.specialists_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        status_layout.addWidget(self.specialists_indicator)
-        status_layout.addWidget(self.specialists_text)
-        status_layout.addStretch()
+        specialist_layout = QHBoxLayout()
+        specialist_layout.setSpacing(6)
+        specialist_layout.addWidget(self.specialists_indicator)
+        specialist_layout.addWidget(self.specialists_text)
 
         # Performance status
         self.performance_indicator = StatusIndicator("ready")
@@ -329,9 +403,10 @@ class ChatInterface(QWidget):
         self.performance_text.setFont(Typography.body_small())
         self.performance_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        status_layout.addWidget(self.performance_indicator)
-        status_layout.addWidget(self.performance_text)
-        status_layout.addStretch()
+        performance_layout = QHBoxLayout()
+        performance_layout.setSpacing(6)
+        performance_layout.addWidget(self.performance_indicator)
+        performance_layout.addWidget(self.performance_text)
 
         # RAG status
         self.rag_indicator = StatusIndicator("working")
@@ -339,15 +414,23 @@ class ChatInterface(QWidget):
         self.rag_text.setFont(Typography.body_small())
         self.rag_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        status_layout.addWidget(self.rag_indicator)
-        status_layout.addWidget(self.rag_text)
+        rag_layout = QHBoxLayout()
+        rag_layout.setSpacing(6)
+        rag_layout.addWidget(self.rag_indicator)
+        rag_layout.addWidget(self.rag_text)
+
+        status_layout.addLayout(specialist_layout)
+        status_layout.addStretch()
+        status_layout.addLayout(performance_layout)
+        status_layout.addStretch()
+        status_layout.addLayout(rag_layout)
 
         layout.addLayout(status_layout)
         self.setLayout(layout)
 
         # Apply main styling
         self.setStyleSheet(f"""
-            ChatInterface {{
+            QWidget {{
                 background: {Colors.PRIMARY_BG};
             }}
         """)

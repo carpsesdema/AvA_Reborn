@@ -232,20 +232,19 @@ class ChatActionsPanel(StyledPanel):
             ("Tools", [
                 ("📟 Open Terminal", "open_terminal"),
                 ("📄 Open Code Viewer", "open_code_viewer"),
-                ("🎛️ Toggle AI Monitor", "toggle_feedback_panel"),
             ]),
-            # Code Operations
-            ("Code", [
-                ("⚡ View Generated Code", "view_code"),
-                ("🔨 Force Code Gen", "force_gen"),
-            ]),
+            # Code Operations (Now Empty)
+            ("Code", []),
             # System
             ("System", [
                 ("🔄 Check for Updates", "check_updates"),
             ])
         ]
 
-        for group_index, (group_name, buttons) in enumerate(button_groups):
+        # Filter out empty groups before creating UI
+        active_button_groups = [group for group in button_groups if group[1]]
+
+        for group_index, (group_name, buttons) in enumerate(active_button_groups):
             # Add group separator (except for first group)
             if group_index > 0:
                 separator = QFrame()
@@ -260,7 +259,7 @@ class ChatActionsPanel(StyledPanel):
                 self.add_widget(separator)
 
             # Add group label
-            if len(button_groups) > 1:  # Only show group labels if multiple groups
+            if len(active_button_groups) > 1:  # Only show group labels if multiple groups
                 group_label = QLabel(group_name)
                 group_label.setFont(Typography.body_small())
                 group_label.setStyleSheet(f"""
