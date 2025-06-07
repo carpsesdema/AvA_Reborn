@@ -89,13 +89,15 @@ class AvAMainWindow(QMainWindow):
         """Connect to AvA app signals"""
         try:
             self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
-            self.ava_app.workflow_started.connect(self.on_workflow_started)
+            # self.ava_app.workflow_started.connect(self.on_workflow_started) # BUG FIX: This connection is redundant and causes the double message.
             self.ava_app.workflow_completed.connect(self.on_workflow_completed)
             self.ava_app.error_occurred.connect(self.on_app_error_occurred)
             self.ava_app.project_loaded.connect(self.update_project_display)
 
             # Enhanced workflow progress
             if hasattr(self.ava_app, 'workflow_engine') and self.ava_app.workflow_engine:
+                # This is the single source of truth for workflow progress now.
+                self.ava_app.workflow_engine.workflow_started.connect(self.on_workflow_started)
                 if hasattr(self.ava_app.workflow_engine, 'workflow_progress'):
                     self.ava_app.workflow_engine.workflow_progress.connect(self.on_workflow_progress)
         except AttributeError:
@@ -134,7 +136,6 @@ class AvAMainWindow(QMainWindow):
             self.chat_interface.add_workflow_status("Analyzing your request...")
             # This is the new, correct signal with chat history!
             self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history.copy())
-            # self.workflow_requested.emit(message) # <-- BUG FIX: This was causing the duplicate workflow. It's gone now!
         else:
             self._handle_casual_chat(message)
 
