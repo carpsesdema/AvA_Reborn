@@ -1,4 +1,4 @@
-# gui/model_config_dialog.py - CLEAN WORKING VERSION - INCLUDES REVIEWER ROLE
+# gui/model_config_dialog.py - CLEAN WORKING VERSION - INCLUDES REVIEWER AND STRUCTURER ROLES
 
 import json
 import os
@@ -79,6 +79,14 @@ class PersonalityManager:
     def _create_builtin_presets(self):
         """Create built-in personality presets"""
         builtin_presets_def = {
+            LLMRole.STRUCTURER.value: [ # ADDED BUILT-IN FOR STRUCTURER
+                PersonalityPreset(
+                    name="Project Structurer",
+                    description="Determines file structure and outputs simple JSON.",
+                    personality="You are the STRUCTURER AI. Your only job is to determine a project's file structure based on a user request and output it as a simple JSON object.",
+                    temperature=0.1, role=LLMRole.STRUCTURER.value, author="AvA Built-in"
+                )
+            ],
             LLMRole.PLANNER.value: [
                 PersonalityPreset(
                     name="Strategic Architect",
@@ -103,7 +111,7 @@ class PersonalityManager:
                     temperature=0.3, role=LLMRole.ASSEMBLER.value, author="AvA Built-in"
                 )
             ],
-            LLMRole.REVIEWER.value: [  # ADDED BUILT-IN FOR REVIEWER
+            LLMRole.REVIEWER.value: [
                 PersonalityPreset(
                     name="Detail-Oriented Reviewer",
                     description="Focuses on code quality, best practices, security, and performance.",
@@ -111,7 +119,7 @@ class PersonalityManager:
                     temperature=0.5, role=LLMRole.REVIEWER.value, author="AvA Built-in"
                 )
             ],
-            LLMRole.CHAT.value: [  # ADDED BUILT-IN FOR CHAT
+            LLMRole.CHAT.value: [
                 PersonalityPreset(
                     name="AvA - Friendly Assistant",
                     description="Default friendly and helpful AI assistant personality.",
@@ -148,16 +156,16 @@ class PersonalityManager:
 
             existing_idx = -1
             for i, preset in enumerate(self.individual_presets[role_str]):
-                if preset.name == name:  # Only allow overwriting user presets by name
+                if preset.name == name:
                     if preset.author == "User":
                         existing_idx = i
-                    else:  # Cannot overwrite built-in preset with same name, treat as new
+                    else:
                         pass
                     break
 
             new_preset = PersonalityPreset(
                 name=name, description=description, personality=personality,
-                temperature=temperature, role=role_str, author="User"  # New presets are always by User
+                temperature=temperature, role=role_str, author="User"
             )
 
             if existing_idx != -1:
@@ -298,12 +306,12 @@ class PersonalityEditor(QFrame):
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        header = QLabel(f"✏️ {self.role_name_display} Personality Text")  # Changed icon
+        header = QLabel(f"✏️ {self.role_name_display} Personality Text")
         header.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         header.setStyleSheet("color: #00d7ff; background: transparent;")
         layout.addWidget(header)
         self.personality_text = QTextEdit()
-        self.personality_text.setMinimumHeight(100)  # Ensure enough space
+        self.personality_text.setMinimumHeight(100)
         self.personality_text.setStyleSheet(
             "QTextEdit { background: #252526; color: #cccccc; border: 1px solid #404040; border-radius: 4px; padding: 8px; font-family: \"Segoe UI\"; font-size: 11px; }")
         self.personality_text.setPlainText(self._get_default_personality())
@@ -317,6 +325,7 @@ class PersonalityEditor(QFrame):
 
     def _get_default_personality(self) -> str:
         defaults = {
+            LLMRole.STRUCTURER.value: "You are the STRUCTURER AI...",
             LLMRole.PLANNER.value: "You are a senior software architect...",
             LLMRole.CODER.value: "You are a coding specialist...",
             LLMRole.ASSEMBLER.value: "You are a meticulous code integrator...",
@@ -329,7 +338,7 @@ class PersonalityEditor(QFrame):
         self.personality_text.setPlainText(preset.personality)
         if hasattr(self.parent_section, 'set_temperature'):
             self.parent_section.set_temperature(preset.temperature)
-        self.personality_changed.emit()  # Ensure parent knows text changed
+        self.personality_changed.emit()
 
     def get_personality(self) -> str: return self.personality_text.toPlainText().strip()
 
@@ -388,7 +397,6 @@ class RoleSection(QFrame):
         controls_layout.addWidget(self.temp_value)
         layout.addLayout(controls_layout)
 
-        # Pass the display name and the enum's string value
         editor_role_name = self.role_name_display.split(" ", 1)[
             1] if " " in self.role_name_display else self.role_name_display
         self.personality_editor = PersonalityEditor(
@@ -425,7 +433,7 @@ class ModelConfigurationDialog(QDialog):
         self.personality_manager = PersonalityManager()
         self.setWindowTitle("AvA - AI Specialist Configuration")
         self.setModal(True)
-        self.setMinimumSize(800, 750)  # Increased min height
+        self.setMinimumSize(800, 750)
         self._init_ui()
         self._apply_theme()
         self._populate_models()
@@ -434,17 +442,17 @@ class ModelConfigurationDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(15)  # Reduced spacing slightly
+        layout.setSpacing(15)
         header_label = QLabel("🤖 AI Specialist Configuration")
         header_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         header_label.setStyleSheet("color: #00d7ff; margin-bottom: 8px;")
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(header_label)
         subtitle = QLabel(
-            "Configure models, temperatures, and personalities. Includes save/load presets per role.")  # Updated subtitle
+            "Configure models, temperatures, and personalities. Includes save/load presets per role.")
         subtitle.setFont(QFont("Segoe UI", 12))
         subtitle.setStyleSheet("color: #888; margin-bottom: 15px;")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Reduced margin
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -454,21 +462,22 @@ class ModelConfigurationDialog(QDialog):
 
         content_widget = QWidget()
         content_layout = QVBoxLayout()
-        content_layout.setSpacing(10)  # Reduced spacing
+        content_layout.setSpacing(10)
 
+        # ADDED THE STRUCTURER SECTION
+        self.structurer_section = RoleSection("🗺️ Structurer", LLMRole.STRUCTURER, 0.1, self.personality_manager)
         self.planner_section = RoleSection("🧠 Planner", LLMRole.PLANNER, 0.7, self.personality_manager)
         self.coder_section = RoleSection("⚙️ Code Generator", LLMRole.CODER, 0.1, self.personality_manager)
         self.assembler_section = RoleSection("📄 Code Assembler", LLMRole.ASSEMBLER, 0.3, self.personality_manager)
-        self.reviewer_section = RoleSection("🧐 Code Reviewer", LLMRole.REVIEWER, 0.5,
-                                            self.personality_manager)  # NEW REVIEWER SECTION
-        self.chat_section = RoleSection("💬 General Chat", LLMRole.CHAT, 0.7,
-                                        self.personality_manager)  # NEW CHAT SECTION
+        self.reviewer_section = RoleSection("🧐 Code Reviewer", LLMRole.REVIEWER, 0.5, self.personality_manager)
+        self.chat_section = RoleSection("💬 General Chat", LLMRole.CHAT, 0.7, self.personality_manager)
 
+        content_layout.addWidget(self.structurer_section) # ADDED
         content_layout.addWidget(self.planner_section)
         content_layout.addWidget(self.coder_section)
         content_layout.addWidget(self.assembler_section)
-        content_layout.addWidget(self.reviewer_section)  # ADDED
-        content_layout.addWidget(self.chat_section)  # ADDED
+        content_layout.addWidget(self.reviewer_section)
+        content_layout.addWidget(self.chat_section)
 
         content_widget.setLayout(content_layout)
         scroll_area.setWidget(content_widget)
@@ -477,7 +486,7 @@ class ModelConfigurationDialog(QDialog):
         self.test_button = ModernButton("🔍 Test Models", button_type="secondary")
         self.test_button.clicked.connect(self._test_models)
         self.reset_button = ModernButton("🔄 Reset All", button_type="secondary")
-        self.reset_button.clicked.connect(self._reset_to_defaults)  # Renamed
+        self.reset_button.clicked.connect(self._reset_to_defaults)
         self.cancel_button = ModernButton("Cancel", button_type="secondary")
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button = ModernButton("🚀 Apply Configuration", button_type="primary")
@@ -497,8 +506,8 @@ class ModelConfigurationDialog(QDialog):
     def _populate_models(self):
         if not self.llm_client or not hasattr(self.llm_client, 'models'): return
         available_models = {key: f"{config.provider}/{config.model}" for key, config in self.llm_client.models.items()}
-        all_sections = [self.planner_section, self.coder_section, self.assembler_section, self.reviewer_section,
-                        self.chat_section]
+        # ADDED STRUCTURER TO THE LIST OF SECTIONS
+        all_sections = [self.structurer_section, self.planner_section, self.coder_section, self.assembler_section, self.reviewer_section, self.chat_section]
         for section in all_sections:
             section.model_combo.clear()
             for key, name in available_models.items(): section.model_combo.addItem(name, key)
@@ -507,10 +516,11 @@ class ModelConfigurationDialog(QDialog):
     def _load_current_config(self):
         if not self.llm_client or not hasattr(self.llm_client, 'role_assignments'): return
 
-        assignments = self.llm_client.role_assignments  # Keys are LLMRole enums
-        personalities = getattr(self.llm_client, 'personalities', {})  # Keys are LLMRole enums
+        assignments = self.llm_client.role_assignments
+        personalities = getattr(self.llm_client, 'personalities', {})
 
         sections_map = {
+            LLMRole.STRUCTURER: self.structurer_section, # ADDED
             LLMRole.PLANNER: self.planner_section,
             LLMRole.CODER: self.coder_section,
             LLMRole.ASSEMBLER: self.assembler_section,
@@ -524,30 +534,26 @@ class ModelConfigurationDialog(QDialog):
                 for i in range(section_widget.model_combo.count()):
                     if section_widget.model_combo.itemData(i) == model_key:
                         section_widget.model_combo.setCurrentIndex(i)
-                        if model_key in self.llm_client.models:  # Set temp from model_config
+                        if model_key in self.llm_client.models:
                             section_widget.set_temperature(self.llm_client.models[model_key].temperature)
                         break
 
             personality_text = personalities.get(role_enum)
             if personality_text:
                 section_widget.set_personality(personality_text)
-            else:  # Fallback to section's default if no specific one in LLM client
+            else:
                 section_widget.set_personality(section_widget.personality_editor._get_default_personality())
 
     def _reset_to_defaults(self):
         if QMessageBox.question(self, "Reset All Settings",
                                 "Reset models, temperatures, and personalities to defaults?",
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-            all_sections = [self.planner_section, self.coder_section, self.assembler_section, self.reviewer_section,
-                            self.chat_section]
+            # ADDED STRUCTURER TO THE LIST OF SECTIONS
+            all_sections = [self.structurer_section, self.planner_section, self.coder_section, self.assembler_section, self.reviewer_section, self.chat_section]
             for section in all_sections:
                 section.set_personality(section.personality_editor._get_default_personality())
                 section.set_temperature(section.default_temp)
-                # Attempt to set model to a default or first available if LLM client has defaults
-                # This part is tricky without knowing the LLM Client's default assignment logic well
-                # For now, just resets personality and temp. Model assignment can be done manually.
                 if section.model_combo.count() > 0:
-                    # Try to find a model suitable for this role and make it default
                     found_suitable = False
                     for i in range(section.model_combo.count()):
                         model_key_for_item = section.model_combo.itemData(i)
@@ -557,7 +563,7 @@ class ModelConfigurationDialog(QDialog):
                                 found_suitable = True
                                 break
                     if not found_suitable and section.model_combo.count() > 0:
-                        section.model_combo.setCurrentIndex(0)  # Fallback to first if no specific suitable found
+                        section.model_combo.setCurrentIndex(0)
 
     def _test_models(self):
         QMessageBox.information(self, "Model Testing", "Feature to be implemented.")
@@ -566,6 +572,7 @@ class ModelConfigurationDialog(QDialog):
         if not self.llm_client: self.reject(); return
 
         all_sections = {
+            LLMRole.STRUCTURER: self.structurer_section, # ADDED
             LLMRole.PLANNER: self.planner_section,
             LLMRole.CODER: self.coder_section,
             LLMRole.ASSEMBLER: self.assembler_section,
@@ -578,37 +585,32 @@ class ModelConfigurationDialog(QDialog):
 
         for role_enum, section_widget in all_sections.items():
             selected_model_key = section_widget.get_selected_model()
-            if selected_model_key:  # Only assign if a model is selected
+            if selected_model_key:
                 new_assignments[role_enum] = selected_model_key
-                # Update temperature for the specific ModelConfig instance
                 if selected_model_key in self.llm_client.models:
                     self.llm_client.models[selected_model_key].temperature = section_widget.get_temperature()
             new_personalities[role_enum] = section_widget.get_personality()
 
         try:
-            # Update role assignments in LLM client
-            self.llm_client.role_assignments.clear()  # Clear old assignments
+            self.llm_client.role_assignments.clear()
             self.llm_client.role_assignments.update(new_assignments)
 
-            # Update personalities in LLM client
             if not hasattr(self.llm_client, 'personalities'): self.llm_client.personalities = {}
             self.llm_client.personalities.clear()
             self.llm_client.personalities.update(new_personalities)
 
-            # The temperatures are updated directly on self.llm_client.models[model_key] above.
-            # No separate 'temperatures' dict needed in the signal if we do it this way.
-
             self.configuration_applied.emit({
-                'role_assignments': {k.value: v for k, v in new_assignments.items()},  # Emit with string keys for role
-                'personalities': {k.value: v for k, v in new_personalities.items()}  # Emit with string keys for role
+                'role_assignments': {k.value: v for k, v in new_assignments.items()},
+                'personalities': {k.value: v for k, v in new_personalities.items()}
             })
             QMessageBox.information(self, "Configuration Applied", "AI Specialist configuration updated.")
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to apply configuration: {e}")
 
-    def get_configuration_summary(self):  # For external display, string keys are fine
+    def get_configuration_summary(self):
         return {
+            LLMRole.STRUCTURER.value: self.structurer_section.model_combo.currentText(), # ADDED
             LLMRole.PLANNER.value: self.planner_section.model_combo.currentText(),
             LLMRole.CODER.value: self.coder_section.model_combo.currentText(),
             LLMRole.ASSEMBLER.value: self.assembler_section.model_combo.currentText(),
