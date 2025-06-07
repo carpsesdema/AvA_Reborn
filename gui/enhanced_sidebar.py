@@ -49,8 +49,8 @@ class AvALeftSidebar(QWidget):
         self.actions_panel.action_triggered.connect(self.action_triggered.emit)
         layout.addWidget(self.actions_panel)
 
-        # Add stretch to push panels to top
-        layout.addStretch()
+        # By removing the stretch here, the panels will expand to fill the vertical space
+        # layout.addStretch(1) # <-- REMOVED!
 
         self.setLayout(layout)
 

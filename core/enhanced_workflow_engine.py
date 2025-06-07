@@ -17,7 +17,7 @@ from core.workflow_services import EnhancedPlannerService, EnhancedCoderService,
 
 class EnhancedWorkflowEngine(QObject):
     """
-    🚀 Enhanced Workflow Engine with a self-healing, three-tiered recovery workflow.
+    🚀 Enhanced Workflow Engine with a streamlined, single-pass review and fix process.
     """
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
@@ -27,10 +27,6 @@ class EnhancedWorkflowEngine(QObject):
 
     detailed_log_event = Signal(str, str, str, str)
     task_progress = Signal(int, int)
-
-    # Constants for the self-healing loop
-    MAX_PATCH_ATTEMPTS = 3
-    MAX_ESCALATIONS = 1  # Max times to re-plan a file
 
     def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
@@ -55,7 +51,7 @@ class EnhancedWorkflowEngine(QObject):
 
         self._connect_terminal_signals()
         self.logger.info(
-            "✅ Enhanced Workflow Engine initialized with a three-tiered self-healing loop.")
+            "✅ Enhanced Workflow Engine initialized with a streamlined review process.")
 
     def _connect_terminal_signals(self):
         if not self.terminal_window: return
@@ -137,58 +133,51 @@ class EnhancedWorkflowEngine(QObject):
 
         self.detailed_log_event.emit("WorkflowEngine", "info", f"Starting pipeline for: {filename}", "1")
 
-        escalation_count = 0
-        last_failed_review = {}
-        last_failed_code = ""
+        # Step 1: Detailed planning for the file
+        file_spec, other_files_context = await self._plan_file(filename, file_info, high_level_plan)
+        if not file_spec:
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Planning failed for {filename}. Aborting file.", "1")
+            return filename, False
 
-        while escalation_count <= self.MAX_ESCALATIONS:
-            file_spec, other_files_context = await self._plan_file(
-                filename, file_info, high_level_plan, escalation_count > 0, last_failed_review
-            )
-            if not file_spec:
-                self.detailed_log_event.emit("WorkflowEngine", "error",
-                                             f"Planning failed for {filename}. Aborting file.", "1")
-                return filename, False
+        # Step 2: Generate code based on the detailed plan
+        project_context = {"description": high_level_plan.get("project_description", "")}
+        task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
 
-            project_context = {"description": high_level_plan.get("project_description", "")}
-            task_results = await self.coder_service.execute_tasks_for_file(file_spec, project_context)
+        # Step 3: Assemble the code snippets into a full file
+        assembled_code = await self.assembler_service.assemble_code(filename, task_results, high_level_plan, file_spec)
 
-            final_code, review_passed, last_failed_review = await self._review_and_patch_loop(filename, task_results,
-                                                                                              high_level_plan,
-                                                                                              file_spec)
+        # Step 4: Perform a single, high-quality review
+        review_data, review_passed = await self.assembler_service.review_code(filename, assembled_code, high_level_plan, file_spec)
 
-            if review_passed:
-                self._write_file(project_dir, filename, final_code)
-                return filename, True
+        if review_passed:
+            self.detailed_log_event.emit("Reviewer", "success", f"✅ Review for '{filename}' passed on first attempt!", "2")
+            self._write_file(project_dir, filename, assembled_code)
+            return filename, True
+        else:
+            self.detailed_log_event.emit("Reviewer", "warning", f"⚠️ Review for '{filename}' requires a one-shot fix.", "2")
 
-            last_failed_code = final_code  # Store the last failed version
-            escalation_count += 1
-            if escalation_count > self.MAX_ESCALATIONS:
-                self.detailed_log_event.emit("WorkflowEngine", "error",
-                                             f"⛔️ CRITICAL FAILURE on {filename}. Max escalations reached.", "1")
-                # --- TIER 3: THE ULTIMATE FIXER ---
-                self.detailed_log_event.emit("WorkflowEngine", "fallback", f"Engaging Ultimate Fixer for {filename}...",
-                                             1)
+            # Step 5: If review fails, perform a single, definitive fix (patch)
+            final_code = await self.assembler_service.patch_code(filename, assembled_code, review_data, high_level_plan, file_spec)
 
-                ultimate_code = await self.assembler_service.create_ultimate_fix(
-                    file_path=filename,
-                    file_purpose=file_info.get("purpose", ""),
-                    plan=high_level_plan,
-                    last_failed_code=last_failed_code,
-                    last_review_feedback=last_failed_review
+            if final_code:
+                # Step 6 (Optional but Recommended): A quick final review of the patched code
+                final_review_data, final_review_passed = await self.assembler_service.review_code(
+                    filename, final_code, high_level_plan, file_spec
                 )
-                if ultimate_code:
-                    self.detailed_log_event.emit("WorkflowEngine", "success",
-                                                 f"Ultimate Fixer completed {filename}. Writing file.", 1)
-                    self._write_file(project_dir, filename, ultimate_code)
+                if final_review_passed:
+                    self.detailed_log_event.emit("Reviewer", "success", f"✅ Final version of '{filename}' passed review.", "2")
+                    self._write_file(project_dir, filename, final_code)
                     return filename, True
                 else:
-                    self.detailed_log_event.emit("WorkflowEngine", "error",
-                                                 f"⛔️ Ultimate Fixer FAILED for {filename}. Halting work.", 1)
-                    return filename, False
+                    self.detailed_log_event.emit("Reviewer", "error", f"⛔️ Patched code for '{filename}' still failed review. Writing last attempt.", "2")
+                    # Even if it fails the second review, we write the "fixed" version as the best attempt.
+                    self._write_file(project_dir, filename, final_code)
+                    return filename, False # Mark as failed if the fix didn't pass review
             else:
-                self.detailed_log_event.emit("WorkflowEngine", "warning",
-                                             f"Escalating {filename} back to Planner for re-evaluation.", "1")
+                self.detailed_log_event.emit("Patcher", "error", f"⛔️ Patching failed for '{filename}'. Could not generate a fix.", "2")
+                # Write the original assembled but failed code for debugging
+                self._write_file(project_dir, filename, assembled_code)
+                return filename, False
 
     def _write_file(self, project_dir: Path, filename: str, content: str):
         """Helper to write file content and emit signals."""
@@ -198,25 +187,15 @@ class EnhancedWorkflowEngine(QObject):
         self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
         self.file_generated.emit(str(file_path_obj))
 
-    async def _plan_file(self, filename: str, file_info: dict, high_level_plan: dict, is_escalation: bool,
-                         last_failed_review: dict) -> tuple:
-        """Handles both initial planning and re-planning."""
+    async def _plan_file(self, filename: str, file_info: dict, high_level_plan: dict) -> tuple:
+        """Handles file planning."""
         file_purpose = file_info.get("purpose", "")
         project_description = high_level_plan.get("project_description", "")
 
         other_files_context_list = [
             f"- {f['filename']}: {f['purpose']}" for f in high_level_plan.get('files', []) if f['filename'] != filename
         ]
-        other_files_context = "\n".join(
-            other_files_context_list) if other_files_context_list else "This is a single-file project."
-
-        if is_escalation:
-            failure_summary = self.assembler_service._format_feedback_for_prompt(last_failed_review)
-            replan_context = (f"\n\nRE-PLANNING CONTEXT for {filename}:\n"
-                              f"A previous plan for this file resulted in code that could not be fixed after multiple attempts. "
-                              f"The final unresolvable issues were:\n{failure_summary}\n\n"
-                              f"Please create a new, more robust, and clearer plan to avoid these specific issues.")
-            project_description += replan_context
+        other_files_context = "\n".join(other_files_context_list) if other_files_context_list else "This is a single-file project."
 
         file_spec = await self.planner_service.create_detailed_file_plan(
             filename, file_purpose, project_description, other_files_context
@@ -227,38 +206,6 @@ class EnhancedWorkflowEngine(QObject):
         file_spec['purpose'] = file_purpose
         file_spec['path'] = filename
         return file_spec, other_files_context
-
-    async def _review_and_patch_loop(self, filename: str, task_results: List[dict], plan: dict, file_spec: dict) -> \
-    tuple[str, bool, dict]:
-        """Manages the assembly, review, and patching cycle."""
-        patch_attempt = 0
-        current_code = await self.assembler_service.assemble_code(filename, task_results, plan, file_spec)
-        last_review_data = {}
-
-        while patch_attempt < self.MAX_PATCH_ATTEMPTS:
-            review_data, review_passed = await self.assembler_service.review_code(
-                filename, current_code, plan, file_spec
-            )
-            last_review_data = review_data  # Keep track of the latest review
-
-            if review_passed:
-                return current_code, True, last_review_data
-
-            patch_attempt += 1
-            self.detailed_log_event.emit("Reviewer", "warning",
-                                         f"⚠️ Review for '{filename}' needs patching (Attempt {patch_attempt}/{self.MAX_PATCH_ATTEMPTS}).",
-                                         2)
-
-            if patch_attempt >= self.MAX_PATCH_ATTEMPTS:
-                self.detailed_log_event.emit("Reviewer", "error", f"❌ Maximum patch attempts reached for {filename}.",
-                                             2)
-                return current_code, False, last_review_data
-
-            current_code = await self.assembler_service.patch_code(
-                filename, current_code, review_data, plan, file_spec
-            )
-
-        return current_code, False, last_review_data
 
     def _update_task_progress(self, completed: int, total: int):
         self.workflow_stats["workflow_state"]["completed_tasks"] = completed

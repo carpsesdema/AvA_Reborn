@@ -132,8 +132,9 @@ class AvAMainWindow(QMainWindow):
         # We just need to decide what to do with the message.
         if self._is_build_request(message):
             self.chat_interface.add_workflow_status("Analyzing your request...")
+            # This is the new, correct signal with chat history!
             self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history.copy())
-            self.workflow_requested.emit(message)
+            # self.workflow_requested.emit(message) # <-- BUG FIX: This was causing the duplicate workflow. It's gone now!
         else:
             self._handle_casual_chat(message)
 

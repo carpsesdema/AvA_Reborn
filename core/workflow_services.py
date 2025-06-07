@@ -1,11 +1,8 @@
-import asyncio
 import json
-import hashlib
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Callable, Any, Coroutine
-from pathlib import Path
 import re
 import textwrap
+from pathlib import Path
+from typing import Dict, List, Callable
 
 from core.llm_client import LLMRole, EnhancedLLMClient
 
@@ -172,33 +169,6 @@ PATCHER_PROMPT_TEMPLATE = textwrap.dedent("""
     3.  Do NOT add new features or change logic that was not mentioned in the feedback.
     4.  Preserve the overall structure and functionality of the original code.
     5.  Your output MUST be ONLY the full, corrected, and clean Python code for the file `{file_path}`. Do not include explanations, apologies, or markdown formatting.
-""")
-
-# NEW: Ultimate Fixer prompt template
-ULTIMATE_FIXER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the Ultimate Fixer, a lead architect and senior developer with final authority. A file has failed multiple automated review and patching attempts. Your task is to analyze all the context and produce a final, correct, and complete version of the file. This is the last attempt.
-
-    **FILE:** `{file_path}`
-    **Original File Purpose:** {file_purpose}
-    **Overall Project Goal:** {project_description}
-
-    **LAST FAILED CODE VERSION:**
-    ```python
-    {last_failed_code}
-    ```
-
-    **FINAL UNRESOLVED REVIEW FEEDBACK:**
-    ```
-    {review_feedback}
-    ```
-
-    **CRITICAL INSTRUCTIONS:**
-    1.  **Analyze the Full Context:** Understand the original purpose, the project goal, the last code attempt, and why it failed.
-    2.  **Produce a Definitive Fix:** Write the complete and correct code for the *entire file*. Your code should be robust, clean, and fully functional.
-    3.  **Assume Final Authority:** You are not patching; you are *rewriting* the file to be correct. You can change the structure, logic, or anything necessary to meet the original requirements and fix the identified issues.
-    4.  **No More Errors:** Your output will be considered final and will not be reviewed again. Ensure it is of the highest quality.
-
-    **Your output MUST be ONLY the final, complete, and clean Python code for the file `{file_path}`. Do not include explanations or markdown formatting.**
 """)
 
 
@@ -490,27 +460,3 @@ class EnhancedAssemblerService(BaseAIService):
         patched_code = await self.llm_client.chat(patch_prompt, LLMRole.CODER)  # Use Coder for patching
         self.stream_emitter("Patcher", "success", "Patches applied. Final code generated.", 2)
         return self._clean_llm_output(patched_code)
-
-    async def create_ultimate_fix(self, file_path: str, file_purpose: str, plan: dict, last_failed_code: str,
-                                  last_review_feedback: dict) -> Optional[str]:
-        """The final attempt to fix a file using the most powerful AI model."""
-        self.stream_emitter("UltimateFixer", "thought", f"Initiating final fix for '{file_path}'...", 2)
-
-        feedback_details = self._format_feedback_for_prompt(last_review_feedback)
-
-        fixer_prompt = ULTIMATE_FIXER_PROMPT_TEMPLATE.format(
-            file_path=file_path,
-            file_purpose=file_purpose,
-            project_description=plan.get('project_description', ''),
-            last_failed_code=last_failed_code,
-            review_feedback=feedback_details
-        )
-
-        try:
-            # Use the REVIEWER role, which should be assigned to the most powerful reasoning model
-            final_code = await self.llm_client.chat(fixer_prompt, LLMRole.REVIEWER)
-            self.stream_emitter("UltimateFixer", "success", f"Final version of '{file_path}' generated.", 2)
-            return self._clean_llm_output(final_code)
-        except Exception as e:
-            self.stream_emitter("UltimateFixer", "error", f"Ultimate Fixer failed: {e}", 2)
-            return None
