@@ -152,7 +152,7 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     Provide a thorough review as a JSON object with keys: "approved" (boolean), "overall_quality" (string: "excellent", "good", "fair", "poor"), "critical_issues" (list of strings), "suggestions" (list of strings), and "summary" (string). Your feedback must be specific and actionable.
 """)
 
-# NEW: Patcher prompt template
+# Patcher prompt template
 PATCHER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are a senior developer tasked with fixing code based on a review. Your job is to take the original code, analyze the review feedback, and produce a new, corrected version of the code that resolves all the issues.
 
@@ -172,6 +172,33 @@ PATCHER_PROMPT_TEMPLATE = textwrap.dedent("""
     3.  Do NOT add new features or change logic that was not mentioned in the feedback.
     4.  Preserve the overall structure and functionality of the original code.
     5.  Your output MUST be ONLY the full, corrected, and clean Python code for the file `{file_path}`. Do not include explanations, apologies, or markdown formatting.
+""")
+
+# NEW: Ultimate Fixer prompt template
+ULTIMATE_FIXER_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the Ultimate Fixer, a lead architect and senior developer with final authority. A file has failed multiple automated review and patching attempts. Your task is to analyze all the context and produce a final, correct, and complete version of the file. This is the last attempt.
+
+    **FILE:** `{file_path}`
+    **Original File Purpose:** {file_purpose}
+    **Overall Project Goal:** {project_description}
+
+    **LAST FAILED CODE VERSION:**
+    ```python
+    {last_failed_code}
+    ```
+
+    **FINAL UNRESOLVED REVIEW FEEDBACK:**
+    ```
+    {review_feedback}
+    ```
+
+    **CRITICAL INSTRUCTIONS:**
+    1.  **Analyze the Full Context:** Understand the original purpose, the project goal, the last code attempt, and why it failed.
+    2.  **Produce a Definitive Fix:** Write the complete and correct code for the *entire file*. Your code should be robust, clean, and fully functional.
+    3.  **Assume Final Authority:** You are not patching; you are *rewriting* the file to be correct. You can change the structure, logic, or anything necessary to meet the original requirements and fix the identified issues.
+    4.  **No More Errors:** Your output will be considered final and will not be reviewed again. Ensure it is of the highest quality.
+
+    **Your output MUST be ONLY the final, complete, and clean Python code for the file `{file_path}`. Do not include explanations or markdown formatting.**
 """)
 
 
@@ -391,7 +418,7 @@ class EnhancedCoderService(BaseAIService):
 class EnhancedAssemblerService(BaseAIService):
     """🔧 Assembles, Reviews, and Patches code."""
 
-    def clean_llm_output(self, code: str) -> str:
+    def _clean_llm_output(self, code: str) -> str:
         """Removes markdown fences from code output."""
         if code.strip().startswith("```python"):
             code = code.split("```python", 1)[-1]
@@ -405,10 +432,8 @@ class EnhancedAssemblerService(BaseAIService):
         issues = review_data.get('critical_issues', [])
         suggestions = review_data.get('suggestions', [])
 
-        # Ensure issues and suggestions are lists of strings
         def to_str_list(items):
-            if not items:
-                return []
+            if not items: return []
             return [str(item) for item in items]
 
         issues_str = "\n- ".join(to_str_list(issues)) if issues else "None"
@@ -416,17 +441,15 @@ class EnhancedAssemblerService(BaseAIService):
 
         return f"Review Summary: {summary}\n\nCritical Issues to Fix:\n- {issues_str}\n\nSuggestions to Apply:\n- {suggestions_str}"
 
-    async def assemble_and_review_file(self, file_path: str, task_results: List[dict], plan: dict,
-                                       file_spec: dict) -> str:
+    async def assemble_code(self, file_path: str, task_results: List[dict], plan: dict, file_spec: dict) -> str:
+        """Assembles code snippets into a single file."""
         self.stream_emitter("Assembler", "thought", f"Assembling '{file_path}'...", 2)
         if not task_results:
             self.stream_emitter("Assembler", "error", f"No code to assemble for '{file_path}'!", 2)
             return f'# FALLBACK: No code generated for {file_path}'
 
-        # Stage 1: Initial Assembly
         raw_assembled_code = "\n\n".join(res['code'] for res in task_results)
         file_purpose = file_spec.get("purpose", "N/A")
-
         project_context_summary = f"Project: {plan.get('project_name', 'N/A')}\nDescription: {plan.get('project_description', 'N/A')}"
 
         assembly_prompt = ASSEMBLY_PROMPT_TEMPLATE.format(
@@ -435,36 +458,59 @@ class EnhancedAssemblerService(BaseAIService):
         )
         self.stream_emitter("Assembler", "thought", "Asking AI Assembler to intelligently merge code...", 2)
         assembled_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
-        cleaned_assembled_code = self.clean_llm_output(assembled_code)
+        return self._clean_llm_output(assembled_code)
 
-        # Stage 2: AI Review
+    async def review_code(self, file_path: str, code: str, plan: dict, file_spec: dict) -> tuple[dict, bool]:
+        """Reviews code and returns feedback and approval status."""
         self.stream_emitter("Reviewer", "thought", f"Requesting AI review for '{file_path}'...", 2)
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
-            file_path=file_path, project_description=plan.get('project_description', ''), code=cleaned_assembled_code
+            file_path=file_path, project_description=plan.get('project_description', ''), code=code
         )
         review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
 
         if not review_data:
-            self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Accepting code as-is.",
+            self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Approving by default.",
                                 2)
-            return cleaned_assembled_code
+            return {"approved": True, "summary": "Review failed to parse, approved by default."}, True
 
-        # Stage 3: Patching (if necessary)
-        if review_data.get('approved'):
-            self.stream_emitter("Reviewer", "success", f"✅ Review for '{file_path}': APPROVED", 2)
-            return cleaned_assembled_code
-        else:
-            self.stream_emitter("Reviewer", "warning", f"⚠️ Review for '{file_path}': Needs patching.", 2)
+        return review_data, review_data.get('approved', False)
 
-            feedback_details = self._format_feedback_for_prompt(review_data)
-            self.stream_emitter("Reviewer", "info", f"Feedback: {feedback_details}", 3)
+    async def patch_code(self, file_path: str, original_code: str, review_data: dict, plan: dict,
+                         file_spec: dict) -> str:
+        """Patches code based on review feedback."""
+        self.stream_emitter("Patcher", "thought", f"Applying patches to '{file_path}'...", 2)
+        feedback_details = self._format_feedback_for_prompt(review_data)
 
-            patch_prompt = PATCHER_PROMPT_TEMPLATE.format(
-                file_path=file_path,
-                original_code=cleaned_assembled_code,
-                review_feedback=feedback_details
-            )
-            self.stream_emitter("Reviewer", "thought", "Applying patches...", 2)
-            patched_code = await self.llm_client.chat(patch_prompt, LLMRole.REVIEWER)  # Use best model to patch
-            self.stream_emitter("Reviewer", "success", "Patches applied. Final code generated.", 2)
-            return self.clean_llm_output(patched_code)
+        patch_prompt = PATCHER_PROMPT_TEMPLATE.format(
+            file_path=file_path,
+            original_code=original_code,
+            review_feedback=feedback_details
+        )
+
+        patched_code = await self.llm_client.chat(patch_prompt, LLMRole.CODER)  # Use Coder for patching
+        self.stream_emitter("Patcher", "success", "Patches applied. Final code generated.", 2)
+        return self._clean_llm_output(patched_code)
+
+    async def create_ultimate_fix(self, file_path: str, file_purpose: str, plan: dict, last_failed_code: str,
+                                  last_review_feedback: dict) -> Optional[str]:
+        """The final attempt to fix a file using the most powerful AI model."""
+        self.stream_emitter("UltimateFixer", "thought", f"Initiating final fix for '{file_path}'...", 2)
+
+        feedback_details = self._format_feedback_for_prompt(last_review_feedback)
+
+        fixer_prompt = ULTIMATE_FIXER_PROMPT_TEMPLATE.format(
+            file_path=file_path,
+            file_purpose=file_purpose,
+            project_description=plan.get('project_description', ''),
+            last_failed_code=last_failed_code,
+            review_feedback=feedback_details
+        )
+
+        try:
+            # Use the REVIEWER role, which should be assigned to the most powerful reasoning model
+            final_code = await self.llm_client.chat(fixer_prompt, LLMRole.REVIEWER)
+            self.stream_emitter("UltimateFixer", "success", f"Final version of '{file_path}' generated.", 2)
+            return self._clean_llm_output(final_code)
+        except Exception as e:
+            self.stream_emitter("UltimateFixer", "error", f"Ultimate Fixer failed: {e}", 2)
+            return None
