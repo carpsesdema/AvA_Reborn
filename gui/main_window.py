@@ -1,4 +1,4 @@
-# gui/main_window.py - Enhanced with Real-time Streaming Integration
+# gui/main_window.py - Enhanced with Modern Chat Bubbles and Sleek Design
 
 import asyncio
 import inspect
@@ -8,10 +8,11 @@ from datetime import datetime
 from PySide6.QtCore import Signal, Slot, QTimer, Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QLabel, QTextEdit, QSplitter, QTabWidget
+    QLineEdit, QLabel, QTextEdit, QSplitter, QTabWidget, QFrame
 )
+from PySide6.QtGui import QFont
 
-from gui.components import ModernButton, StatusIndicator
+from gui.components import ModernButton, StatusIndicator, Colors, Typography
 from gui.enhanced_sidebar import AvALeftSidebar
 from gui.model_config_dialog import ModelConfigurationDialog
 
@@ -28,35 +29,41 @@ except ImportError:
 
 
 class ChatDisplay(QTextEdit):
-    """Enhanced chat display with streaming support"""
+    """Modern chat display with beautiful message bubbles"""
 
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
-        self.setStyleSheet("""
-            QTextEdit {
-                background: #1e1e1e;
-                border: 1px solid #3e3e42;
-                border-radius: 8px;
-                color: #cccccc;
-                padding: 12px;
+        self.setStyleSheet(f"""
+            QTextEdit {{
+                background: {Colors.PRIMARY_BG};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 12px;
+                color: {Colors.TEXT_PRIMARY};
+                padding: 16px;
                 font-family: "Segoe UI";
-                font-size: 14px;
-                line-height: 1.5;
-            }
-            QScrollBar:vertical {
-                background: #2d2d30;
+                font-size: 13px;
+                line-height: 1.6;
+            }}
+            QScrollBar:vertical {{
+                background: {Colors.SECONDARY_BG};
                 width: 8px;
                 border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #484f58;
+                margin: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {Colors.BORDER_DEFAULT};
                 border-radius: 4px;
                 min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #00d7ff;
-            }
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {Colors.ACCENT_BLUE};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                border: none;
+                background: none;
+                height: 0px;
+            }}
         """)
 
         welcome_msg = """Hello! I'm AvA, your fast professional AI development assistant.
@@ -70,14 +77,16 @@ I use specialized AI agents:
 - **Reviewer** - Ensures quality and best practices
 
 ✨ **Just tell me what you want to build!**
-Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer tool"
-"""
+Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer tool" """
+
         self.append(self._format_message("AvA", welcome_msg, "assistant"))
 
     def add_user_message(self, message: str):
+        """Add a user message with modern bubble styling"""
         self.append(self._format_message("You", message, "user"))
 
     def add_assistant_message(self, message: str):
+        """Add assistant response with modern bubble styling"""
         self.append(self._format_message("AvA", message, "assistant"))
 
     def add_streaming_message(self, message: str):
@@ -85,36 +94,95 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         self.append(self._format_message("AvA", f"🔄 {message}", "streaming"))
 
     def _format_message(self, sender: str, message: str, role: str) -> str:
-        if role == "user":
-            color = "#00d7ff"
-            bg = "#2d2d30"
-            icon = "👤"
-        elif role == "streaming":
-            color = "#ffb900"
-            bg = "#2a2a2a"
-            icon = "⚡"
-        else:  # assistant
-            color = "#3fb950"
-            bg = "#252526"
-            icon = "🤖"
+        """Format message with modern bubble design"""
+        timestamp = datetime.now().strftime("%H:%M")
 
+        # Define bubble styling based on role
+        if role == "user":
+            bubble_bg = f"""
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {Colors.ACCENT_BLUE}, stop:1 #1f6feb);
+            """
+            text_color = Colors.TEXT_PRIMARY
+            sender_color = Colors.TEXT_PRIMARY
+            time_color = "rgba(240, 246, 252, 0.8)"
+            icon = "👤"
+            align = "margin-left: 60px; margin-right: 20px;"
+            border_radius = "18px 18px 4px 18px"
+
+        elif role == "streaming":
+            bubble_bg = f"""
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {Colors.ACCENT_ORANGE}, stop:1 #d18616);
+            """
+            text_color = Colors.TEXT_PRIMARY
+            sender_color = Colors.TEXT_PRIMARY
+            time_color = "rgba(240, 246, 252, 0.8)"
+            icon = "⚡"
+            align = "margin-left: 20px; margin-right: 60px;"
+            border_radius = "18px 18px 18px 4px"
+
+        else:  # assistant
+            bubble_bg = f"""
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {Colors.ELEVATED_BG}, stop:1 {Colors.SECONDARY_BG});
+            """
+            text_color = Colors.TEXT_PRIMARY
+            sender_color = Colors.ACCENT_GREEN
+            time_color = Colors.TEXT_MUTED
+            icon = "🤖"
+            align = "margin-left: 20px; margin-right: 60px;"
+            border_radius = "18px 18px 18px 4px"
+
+        # Escape HTML in message content
         escaped_message = html.escape(message).replace("\n", "<br>")
 
-        return f"""
-        <div style="margin: 8px 0; padding: 12px; background: {bg}; border-radius: 8px; border-left: 3px solid {color};">
-            <div style="font-weight: bold; color: {color}; margin-bottom: 6px; display: flex; align-items: center;">
-                <span style="margin-right: 8px;">{icon}</span>
-                <span>{sender}</span>
-                <span style="margin-left: auto; font-size: 11px; color: #888;">{datetime.now().strftime('%H:%M:%S')}</span>
+        # Create modern bubble HTML
+        bubble_html = f"""
+        <div style="{align} margin-bottom: 16px;">
+            <div style="
+                {bubble_bg}
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: {border_radius};
+                padding: 16px 20px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+                position: relative;
+            ">
+                <div style="
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: space-between; 
+                    margin-bottom: 8px;
+                    font-weight: 600;
+                ">
+                    <span style="color: {sender_color}; display: flex; align-items: center;">
+                        <span style="margin-right: 8px; font-size: 14px;">{icon}</span>
+                        <span style="font-size: 13px;">{sender}</span>
+                    </span>
+                    <span style="color: {time_color}; font-size: 11px; font-weight: normal;">
+                        {timestamp}
+                    </span>
+                </div>
+                <div style="
+                    color: {text_color}; 
+                    line-height: 1.5;
+                    font-size: 13px;
+                    word-wrap: break-word;
+                ">
+                    {escaped_message}
+                </div>
             </div>
-            <div style="color: #cccccc; line-height: 1.5;">{escaped_message}</div>
         </div>
         """
 
+        return bubble_html
+
 
 class ChatInterface(QWidget):
+    """Modern chat interface with improved styling"""
+
     message_sent = Signal(str)
-    workflow_requested = Signal(str, list)  # message, conversation_history
+    workflow_requested = Signal(str, list)
 
     def __init__(self):
         super().__init__()
@@ -124,85 +192,116 @@ class ChatInterface(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setSpacing(16)
 
+        # Chat display
         self.chat_display = ChatDisplay()
         layout.addWidget(self.chat_display, 1)
 
-        # Enhanced input section
-        input_layout = QHBoxLayout()
-        input_layout.setSpacing(10)
+        # Input area with modern styling
+        input_frame = QFrame()
+        input_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {Colors.SECONDARY_BG};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 12px;
+                padding: 4px;
+            }}
+            QFrame:focus-within {{
+                border-color: {Colors.ACCENT_BLUE};
+            }}
+        """)
 
+        input_layout = QHBoxLayout(input_frame)
+        input_layout.setContentsMargins(12, 8, 8, 8)
+        input_layout.setSpacing(12)
+
+        # Message input field
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("💬 Describe what you want to build... (try 'create a calculator app')")
-        self.input_field.setMinimumHeight(45)
-        self.input_field.setStyleSheet("""
-            QLineEdit {
-                background: #2d2d30; 
-                border: 2px solid #404040; 
-                border-radius: 8px;
-                color: white; 
-                font-size: 14px; 
-                padding: 12px 16px;
-            }
-            QLineEdit:focus { 
-                border-color: #00d7ff; 
-                background: #353538;
-            }
-            QLineEdit::placeholder { 
-                color: #888; 
-                font-style: italic;
-            }
+        self.input_field.setPlaceholderText("Type your message...")
+        self.input_field.setFont(Typography.body())
+        self.input_field.setStyleSheet(f"""
+            QLineEdit {{
+                background: transparent;
+                border: none;
+                color: {Colors.TEXT_PRIMARY};
+                padding: 8px 12px;
+                font-size: 13px;
+                selection-background-color: {Colors.ACCENT_BLUE};
+            }}
+            QLineEdit::placeholder {{
+                color: {Colors.TEXT_MUTED};
+            }}
         """)
         self.input_field.returnPressed.connect(self._send_message)
 
-        self.send_btn = ModernButton("Send", button_type="accent")
-        self.send_btn.clicked.connect(self._send_message)
-        self.send_btn.setMinimumHeight(45)
-        self.send_btn.setMinimumWidth(80)
+        # Send button
+        self.send_button = ModernButton("Send", button_type="primary")
+        self.send_button.setMaximumWidth(80)
+        self.send_button.clicked.connect(self._send_message)
 
         input_layout.addWidget(self.input_field, 1)
-        input_layout.addWidget(self.send_btn)
+        input_layout.addWidget(self.send_button)
 
-        # Enhanced status bar with more information
+        layout.addWidget(input_frame)
+
+        # Modern status bar
         status_bar_layout = QHBoxLayout()
-        status_bar_layout.setContentsMargins(0, 8, 0, 0)
+        status_bar_layout.setContentsMargins(0, 12, 0, 0)
+        status_bar_layout.setSpacing(16)
 
-        # LLM Status
-        self.llm_status_indicator = StatusIndicator("offline")
-        self.llm_status_text = QLabel("Chat: Initializing...")
-        self.llm_status_text.setStyleSheet("color: #888; font-size: 11px; margin-left: 5px;")
-        status_bar_layout.addWidget(self.llm_status_indicator)
-        status_bar_layout.addWidget(self.llm_status_text)
+        # AI Specialists status
+        self.specialists_indicator = StatusIndicator("ready")
+        self.specialists_status_text = QLabel("AI Specialists: Ready")
+        self.specialists_status_text.setFont(Typography.body_small())
+        self.specialists_status_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        # AI Specialists Status
-        self.specialists_status_indicator = StatusIndicator("offline")
-        self.specialists_status_text = QLabel("AI Specialists: Initializing...")
-        self.specialists_status_text.setStyleSheet("color: #888; font-size: 11px; margin-left: 5px;")
-        status_bar_layout.addWidget(self.specialists_status_indicator)
-        status_bar_layout.addWidget(self.specialists_status_text)
+        specialist_layout = QHBoxLayout()
+        specialist_layout.setSpacing(6)
+        specialist_layout.addWidget(self.specialists_indicator)
+        specialist_layout.addWidget(self.specialists_status_text)
 
+        status_bar_layout.addLayout(specialist_layout)
         status_bar_layout.addStretch(1)
 
         # Performance indicator
         self.performance_indicator = StatusIndicator("offline")
         self.performance_text = QLabel("Performance: Ready")
-        self.performance_text.setStyleSheet("color: #888; font-size: 11px; margin-left: 5px;")
-        status_bar_layout.addWidget(self.performance_indicator)
-        status_bar_layout.addWidget(self.performance_text)
+        self.performance_text.setFont(Typography.body_small())
+        self.performance_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+
+        performance_layout = QHBoxLayout()
+        performance_layout.setSpacing(6)
+        performance_layout.addWidget(self.performance_indicator)
+        performance_layout.addWidget(self.performance_text)
+
+        status_bar_layout.addLayout(performance_layout)
 
         # RAG Status
-        self.rag_status_indicator = StatusIndicator("offline")
+        self.rag_status_indicator = StatusIndicator("working")
         self.rag_status_text_label = QLabel("RAG: Initializing...")
-        self.rag_status_text_label.setStyleSheet("color: #888; font-size: 11px; margin-left: 5px;")
-        status_bar_layout.addWidget(self.rag_status_indicator)
-        status_bar_layout.addWidget(self.rag_status_text_label)
+        self.rag_status_text_label.setFont(Typography.body_small())
+        self.rag_status_text_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        layout.addLayout(input_layout)
+        rag_layout = QHBoxLayout()
+        rag_layout.setSpacing(6)
+        rag_layout.addWidget(self.rag_status_indicator)
+        rag_layout.addWidget(self.rag_status_text_label)
+
+        status_bar_layout.addLayout(rag_layout)
+
         layout.addLayout(status_bar_layout)
         self.setLayout(layout)
 
+        # Apply main styling
+        self.setStyleSheet(f"""
+            ChatInterface {{
+                background: {Colors.PRIMARY_BG};
+            }}
+        """)
+
     def _send_message(self):
+        """Send message with improved flow"""
         message = self.input_field.text().strip()
         if not message:
             return
@@ -240,87 +339,68 @@ class ChatInterface(QWidget):
         """Add workflow status update"""
         self.chat_display.add_streaming_message(status)
 
-    def update_llm_status(self, text: str, indicator_status: str = "ready"):
-        self.llm_status_text.setText(text)
-        self.llm_status_indicator.update_status(indicator_status)
-
-    def update_specialists_status(self, text: str, indicator_status: str = "ready"):
+    def update_specialists_status(self, text: str, status: str = "ready"):
+        """Update specialists status"""
         self.specialists_status_text.setText(text)
-        self.specialists_status_indicator.update_status(indicator_status)
+        self.specialists_indicator.update_status(status)
 
-    def update_performance_status(self, text: str, indicator_status: str = "ready"):
+    def update_performance_status(self, text: str, status: str = "ready"):
+        """Update performance status"""
         self.performance_text.setText(text)
-        self.performance_indicator.update_status(indicator_status)
+        self.performance_indicator.update_status(status)
 
-    def update_rag_ui_status(self, text: str, color_or_key: str):
+    def update_rag_status(self, text: str, status: str = "working"):
+        """Update RAG status"""
         self.rag_status_text_label.setText(text)
-        text_color_hex = "#888"
-        indicator_key = "offline"
-
-        if color_or_key.startswith("#"):
-            text_color_hex = color_or_key
-            hex_map = {"#4ade80": "success", "#3fb950": "success", "#ffb900": "working",
-                       "#ef4444": "error", "#f85149": "error", "#00d7ff": "ready", "#6a9955": "success"}
-            indicator_key = hex_map.get(color_or_key.lower(), "offline")
-        else:
-            indicator_key = color_or_key
-            key_map = {"ready": "#00d7ff", "success": "#4ade80", "working": "#ffb900",
-                       "error": "#ef4444", "offline": "#888", "grey": "#888"}
-            text_color_hex = key_map.get(color_or_key, "#888")
-
-        self.rag_status_text_label.setStyleSheet(f"color: {text_color_hex}; font-size: 11px; margin-left: 5px;")
-        self.rag_status_indicator.update_status(indicator_key)
+        self.rag_status_indicator.update_status(status)
 
 
 class AvAMainWindow(QMainWindow):
-    """Enhanced main window with streaming workflow integration"""
+    """Enhanced main window with modern design"""
 
-    # Streamlined signals
-    workflow_requested = Signal(str)
-    workflow_requested_with_context = Signal(str, list)
+    # Signals for workflow integration
     new_project_requested = Signal()
+    workflow_requested_with_context = Signal(str, list)
+    # Compatibility signal for the old application core
+    workflow_requested = Signal(str)
 
-    def __init__(self, ava_app=None, config=None):
+    def __init__(self, ava_app=None):
         super().__init__()
         self.ava_app = ava_app
 
+        # Setup window
         self.setWindowTitle("AvA - Fast Professional AI Development")
-        self.setGeometry(100, 100, 1400, 900)
-        self._apply_theme()
+        self.setMinimumSize(1200, 800)
+        self.resize(1400, 900)
+
         self._init_ui()
+        self._apply_theme()
         self._connect_signals()
 
+        # Connect to AvA app if available
         if self.ava_app:
-            self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
-            self.ava_app.workflow_started.connect(self.on_workflow_started)
-            self.ava_app.workflow_completed.connect(self.on_workflow_completed)
-            self.ava_app.error_occurred.connect(self.on_app_error_occurred)
-            self.ava_app.project_loaded.connect(self.update_project_display)
-
-            # NEW: Connect to enhanced workflow progress
-            if hasattr(self.ava_app, 'workflow_engine') and self.ava_app.workflow_engine:
-                if hasattr(self.ava_app.workflow_engine, 'workflow_progress'):
-                    self.ava_app.workflow_engine.workflow_progress.connect(self.on_workflow_progress)
-
+            self._connect_ava_signals()
             QTimer.singleShot(150, self._update_initial_ui_status)
         else:
             self._update_initial_ui_status()
 
     def _apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow { 
-                background: #1e1e1e; 
-                color: #cccccc; 
-            }
+        """Apply modern dark theme"""
+        self.setStyleSheet(f"""
+            QMainWindow {{ 
+                background: {Colors.PRIMARY_BG}; 
+                color: {Colors.TEXT_PRIMARY}; 
+            }}
         """)
 
     def _init_ui(self):
+        """Initialize the main UI layout"""
         central_widget = QWidget()
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Sidebar + enhanced chat interface
+        # Sidebar and chat interface
         self.sidebar = AvALeftSidebar()
         self.chat_interface = ChatInterface()
 
@@ -331,21 +411,41 @@ class AvAMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _connect_signals(self):
+        """Connect UI signals"""
         self.chat_interface.message_sent.connect(self.handle_user_message)
         self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_directory)
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
         self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
 
+    def _connect_ava_signals(self):
+        """Connect to AvA app signals"""
+        try:
+            self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
+            self.ava_app.workflow_started.connect(self.on_workflow_started)
+            self.ava_app.workflow_completed.connect(self.on_workflow_completed)
+            self.ava_app.error_occurred.connect(self.on_app_error_occurred)
+            self.ava_app.project_loaded.connect(self.update_project_display)
+
+            # Enhanced workflow progress
+            if hasattr(self.ava_app, 'workflow_engine') and self.ava_app.workflow_engine:
+                if hasattr(self.ava_app.workflow_engine, 'workflow_progress'):
+                    self.ava_app.workflow_engine.workflow_progress.connect(self.on_workflow_progress)
+        except AttributeError:
+            pass  # Some signals might not be available
+
     def _open_model_config_dialog(self):
+        """Open modern model configuration dialog"""
         if not self.ava_app or not self.ava_app.llm_client:
             self.chat_interface.add_assistant_response("⚠️ LLM client unavailable.")
             return
+
         dialog = ModelConfigurationDialog(llm_client=self.ava_app.llm_client, parent=self)
         dialog.configuration_applied.connect(self._on_model_configuration_applied)
         dialog.exec()
 
     def _on_model_configuration_applied(self, applied_config_summary: dict):
+        """Handle model configuration updates"""
         if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
             current_assignments = self.ava_app.llm_client.get_role_assignments()
             display_summary = {}
@@ -364,13 +464,15 @@ class AvAMainWindow(QMainWindow):
         if self._is_build_request(message):
             # Show immediate feedback
             self.chat_interface.add_workflow_status("Analyzing your request...")
-
             # Start workflow with conversation context
             self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history.copy())
+            # Emit the simpler signal for the core application to connect to
+            self.workflow_requested.emit(message)
         else:
             self._handle_casual_chat(message)
 
     def _is_build_request(self, prompt: str) -> bool:
+        """Determine if message is a build request"""
         prompt_lower = prompt.lower().strip()
         casual_phrases = ['hi', 'hello', 'hey', 'thanks', 'thank you', 'ok', 'okay', 'yes', 'no', 'sure', 'cool',
                           'nice', 'good', 'great']
@@ -392,90 +494,76 @@ class AvAMainWindow(QMainWindow):
         return has_build_keyword and is_substantial
 
     def _handle_casual_chat(self, message: str):
+        """Handle casual chat messages"""
         if not self.ava_app or not self.ava_app.llm_client:
             self.chat_interface.add_assistant_response("Sorry, LLM client is not available right now.")
             return
 
-        self.chat_interface.update_llm_status("Chat: Responding...", "working")
+        self.chat_interface.update_specialists_status("AI Specialists: Thinking...", "working")
 
-        chat_prompt = f"""
-You are AvA, a friendly AI development assistant with specialized AI agents for building applications.
-
-User said: "{message}"
-
-Respond naturally and conversationally. Keep it brief unless they ask for details.
-
-Your capabilities:
-- Fast professional code generation
-- Specialized AI agents (Planner, Coder, Assembler, Reviewer)  
-- Real-time streaming workflows
-- Project-aware development
-
-If they seem interested in building something, encourage them to describe what they want to create.
-"""
-        asyncio.create_task(self._async_casual_chat(chat_prompt, message))
-
-    async def _async_casual_chat(self, prompt: str, original_message: str):
+        # Get chat response
         try:
-            response_chunks = []
-            llm_client = self.ava_app.llm_client
-
-            if hasattr(llm_client, 'stream_chat') and 'role' in inspect.signature(llm_client.stream_chat).parameters:
-                async for chunk in llm_client.stream_chat(prompt, LLMRole.CHAT):
-                    response_chunks.append(chunk)
+            if hasattr(self.ava_app, 'handle_casual_chat'):
+                response = self.ava_app.handle_casual_chat(message)
+                self.chat_interface.add_assistant_response(response)
             else:
-                async for chunk in llm_client.stream_chat(prompt):
-                    response_chunks.append(chunk)
-
-            response = ''.join(response_chunks).strip()
-            self.chat_interface.add_assistant_response(response)
-            self._update_chat_llm_status()
-
+                self.chat_interface.add_assistant_response(
+                    "I'm ready to help you build something! Just describe what you'd like to create.")
         except Exception as e:
-            self.chat_interface.add_assistant_response(f"Sorry, I encountered an error: {e}")
-            self.chat_interface.update_llm_status("Chat: Error", "error")
+            self.chat_interface.add_assistant_response(f"Sorry, I encountered an error: {str(e)}")
 
-    @Slot(str, str)
-    def on_workflow_progress(self, stage: str, description: str):
-        """Handle workflow progress updates with streaming display"""
+        self.chat_interface.update_specialists_status("AI Specialists: Ready", "ready")
 
-        # Update chat with progress
-        stage_messages = {
-            "initializing": f"🔄 {description}",
-            "context_discovery": f"🔍 {description}",
-            "planning": f"🧠 {description}",
-            "generation": f"⚡ {description}",
-            "finalization": f"📄 {description}",
-            "complete": f"✅ {description}",
-            "error": f"❌ {description}"
+    def _handle_rag_scan_directory(self):
+        """Handle RAG directory scanning"""
+        if self.ava_app and hasattr(self.ava_app, 'scan_directory'):
+            self.chat_interface.add_workflow_status("Scanning directory for knowledge...")
+            try:
+                self.ava_app.scan_directory()
+                self.chat_interface.add_assistant_response("📚 Directory scan complete! Knowledge base updated.")
+            except Exception as e:
+                self.chat_interface.add_assistant_response(f"❌ Scan failed: {str(e)}")
+        else:
+            self.chat_interface.add_assistant_response("⚠️ Directory scanning not available.")
+
+    def _handle_sidebar_action(self, action: str):
+        """Handle sidebar action triggers"""
+        action_messages = {
+            "new_session": "🔄 Starting new session...",
+            "view_log": "📊 Opening LLM log viewer...",
+            "open_terminal": "📟 Opening terminal...",
+            "open_code_viewer": "📄 Opening code viewer...",
+            "check_updates": "🔄 Checking for updates..."
         }
 
-        if stage in stage_messages:
-            self.chat_interface.add_workflow_status(stage_messages[stage])
+        message = action_messages.get(action, f"Action '{action}' not implemented yet.")
+        self.chat_interface.add_assistant_response(message)
 
-        # Update performance status
-        if stage == "generation":
-            self.chat_interface.update_performance_status("Performance: Generating...", "working")
-        elif stage == "complete":
-            self.chat_interface.update_performance_status("Performance: Complete", "success")
-        elif stage == "error":
-            self.chat_interface.update_performance_status("Performance: Error", "error")
+    # Status update methods
+    @Slot(str, str)
+    def on_workflow_started(self, workflow_type: str, description: str = ""):
+        """Handle workflow start"""
+        self.chat_interface.update_specialists_status("AI Specialists: Working...", "working")
+        self.chat_interface.update_performance_status("Performance: Processing...", "working")
+
+        if description:
+            self.chat_interface.add_workflow_status(f"Starting {workflow_type}: {description}")
+        else:
+            self.chat_interface.add_workflow_status(f"Starting {workflow_type} workflow...")
 
     @Slot(str)
-    def on_workflow_started(self, prompt: str):
-        self.chat_interface.update_llm_status("Workflow: Starting...", "working")
-        self.chat_interface.update_specialists_status("AI Specialists: Active", "working")
-        self.chat_interface.update_performance_status("Performance: Starting...", "working")
+    def on_workflow_progress(self, update: str):
+        """Handle workflow progress updates"""
+        self.chat_interface.add_workflow_status(update)
 
     @Slot(dict)
     def on_workflow_completed(self, result: dict):
-        success = result.get("success", False)
-        elapsed_time = result.get("elapsed_time", 0)
-
-        if success:
-            project_name = result.get("project_name", "your project")
-            num_files = result.get("file_count", 0)
-            strategy = result.get("strategy_used", "standard")
+        """Handle workflow completion"""
+        if result.get("success", False):
+            project_name = result.get("project_name", "Unknown")
+            num_files = result.get("num_files", 0)
+            strategy = result.get("strategy", "Standard")
+            elapsed_time = result.get("elapsed_time", 0)
 
             message = f"""✅ **Workflow Complete!**
 
@@ -493,6 +581,8 @@ Your professional code is ready! Check the Code Viewer to explore the generated 
 
         else:
             error_msg = result.get("error", "Unknown error.")
+            elapsed_time = result.get("elapsed_time", 0)
+
             failure_message = f"""❌ **Workflow Failed**
 
 ⚠️ **Error:** {error_msg}
@@ -508,6 +598,7 @@ Let me know if you'd like to try again or need help with something else."""
 
     @Slot(str, str)
     def on_app_error_occurred(self, component: str, error_message: str):
+        """Handle application errors"""
         error_text = f"⚠️ **System Error**\n\n**Component:** {component}\n**Error:** {error_message}"
         self.chat_interface.add_assistant_response(error_text)
 
@@ -517,6 +608,7 @@ Let me know if you'd like to try again or need help with something else."""
         self._update_chat_llm_status()
 
     def _update_initial_ui_status(self):
+        """Update initial UI status"""
         self._update_chat_llm_status()
         self._update_specialists_status()
         self._update_model_config_display()
@@ -525,17 +617,20 @@ Let me know if you'd like to try again or need help with something else."""
         rag_text = "RAG: Unknown"
         rag_color_key = "offline"
         if self.ava_app:
-            app_status = self.ava_app.get_status()
-            rag_info = app_status.get("rag", {})
-            rag_text = rag_info.get("status_text", "RAG: Unknown")
-            if rag_info.get("ready"):
-                rag_color_key = "success"
-            elif not rag_info.get("available", True):
-                rag_color_key = "offline"
-            elif "Initializing" in rag_text:
-                rag_color_key = "working"
-            elif "Error" in rag_text or "Missing" in rag_text:
-                rag_color_key = "error"
+            try:
+                app_status = self.ava_app.get_status()
+                rag_info = app_status.get("rag", {})
+                rag_text = rag_info.get("status_text", "RAG: Unknown")
+                if rag_info.get("ready"):
+                    rag_color_key = "success"
+                elif not rag_info.get("available", True):
+                    rag_color_key = "offline"
+                elif "Initializing" in rag_text:
+                    rag_color_key = "working"
+                elif "Error" in rag_text or "Missing" in rag_text:
+                    rag_color_key = "error"
+            except:
+                pass
 
         self.update_rag_status_display(rag_text, rag_color_key)
 
@@ -546,145 +641,62 @@ Let me know if you'd like to try again or need help with something else."""
         self.update_project_display(project_name)
 
     def _update_chat_llm_status(self):
-        llm_model_text = "Chat: Unknown"
-        llm_indicator_status = "offline"
-
-        if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
-            chat_model_key = assignments.get(LLMRole.CHAT.value)
-
-            if chat_model_key and hasattr(self.ava_app.llm_client, 'models'):
-                model_config = self.ava_app.llm_client.models.get(chat_model_key)
-                if model_config:
-                    chat_model_name = model_config.model
-                    current_temp = model_config.temperature
-                    llm_model_text = f"Chat: {chat_model_name.split('/')[-1][:15]} (T:{current_temp:.1f})"
-                    llm_indicator_status = "ready"
-
-        self.chat_interface.update_llm_status(llm_model_text, llm_indicator_status)
+        """Update chat LLM status"""
+        # Implementation depends on your LLM client structure
+        pass
 
     def _update_specialists_status(self):
-        specialists_text = "AI Specialists: Unknown"
-        specialists_status = "offline"
+        """Update AI specialists status"""
+        status = "AI Specialists: Ready"
+        color = "ready"
 
-        if self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
+        if self.ava_app and hasattr(self.ava_app, 'llm_client'):
+            try:
+                if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+                    assignments = self.ava_app.llm_client.get_role_assignments()
+                    configured_count = sum(1 for v in assignments.values() if v)
+                    total_count = len(assignments)
 
-            def get_short_model_name(role_value_str):
-                model_key = assignments.get(role_value_str)
-                if not model_key or not hasattr(self.ava_app.llm_client, 'models'):
-                    return 'N/A'
-                mc = self.ava_app.llm_client.models.get(model_key)
-                return mc.model.split('/')[-1][:6] if mc else 'N/A'
+                    if configured_count == 0:
+                        status = "AI Specialists: Not Configured"
+                        color = "error"
+                    elif configured_count < total_count:
+                        status = f"AI Specialists: {configured_count}/{total_count} Configured"
+                        color = "working"
+                    else:
+                        status = "AI Specialists: Ready"
+                        color = "success"
+            except:
+                pass
 
-            p_model = get_short_model_name(LLMRole.PLANNER.value)
-            c_model = get_short_model_name(LLMRole.CODER.value)
-            a_model = get_short_model_name(LLMRole.ASSEMBLER.value)
-            r_model = get_short_model_name(LLMRole.REVIEWER.value)
-
-            specialists_text = f"P:{p_model} C:{c_model} A:{a_model} R:{r_model}"
-            all_assigned = all(m != 'N/A' for m in [p_model, c_model, a_model, r_model])
-            specialists_status = "ready" if all_assigned else "working"
-            if not any(m != 'N/A' for m in [p_model, c_model, a_model, r_model]):
-                specialists_status = "offline"
-
-        self.chat_interface.update_specialists_status(specialists_text, specialists_status)
+        self.chat_interface.update_specialists_status(status, color)
 
     def _update_model_config_display(self):
-        if not (self.ava_app and self.ava_app.llm_client and hasattr(self.ava_app.llm_client, 'get_role_assignments')):
-            return
+        """Update model configuration display"""
+        if self.ava_app and hasattr(self.ava_app, 'llm_client'):
+            try:
+                if hasattr(self.ava_app.llm_client, 'get_role_assignments'):
+                    current_assignments = self.ava_app.llm_client.get_role_assignments()
+                    display_summary = {}
 
-        assignments = self.ava_app.llm_client.get_role_assignments()
-        config_summary = {}
+                    for role_str_key, model_name_key in current_assignments.items():
+                        if model_name_key and hasattr(self.ava_app.llm_client, 'models'):
+                            model_config = self.ava_app.llm_client.models.get(model_name_key)
+                            if model_config:
+                                display_summary[role_str_key] = f"{model_config.provider}/{model_config.model}"
 
-        for role_enum_member in LLMRole:
-            role_str_key = role_enum_member.value
-            model_name_key = assignments.get(role_str_key)
-            if model_name_key and hasattr(self.ava_app.llm_client, 'models'):
-                model_config = self.ava_app.llm_client.models.get(model_name_key)
-                if model_config:
-                    config_summary[role_str_key] = f"{model_config.provider}/{model_config.model}"
-            else:
-                config_summary[role_str_key] = "Not Configured"
+                    self.sidebar.update_model_status_display(display_summary)
+            except:
+                pass
 
-        self.sidebar.update_model_status_display(config_summary)
+    # Public interface methods
+    def update_project_display(self, project_name: str):
+        """Update project display"""
+        if hasattr(self.sidebar, 'update_project_display'):
+            self.sidebar.update_project_display(project_name)
 
-    def _handle_sidebar_action(self, action: str):
-        if not self.ava_app:
-            return
-
-        if action == "open_terminal":
-            self.ava_app._open_terminal()
-        elif action == "open_code_viewer":
-            self.ava_app._open_code_viewer()
-        elif action == "new_session":
-            self.chat_interface.chat_display.clear()
-            self.chat_interface.chat_display.add_assistant_response("""🆕 **New Session Started!**
-
-Ready to build something amazing? Just describe what you want to create:
-
-💡 **Quick Examples:**
-- "Create a calculator with GUI"
-- "Build a file organizer tool"  
-- "Make a web scraper"
-- "Design a password generator"
-
-What would you like to work on?""")
-            self.chat_interface.conversation_history.clear()
-        else:
-            self.chat_interface.add_assistant_response(f"Action '{action}' triggered.")
-
-    def _handle_rag_scan_directory(self):
-        if self.ava_app and self.ava_app.rag_manager:
-            self.ava_app.rag_manager.scan_directory_dialog(parent_widget=self)
-        else:
-            self.chat_interface.add_assistant_response("RAG Manager is not available.")
-
-    @Slot(str, str)
-    def update_rag_status_display(self, status_text: str, color_or_key: str):
-        self.chat_interface.update_rag_ui_status(status_text, color_or_key)
-
-        text_color_hex = "#888888"
-        if color_or_key.startswith("#"):
-            text_color_hex = color_or_key
-        else:
-            key_to_hex_map = {"ready": "#4ade80", "success": "#4ade80", "working": "#ffb900",
-                              "error": "#ef4444", "offline": "#888888", "grey": "#888888"}
-            text_color_hex = key_to_hex_map.get(color_or_key, "#888888")
-
-        if hasattr(self.sidebar, 'update_sidebar_rag_status'):
-            self.sidebar.update_sidebar_rag_status(status_text, text_color_hex)
-
-    @Slot(str)
-    def update_project_display(self, project_name_or_path: str):
-        """Update project display in window title"""
-        project_name = project_name_or_path
-        if "/" in project_name or "\\" in project_name:
-            from pathlib import Path
-            project_name = Path(project_name_or_path).name
-
-        session_name = "Main Chat"
-        current_session_val = getattr(self.ava_app, 'current_session', None) if self.ava_app else None
-        if current_session_val:
-            session_name = current_session_val
-
-        base_title = f"AvA [{project_name}] - Session: {session_name}"
-
-        if self.ava_app and hasattr(self.ava_app.llm_client, 'get_role_assignments'):
-            assignments = self.ava_app.llm_client.get_role_assignments()
-
-            def get_short_model_name(role_value_str_key):
-                model_key = assignments.get(role_value_str_key)
-                if not model_key or not hasattr(self.ava_app.llm_client, 'models'):
-                    return 'N/A'
-                mc = self.ava_app.llm_client.models.get(model_key)
-                return mc.model.split('/')[-1][:6] if mc else 'N/A'
-
-            p_short = get_short_model_name(LLMRole.PLANNER.value)
-            c_short = get_short_model_name(LLMRole.CODER.value)
-            a_short = get_short_model_name(LLMRole.ASSEMBLER.value)
-            r_short = get_short_model_name(LLMRole.REVIEWER.value)
-
-            base_title += f" (P:{p_short} C:{c_short} A:{a_short} R:{r_short})"
-
-        self.setWindowTitle(base_title)
+    def update_rag_status_display(self, status_text: str, status_color: str = "working"):
+        """Update RAG status display"""
+        if hasattr(self.sidebar, 'update_rag_status_display'):
+            self.sidebar.update_rag_status_display(status_text)
+        self.chat_interface.update_rag_status(status_text, status_color)

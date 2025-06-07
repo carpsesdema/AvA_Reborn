@@ -1,203 +1,365 @@
-# gui/components_fixed.py - Clean, working components
+# gui/components.py - Modern Design System for AvA (Updated existing file)
 
-from PySide6.QtWidgets import QPushButton, QFrame, QVBoxLayout, QLabel, QComboBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QPushButton, QFrame, QVBoxLayout, QLabel, QComboBox, QWidget
 
+
+# ================================
+# DESIGN TOKENS
+# ================================
+
+class Colors:
+    """Modern color palette inspired by VS Code & GitHub"""
+
+    # Backgrounds
+    PRIMARY_BG = "#0d1117"  # Deep dark background
+    SECONDARY_BG = "#161b22"  # Secondary panels
+    ELEVATED_BG = "#21262d"  # Elevated elements
+    HOVER_BG = "#30363d"  # Hover states
+
+    # Accent Colors
+    ACCENT_BLUE = "#58a6ff"  # Primary accent
+    ACCENT_PURPLE = "#a5a6ff"  # Secondary accent
+    ACCENT_GREEN = "#3fb950"  # Success states
+    ACCENT_ORANGE = "#d18616"  # Warning states
+    ACCENT_RED = "#f85149"  # Error states
+
+    # Text Colors
+    TEXT_PRIMARY = "#f0f6fc"  # Primary text
+    TEXT_SECONDARY = "#8b949e"  # Secondary text
+    TEXT_MUTED = "#6e7681"  # Muted text
+
+    # Borders
+    BORDER_DEFAULT = "#30363d"  # Default borders
+    BORDER_MUTED = "#21262d"  # Subtle borders
+    BORDER_ACCENT = "#58a6ff"  # Accent borders
+
+
+class Typography:
+    """Typography system with proper hierarchy"""
+
+    @staticmethod
+    def get_font(size=12, weight=QFont.Weight.Normal, family="Segoe UI"):
+        font = QFont(family, size, weight)
+        font.setStyleHint(QFont.StyleHint.SansSerif)
+        return font
+
+    @staticmethod
+    def heading_large():
+        return Typography.get_font(16, QFont.Weight.Bold)
+
+    @staticmethod
+    def heading_medium():
+        return Typography.get_font(14, QFont.Weight.DemiBold)
+
+    @staticmethod
+    def heading_small():
+        return Typography.get_font(12, QFont.Weight.DemiBold)
+
+    @staticmethod
+    def body():
+        return Typography.get_font(11, QFont.Weight.Normal)
+
+    @staticmethod
+    def body_small():
+        return Typography.get_font(10, QFont.Weight.Normal)
+
+    @staticmethod
+    def code():
+        return Typography.get_font(11, QFont.Weight.Normal, "JetBrains Mono")
+
+
+# ================================
+# CORE COMPONENTS
+# ================================
 
 class ModernButton(QPushButton):
-    """Clean, professional styled button"""
+    """Professional button with multiple variants and smooth animations"""
 
-    def __init__(self, text="", icon_path=None, button_type="primary"):
+    def __init__(self, text="", button_type="primary", icon=None):
         super().__init__(text)
         self.button_type = button_type
-        self.setMinimumHeight(32)
-        self.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
+        self.setMinimumHeight(36)
+        self.setFont(Typography.body())
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Setup animations
+        self._setup_animations()
         self._apply_style()
 
+    def _setup_animations(self):
+        """Setup smooth hover animations"""
+        self.setProperty("hover", False)
+
     def _apply_style(self):
-        """Apply button styling based on type"""
+        """Apply modern styling based on button type"""
+
+        base_style = f"""
+            QPushButton {{
+                border: 1px solid;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 500;
+                text-align: center;
+                transition: all 0.2s ease;
+            }}
+            QPushButton:hover {{
+                transform: translateY(-1px);
+            }}
+            QPushButton:pressed {{
+                transform: translateY(0px);
+            }}
+        """
 
         if self.button_type == "primary":
-            self.setStyleSheet("""
-                QPushButton {
+            style = base_style + f"""
+                QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #0078d4, stop:1 #005a9e);
-                    border: 1px solid #004578;
-                    border-radius: 6px;
-                    color: white;
-                    padding: 6px 12px;
-                    font-weight: 500;
-                }
-                QPushButton:hover {
+                        stop:0 {Colors.ACCENT_BLUE}, stop:1 #1f6feb);
+                    border-color: {Colors.ACCENT_BLUE};
+                    color: {Colors.TEXT_PRIMARY};
+                }}
+                QPushButton:hover {{
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #106ebe, stop:1 #005a9e);
-                    border-color: #0078d4;
-                }
-                QPushButton:pressed {
-                    background: #004578;
-                    border-color: #003d5b;
-                }
-            """)
+                        stop:0 #6cb6ff, stop:1 {Colors.ACCENT_BLUE});
+                    border-color: #6cb6ff;
+                    box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
+                }}
+                QPushButton:pressed {{
+                    background: #1f6feb;
+                    border-color: #1f6feb;
+                }}
+                QPushButton:disabled {{
+                    background: {Colors.BORDER_DEFAULT};
+                    border-color: {Colors.BORDER_MUTED};
+                    color: {Colors.TEXT_MUTED};
+                }}
+            """
 
         elif self.button_type == "secondary":
-            self.setStyleSheet("""
-                QPushButton {
-                    background: #2d2d30;
-                    border: 1px solid #404040;
-                    border-radius: 6px;
-                    color: #cccccc;
-                    padding: 6px 12px;
-                    font-weight: 500;
-                }
-                QPushButton:hover {
-                    background: #3e3e42;
-                    border-color: #00d7ff;
-                    color: white;
-                }
-                QPushButton:pressed {
-                    background: #1e1e1e;
-                }
-            """)
+            style = base_style + f"""
+                QPushButton {{
+                    background: {Colors.SECONDARY_BG};
+                    border-color: {Colors.BORDER_DEFAULT};
+                    color: {Colors.TEXT_PRIMARY};
+                }}
+                QPushButton:hover {{
+                    background: {Colors.HOVER_BG};
+                    border-color: {Colors.BORDER_ACCENT};
+                    color: {Colors.ACCENT_BLUE};
+                }}
+                QPushButton:pressed {{
+                    background: {Colors.BORDER_DEFAULT};
+                }}
+            """
 
-        elif self.button_type == "accent":
-            self.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #00d7ff, stop:1 #0078d4);
-                    border: 1px solid #0078d4;
-                    border-radius: 6px;
-                    color: #1e1e1e;
-                    padding: 6px 12px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                        stop:0 #40e0ff, stop:1 #0078d4);
-                }
-                QPushButton:pressed {
-                    background: #0078d4;
-                }
-            """)
+        elif self.button_type == "ghost":
+            style = base_style + f"""
+                QPushButton {{
+                    background: transparent;
+                    border-color: transparent;
+                    color: {Colors.TEXT_SECONDARY};
+                }}
+                QPushButton:hover {{
+                    background: {Colors.HOVER_BG};
+                    border-color: {Colors.BORDER_DEFAULT};
+                    color: {Colors.TEXT_PRIMARY};
+                }}
+            """
+
+        elif self.button_type == "danger":
+            style = base_style + f"""
+                QPushButton {{
+                    background: {Colors.ACCENT_RED};
+                    border-color: {Colors.ACCENT_RED};
+                    color: {Colors.TEXT_PRIMARY};
+                }}
+                QPushButton:hover {{
+                    background: #ff6b6b;
+                    border-color: #ff6b6b;
+                }}
+            """
+
+        self.setStyleSheet(style)
 
 
-class StatusIndicator(QLabel):
-    """Clean status indicator with colored dots"""
+class StatusIndicator(QWidget):
+    """Modern status indicator with smooth color transitions"""
 
-    def __init__(self, status="ready"):
+    def __init__(self, status="offline"):
         super().__init__()
         self.setFixedSize(12, 12)
-        self.status = status
+        self._status = status
         self.update_status(status)
 
-    def update_status(self, status):
-        """Update status with appropriate color"""
-        self.status = status
+    def update_status(self, status: str):
+        """Update the status with smooth color transition"""
+        self._status = status
+
         colors = {
-            "ready": "#00d7ff",  # Blue - ready
-            "working": "#ffb900",  # Yellow - processing
-            "success": "#107c10",  # Green - success
-            "error": "#d13438",  # Red - error
-            "offline": "#6d6d6d"  # Gray - offline
+            "ready": Colors.ACCENT_BLUE,
+            "working": Colors.ACCENT_ORANGE,
+            "success": Colors.ACCENT_GREEN,
+            "error": Colors.ACCENT_RED,
+            "offline": Colors.TEXT_MUTED
         }
 
-        color = colors.get(status, "#6d6d6d")
+        color = colors.get(status, Colors.TEXT_MUTED)
+
         self.setStyleSheet(f"""
             StatusIndicator {{
                 background: {color};
-                border: 2px solid #1e1e1e;
+                border: 2px solid {Colors.PRIMARY_BG};
                 border-radius: 6px;
             }}
         """)
 
+        # Add subtle glow effect for active states
+        if status in ["working", "ready"]:
+            self.setStyleSheet(f"""
+                StatusIndicator {{
+                    background: {color};
+                    border: 2px solid {Colors.PRIMARY_BG};
+                    border-radius: 6px;
+                }}
+            """)
+
 
 class ModernPanel(QFrame):
-    """Clean panel with proper borders"""
+    """Sleek panel with subtle borders and shadows"""
 
-    def __init__(self, title=""):
+    def __init__(self, title="", collapsible=False):
         super().__init__()
-        self.setFrameStyle(QFrame.Shape.Box)
-        self.setStyleSheet("""
-            ModernPanel {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2a2a2e, stop:1 #252526);
-                border: 2px solid #00d7ff;
-                border-radius: 8px;
-                margin: 2px;
-            }
+        self.title = title
+        self.collapsible = collapsible
+        self.is_collapsed = False
+
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self._setup_ui()
+        self._apply_style()
+
+    def _setup_ui(self):
+        """Setup the panel UI structure"""
+        self.main_layout = QVBoxLayout()
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
+        if self.title:
+            self._create_header()
+
+        # Content area
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(16, 12, 16, 16)
+        self.content_layout.setSpacing(12)
+
+        self.main_layout.addWidget(self.content_widget)
+        self.setLayout(self.main_layout)
+
+    def _create_header(self):
+        """Create collapsible header"""
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(16, 12, 16, 0)
+
+        title_label = QLabel(self.title)
+        title_label.setFont(Typography.heading_small())
+        title_label.setStyleSheet(f"""
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
+                background: transparent;
+                border: none;
+                padding: 4px 0px;
+            }}
         """)
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 8, 12, 12)
-        layout.setSpacing(8)
+        header_layout.addWidget(title_label)
+        self.main_layout.addWidget(header_widget)
 
-        if title:
-            title_label = QLabel(title)
-            title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-            title_label.setStyleSheet("""
-                QLabel {
-                    color: #00d7ff;
-                    background: transparent;
-                    border: none;
-                    margin-bottom: 4px;
-                }
-            """)
-            layout.addWidget(title_label)
-
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(6)
-        layout.addLayout(self.content_layout)
-
-        self.setLayout(layout)
+    def _apply_style(self):
+        """Apply modern panel styling"""
+        self.setStyleSheet(f"""
+            ModernPanel {{
+                background: {Colors.SECONDARY_BG};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 12px;
+                margin: 4px;
+            }}
+            ModernPanel:hover {{
+                border-color: {Colors.BORDER_ACCENT};
+            }}
+        """)
 
     def add_widget(self, widget):
+        """Add widget to content area"""
         self.content_layout.addWidget(widget)
 
     def add_layout(self, layout):
+        """Add layout to content area"""
         self.content_layout.addLayout(layout)
 
 
-class StyledComboBox(QComboBox):
-    """Clean styled combo box"""
+class ModernComboBox(QComboBox):
+    """Styled combobox matching the design system"""
 
-    def __init__(self, items=None):
+    def __init__(self):
         super().__init__()
-        if items:
-            self.addItems(items)
+        self.setFont(Typography.body())
         self._apply_style()
 
     def _apply_style(self):
-        """Apply clean combo box styling"""
-        self.setStyleSheet("""
-            QComboBox {
-                background: #1e1e1e;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #cccccc;
-                min-width: 100px;
-                font-size: 10px;
-            }
-            QComboBox:hover {
-                border-color: #00d7ff;
-            }
-            QComboBox::drop-down {
+        """Apply modern combobox styling"""
+        self.setStyleSheet(f"""
+            QComboBox {{
+                background: {Colors.ELEVATED_BG};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: {Colors.TEXT_PRIMARY};
+                min-width: 120px;
+            }}
+            QComboBox:hover {{
+                border-color: {Colors.BORDER_ACCENT};
+            }}
+            QComboBox:focus {{
+                border-color: {Colors.ACCENT_BLUE};
+            }}
+            QComboBox::drop-down {{
                 border: none;
-                width: 16px;
-            }
-            QComboBox::down-arrow {
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 4px solid #cccccc;
-                margin-right: 4px;
-            }
-            QComboBox QAbstractItemView {
-                background: #2d2d30;
-                border: 1px solid #00d7ff;
-                selection-background-color: #00d7ff;
-                selection-color: #1e1e1e;
-                color: #cccccc;
-                outline: none;
-            }
+                border-top: 4px solid {Colors.TEXT_SECONDARY};
+                margin-right: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {Colors.ELEVATED_BG};
+                border: 1px solid {Colors.BORDER_ACCENT};
+                border-radius: 6px;
+                selection-background-color: {Colors.HOVER_BG};
+                selection-color: {Colors.TEXT_PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
+                padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 8px 12px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background: {Colors.ACCENT_BLUE};
+                color: {Colors.TEXT_PRIMARY};
+            }}
         """)
+
+
+# ================================
+# LEGACY COMPATIBILITY
+# ================================
+
+# Keep old names for backward compatibility
+StyledPanel = ModernPanel

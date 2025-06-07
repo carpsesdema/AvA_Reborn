@@ -1,4 +1,4 @@
-# gui/panels.py - Updated panels matching your design
+# gui/panels.py - Modernized panels with sleek design
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
@@ -8,127 +8,72 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
 
-from gui.components import ModernButton, StatusIndicator
-
-
-# Add ModernPanel for compatibility
-class ModernPanel(QFrame):
-    """Professional panel with subtle borders and shadows"""
-
-    def __init__(self, title=""):
-        super().__init__()
-        self.setFrameStyle(QFrame.Shape.Box)
-        self.setStyleSheet("""
-            ModernPanel {
-                background: #252526;
-                border: 1px solid #3e3e42;
-                border-radius: 8px;
-                margin: 2px;
-            }
-        """)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(12, 8, 12, 12)
-        layout.setSpacing(8)
-
-        if title:
-            title_label = QLabel(title)
-            title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-            title_label.setStyleSheet("color: #0078d4; margin-bottom: 4px;")
-            layout.addWidget(title_label)
-
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(6)
-        layout.addLayout(self.content_layout)
-
-        self.setLayout(layout)
-
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
+from gui.components import ModernButton, StatusIndicator, Colors, Typography
 
 
 class StyledPanel(QFrame):
-    """Base panel with AvA styling matching your design"""
+    """Modern panel with sleek styling and proper typography"""
 
-    def __init__(self, title="", collapsible=False):
+    def __init__(self, title="", collapsible=False, initially_collapsed=False):
         super().__init__()
-        self.is_collapsed = False
+        self.is_collapsed = initially_collapsed
         self.collapsible = collapsible
 
-        self.setFrameStyle(QFrame.Shape.Box)
-        self.setStyleSheet("""
-            StyledPanel {
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setStyleSheet(f"""
+            StyledPanel {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2a2a2e, stop:1 #252526);
-                border: 2px solid #00d7ff;
-                border-radius: 8px;
-                margin: 2px 2px; /* MODIFIED: Reduced top/bottom margin */
-            }
+                    stop:0 {Colors.SECONDARY_BG}, stop:1 {Colors.ELEVATED_BG});
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 12px;
+                margin: 4px;
+            }}
+            StyledPanel:hover {{
+                border-color: {Colors.BORDER_ACCENT};
+            }}
         """)
 
         self.main_layout = QVBoxLayout()
-        self.main_layout.setContentsMargins(10, 6, 10, 8) # MODIFIED: Reduced internal padding
-        self.main_layout.setSpacing(6) # MODIFIED: Reduced internal spacing
+        self.main_layout.setContentsMargins(16, 12, 16, 16)
+        self.main_layout.setSpacing(12)
 
         if title:
             self._create_header(title)
 
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(6) # MODIFIED: Consistent spacing for content
-        self.main_layout.addLayout(self.content_layout)
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(10)
 
+        self.main_layout.addWidget(self.content_widget)
         self.setLayout(self.main_layout)
 
-    def _create_header(self, title):
-        """Create panel header with title and optional collapse button"""
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 4)
+        if self.collapsible and self.is_collapsed:
+            self.content_widget.hide()
 
-        self.title_label = QLabel(title)
-        self.title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        self.title_label.setStyleSheet("""
-            QLabel {
-                color: #00d7ff;
+    def _create_header(self, title):
+        """Create modern header with title"""
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 8)
+
+        title_label = QLabel(title)
+        title_label.setFont(Typography.heading_small())
+        title_label.setStyleSheet(f"""
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
                 background: transparent;
                 border: none;
-                padding: 4px 0px;
-            }
+                font-weight: 600;
+            }}
         """)
 
-        header_layout.addWidget(self.title_label)
+        header_layout.addWidget(title_label)
 
         if self.collapsible:
-            self.collapse_btn = QPushButton("−")
-            self.collapse_btn.setFixedSize(20, 20)
-            self.collapse_btn.setStyleSheet("""
-                QPushButton {
-                    background: #00d7ff;
-                    color: #1e1e1e;
-                    border: none;
-                    border-radius: 10px;
-                    font-weight: bold;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background: #40e0ff;
-                }
-            """)
-            self.collapse_btn.clicked.connect(self._toggle_collapse)
-            header_layout.addWidget(self.collapse_btn)
+            # Add collapse button if needed
+            pass
 
-        header_layout.addStretch()
         self.main_layout.addLayout(header_layout)
-
-    def _toggle_collapse(self):
-        """Toggle panel collapse state"""
-        self.is_collapsed = not self.is_collapsed
-
-        for i in range(self.content_layout.count()):
-            widget = self.content_layout.itemAt(i).widget()
-            if widget:
-                widget.setVisible(not self.is_collapsed)
-
-        self.collapse_btn.setText("+" if self.is_collapsed else "−")
 
     def add_widget(self, widget):
         """Add widget to content area"""
@@ -139,253 +84,19 @@ class StyledPanel(QFrame):
         self.content_layout.addLayout(layout)
 
 
-class ProjectSessionPanel(StyledPanel):
-    """Projects and Sessions panel matching your design"""
-
-    project_changed = Signal(str)
-    session_changed = Signal(str)
-
-    def __init__(self):
-        super().__init__() # Title is managed by tab-like buttons now
-        self._init_ui()
-
-    def _init_ui(self):
-        # Tab buttons for Projects/Sessions
-        tab_layout = QHBoxLayout()
-        tab_layout.setContentsMargins(0, 0, 0, 8)
-
-        self.projects_btn = QPushButton("Projects")
-        self.sessions_btn = QPushButton("Sessions")
-
-        # Style tab buttons
-        tab_style = """
-            QPushButton {
-                background: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 500;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: #3e3e42;
-                color: white;
-            }
-        """
-
-        active_tab_style = """
-            QPushButton {
-                background: #00d7ff;
-                color: #1e1e1e;
-                border: 1px solid #00d7ff;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-        """
-
-        self.projects_btn.setStyleSheet(active_tab_style)
-        self.sessions_btn.setStyleSheet(tab_style)
-
-        self.projects_btn.setCheckable(True)
-        self.sessions_btn.setCheckable(True)
-        self.projects_btn.setChecked(True)
-
-        self.projects_btn.clicked.connect(self._switch_to_projects)
-        self.sessions_btn.clicked.connect(self._switch_to_sessions)
-
-        tab_layout.addWidget(self.projects_btn)
-        tab_layout.addWidget(self.sessions_btn)
-        self.add_layout(tab_layout)
-
-        # Projects section
-        projects_label = QLabel("Projects:")
-        projects_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
-        projects_label.setStyleSheet("color: #cccccc; margin-top: 4px;")
-        self.add_widget(projects_label)
-
-        # Project list
-        self.project_list = QListWidget()
-        self.project_list.setStyleSheet("""
-            QListWidget {
-                background: #1e1e1e;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                color: #cccccc;
-                outline: none;
-            }
-            QListWidget::item {
-                padding: 6px 8px;
-                border-bottom: 1px solid #2d2d30;
-                border-radius: 2px;
-                margin: 1px;
-            }
-            QListWidget::item:selected {
-                background: #00d7ff;
-                color: #1e1e1e;
-                font-weight: bold;
-            }
-            QListWidget::item:hover {
-                background: #2d2d30;
-            }
-        """)
-
-        # Add sample projects
-        self._add_sample_projects()
-        self.project_list.setMaximumHeight(90) # MODIFIED: Slightly reduced
-        self.add_widget(self.project_list)
-
-        # New Project button
-        self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
-        self.new_project_btn.setMinimumHeight(30) # MODIFIED: Slightly reduced
-        self.add_widget(self.new_project_btn)
-
-        # Sessions section
-        sessions_label = QLabel("Sessions (Current Project):")
-        sessions_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
-        sessions_label.setStyleSheet("color: #cccccc; margin-top: 8px;")
-        self.add_widget(sessions_label)
-
-        # Session progress
-        self.session_progress = QProgressBar()
-        self.session_progress.setValue(45)
-        self.session_progress.setMaximumHeight(6)
-        self.session_progress.setStyleSheet("""
-            QProgressBar {
-                background: #2d2d30;
-                border: none;
-                border-radius: 3px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 3px;
-            }
-        """)
-        self.add_widget(self.session_progress)
-
-        # Session list
-        self.session_list = QListWidget()
-        self.session_list.setStyleSheet(self.project_list.styleSheet())
-        self._add_sample_sessions()
-        self.session_list.setMaximumHeight(70) # MODIFIED: Slightly reduced
-        self.add_widget(self.session_list)
-
-    def _add_sample_projects(self):
-        """Add sample projects with progress bars"""
-        projects = [
-            ("Default Project", 75),
-            ("365_crawl", 23)
-        ]
-
-        for project_name, progress in projects:
-            item = QListWidgetItem()
-
-            # Create widget for item
-            item_widget = QWidget()
-            item_layout = QVBoxLayout()
-            item_layout.setContentsMargins(4, 2, 4, 2)
-            item_layout.setSpacing(2)
-
-            name_label = QLabel(project_name)
-            name_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
-            name_label.setStyleSheet("color: white; background: transparent;")
-
-            progress_bar = QProgressBar()
-            progress_bar.setValue(progress)
-            progress_bar.setMaximumHeight(3)
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    background: #404040;
-                    border: none;
-                    border-radius: 1px;
-                }
-                QProgressBar::chunk {
-                    background: #00d7ff;
-                    border-radius: 1px;
-                }
-            """)
-
-            item_layout.addWidget(name_label)
-            item_layout.addWidget(progress_bar)
-            item_widget.setLayout(item_layout)
-
-            item.setSizeHint(item_widget.sizeHint())
-            self.project_list.addItem(item)
-            self.project_list.setItemWidget(item, item_widget)
-
-        # Select first item
-        self.project_list.setCurrentRow(0)
-
-    def _add_sample_sessions(self):
-        """Add sample sessions"""
-        sessions = ["Main Chat"]
-        for session in sessions:
-            item = QListWidgetItem(session)
-            self.session_list.addItem(item)
-        self.session_list.setCurrentRow(0)
-
-    def _switch_to_projects(self):
-        """Switch to projects tab"""
-        self.projects_btn.setStyleSheet("""
-            QPushButton {
-                background: #00d7ff;
-                color: #1e1e1e;
-                border: 1px solid #00d7ff;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-        """)
-        self.sessions_btn.setStyleSheet("""
-            QPushButton {
-                background: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 500;
-                font-size: 11px;
-            }
-        """)
-
-    def _switch_to_sessions(self):
-        """Switch to sessions tab"""
-        self.sessions_btn.setStyleSheet("""
-            QPushButton {
-                background: #00d7ff;
-                color: #1e1e1e;
-                border: 1px solid #00d7ff;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-        """)
-        self.projects_btn.setStyleSheet("""
-            QPushButton {
-                background: #2d2d30;
-                color: #cccccc;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 500;
-                font-size: 11px;
-            }
-        """)
+class ModernPanel(StyledPanel):
+    """Alias for backward compatibility"""
+    pass
 
 
 class LLMConfigPanel(StyledPanel):
-    """LLM Configuration panel matching your exact design"""
+    """Modern LLM Configuration panel"""
 
     model_changed = Signal(str, str)
     temperature_changed = Signal(float)
 
     def __init__(self):
-        super().__init__("LLM Configuration")
+        super().__init__("AI Model Configuration")
         self._init_ui()
 
     def _init_ui(self):
@@ -394,9 +105,8 @@ class LLMConfigPanel(StyledPanel):
         chat_layout.setContentsMargins(0, 4, 0, 4)
 
         chat_label = QLabel("Chat LLM:")
-        chat_label.setFont(QFont("Segoe UI", 9))
-        chat_label.setStyleSheet("color: #cccccc; background: transparent;")
-        chat_label.setMinimumWidth(70) # MODIFIED: Slightly reduced
+        chat_label.setFont(Typography.body())
+        chat_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; min-width: 80px;")
 
         self.chat_combo = QComboBox()
         self.chat_combo.addItems([
@@ -405,37 +115,47 @@ class LLMConfigPanel(StyledPanel):
             "Anthropic: claude-3.5-sonnet",
             "DeepSeek: deepseek-chat"
         ])
-        self.chat_combo.setStyleSheet("""
-            QComboBox {
-                background: #1e1e1e;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #cccccc;
-                min-width: 120px;
-                font-size: 9px;
-            }
-            QComboBox:hover {
-                border-color: #00d7ff;
-            }
-            QComboBox::drop-down {
+        self.chat_combo.setFont(Typography.body_small())
+        self.chat_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {Colors.ELEVATED_BG};
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: {Colors.TEXT_PRIMARY};
+                min-width: 180px;
+            }}
+            QComboBox:hover {{
+                border-color: {Colors.BORDER_ACCENT};
+            }}
+            QComboBox:focus {{
+                border-color: {Colors.ACCENT_BLUE};
+            }}
+            QComboBox::drop-down {{
                 border: none;
-                width: 18px;
-            }
-            QComboBox::down-arrow {
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 4px solid #cccccc;
+                border-top: 4px solid {Colors.TEXT_SECONDARY};
                 margin-right: 6px;
-            }
-            QComboBox QAbstractItemView {
-                background: #2d2d30;
-                border: 1px solid #00d7ff;
-                selection-background-color: #00d7ff;
-                selection-color: #1e1e1e;
-                color: #cccccc;
-            }
+            }}
+            QComboBox QAbstractItemView {{
+                background: {Colors.ELEVATED_BG};
+                border: 1px solid {Colors.BORDER_ACCENT};
+                border-radius: 6px;
+                selection-background-color: {Colors.HOVER_BG};
+                selection-color: {Colors.TEXT_PRIMARY};
+                color: {Colors.TEXT_PRIMARY};
+                padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 8px 12px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
         """)
 
         chat_status = StatusIndicator("ready")
@@ -445,82 +165,76 @@ class LLMConfigPanel(StyledPanel):
         chat_layout.addWidget(chat_status)
         self.add_layout(chat_layout)
 
-        # Specialized LLM Section
-        code_layout = QHBoxLayout()
-        code_layout.setContentsMargins(0, 4, 0, 4)
+        # Specialists Section
+        specialists_label = QLabel("AI Specialists:")
+        specialists_label.setFont(Typography.body())
+        specialists_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; margin-top: 8px;")
+        self.add_widget(specialists_label)
 
-        code_label = QLabel("Specialized LLM (Code Gen):")
-        code_label.setFont(QFont("Segoe UI", 9))
-        code_label.setStyleSheet("color: #cccccc; background: transparent;")
-
-        self.code_combo = QComboBox()
-        self.code_combo.addItems([
-            "Ollama (Gen): qwen2.5-coder",
-            "OpenAI: gpt-4o",
-            "Anthropic: claude-3.5-sonnet",
-            "DeepSeek: deepseek-coder-v2"
+        self.specialists_combo = QComboBox()
+        self.specialists_combo.addItems([
+            "Auto-select best models",
+            "Use Chat LLM for all",
+            "Custom configuration"
         ])
-        self.code_combo.setStyleSheet(self.chat_combo.styleSheet())
+        self.specialists_combo.setFont(Typography.body_small())
+        self.specialists_combo.setStyleSheet(self.chat_combo.styleSheet())
+        self.add_widget(self.specialists_combo)
 
-        code_status = StatusIndicator("ready")
+        # Temperature Control
+        temp_header = QLabel("Temperature Control")
+        temp_header.setFont(Typography.heading_small())
+        temp_header.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; margin-top: 12px; margin-bottom: 4px;")
+        self.add_widget(temp_header)
 
-        # Add the layout in two rows for better fit
-        self.add_widget(code_label)
+        temp_layout = QHBoxLayout()
+        temp_layout.setContentsMargins(0, 4, 0, 4)
 
-        code_row = QHBoxLayout()
-        code_row.addWidget(self.code_combo, 1)
-        code_row.addWidget(code_status)
-        self.add_layout(code_row)
+        temp_label = QLabel("Temp:")
+        temp_label.setFont(Typography.body_small())
+        temp_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; min-width: 50px;")
 
-        # Temperature Slider Section
-        temp_label_layout = QHBoxLayout()
-        temp_label = QLabel("Temperature (Chat):")
-        temp_label.setFont(QFont("Segoe UI", 9))
-        temp_label.setStyleSheet("color: #cccccc; background: transparent;")
-
-        self.temp_value = QLabel("0.70")
-        self.temp_value.setStyleSheet("color: #00d7ff; font-weight: bold; background: transparent;")
-
-        temp_label_layout.addWidget(temp_label)
-        temp_label_layout.addStretch()
-        temp_label_layout.addWidget(self.temp_value)
-        self.add_layout(temp_label_layout)
-
-        # Temperature slider
         self.temp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.temp_slider.setRange(0, 100)
+        self.temp_slider.setMinimum(0)
+        self.temp_slider.setMaximum(100)
         self.temp_slider.setValue(70)
-        self.temp_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #404040;
-                height: 4px;
-                background: #1e1e1e;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #00d7ff;
-                border: 2px solid #00d7ff;
-                width: 14px;
-                height: 14px;
-                border-radius: 7px;
+        self.temp_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                background: {Colors.BORDER_DEFAULT};
+                height: 6px;
+                border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {Colors.ACCENT_BLUE};
+                border: 2px solid {Colors.PRIMARY_BG};
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
                 margin: -6px 0;
-            }
-            QSlider::handle:horizontal:hover {
-                background: #40e0ff;
-                border-color: #40e0ff;
-            }
-            QSlider::sub-page:horizontal {
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #6cb6ff;
+                border-color: {Colors.ACCENT_BLUE};
+            }}
+            QSlider::sub-page:horizontal {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00d7ff, stop:1 #0078d4);
-                border-radius: 2px;
-            }
+                    stop:0 {Colors.ACCENT_BLUE}, stop:1 #6cb6ff);
+                border-radius: 3px;
+            }}
         """)
         self.temp_slider.valueChanged.connect(self._on_temperature_changed)
-        self.add_widget(self.temp_slider)
+
+        self.temp_value = QLabel("0.70")
+        self.temp_value.setFont(Typography.body_small())
+        self.temp_value.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; min-width: 40px; font-weight: 500;")
+
+        temp_layout.addWidget(temp_label)
+        temp_layout.addWidget(self.temp_slider, 1)
+        temp_layout.addWidget(self.temp_value)
+        self.add_layout(temp_layout)
 
         # Configure Persona Button
         self.persona_btn = ModernButton("🎭 Configure Persona", button_type="secondary")
-        self.persona_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
         self.add_widget(self.persona_btn)
 
     def _on_temperature_changed(self, value):
@@ -531,7 +245,9 @@ class LLMConfigPanel(StyledPanel):
 
 
 class KnowledgeBasePanel(StyledPanel):
-    """Knowledge Base (RAG) panel"""
+    """Modern Knowledge Base (RAG) panel"""
+
+    scan_directory_requested = Signal()
 
     def __init__(self):
         super().__init__("Knowledge Base (RAG)")
@@ -540,33 +256,48 @@ class KnowledgeBasePanel(StyledPanel):
     def _init_ui(self):
         # Scan Directory button
         self.scan_btn = ModernButton("🌐 Scan Directory (Global)", button_type="secondary")
-        self.scan_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
+        self.scan_btn.clicked.connect(self.scan_directory_requested.emit)
         self.add_widget(self.scan_btn)
 
         # Add Files button
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
-        self.add_files_btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
         self.add_widget(self.add_files_btn)
 
         # RAG Status
         rag_status_layout = QHBoxLayout()
-        rag_status_layout.setContentsMargins(0, 4, 0, 0)
+        rag_status_layout.setContentsMargins(0, 8, 0, 0)
 
         rag_status_label = QLabel("RAG:")
-        rag_status_label.setFont(QFont("Segoe UI", 9))
-        rag_status_label.setStyleSheet("color: #cccccc; background: transparent;")
+        rag_status_label.setFont(Typography.body())
+        rag_status_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
 
-        # MODIFIED: Made this an instance variable
         self.rag_status_display_label = QLabel("Initializing embedder...")
-        self.rag_status_display_label.setStyleSheet("color: #ffb900; font-size: 9px; background: transparent;")
+        self.rag_status_display_label.setFont(Typography.body_small())
+        self.rag_status_display_label.setStyleSheet(f"color: {Colors.ACCENT_ORANGE};")
 
         rag_status_layout.addWidget(rag_status_label)
         rag_status_layout.addWidget(self.rag_status_display_label, 1)
         self.add_layout(rag_status_layout)
 
+    def update_rag_status(self, status_text: str):
+        """Update RAG status display"""
+        self.rag_status_display_label.setText(status_text)
+
+        # Update color based on status
+        if "ready" in status_text.lower() or "complete" in status_text.lower():
+            color = Colors.ACCENT_GREEN
+        elif "error" in status_text.lower() or "failed" in status_text.lower():
+            color = Colors.ACCENT_RED
+        elif "initializing" in status_text.lower() or "loading" in status_text.lower():
+            color = Colors.ACCENT_ORANGE
+        else:
+            color = Colors.TEXT_SECONDARY
+
+        self.rag_status_display_label.setStyleSheet(f"color: {color};")
+
 
 class ChatActionsPanel(StyledPanel):
-    """Chat Actions panel"""
+    """Modern Chat Actions panel"""
 
     action_triggered = Signal(str)
 
@@ -575,133 +306,149 @@ class ChatActionsPanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
-        # Create buttons with consistent styling
-        buttons = [
-            ("💬 New Session", "new_session"),
-            ("📊 View LLM Log", "view_log"),
-            ("📟 Open Terminal", "open_terminal"),
-            ("📄 Open Code Viewer", "open_code_viewer"),
-            ("⚡ View Generated Code", "view_code"),
-            ("🔨 Force Code Gen", "force_gen"),
-            ("🔄 Check for Updates", "check_updates")
+        # Create buttons with modern styling and better organization
+        button_groups = [
+            # Session Management
+            [
+                ("💬 New Session", "new_session"),
+                ("📊 View LLM Log", "view_log"),
+            ],
+            # Development Tools
+            [
+                ("📟 Open Terminal", "open_terminal"),
+                ("📄 Open Code Viewer", "open_code_viewer"),
+                ("🎛️ Toggle AI Monitor", "toggle_feedback_panel"),
+            ],
+            # Code Generation
+            [
+                ("⚡ View Generated Code", "view_code"),
+                ("🔨 Force Code Gen", "force_gen"),
+            ],
+            # System
+            [
+                ("🔄 Check for Updates", "check_updates"),
+            ]
         ]
 
-        for text, action in buttons:
-            btn = ModernButton(text, button_type="secondary")
-            btn.setMinimumHeight(28) # MODIFIED: Slightly reduced
-            btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
-            self.add_widget(btn)
+        for group_index, group in enumerate(button_groups):
+            # Add visual separator between groups
+            if group_index > 0:
+                separator = QFrame()
+                separator.setFixedHeight(1)
+                separator.setStyleSheet(f"""
+                    QFrame {{
+                        background: {Colors.BORDER_DEFAULT};
+                        border: none;
+                        margin: 8px 0px;
+                    }}
+                """)
+                self.add_widget(separator)
+
+            for text, action in group:
+                btn = ModernButton(text, button_type="secondary")
+                btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
+                self.add_widget(btn)
 
 
-class AvALeftSidebar(QWidget): # This class is in enhanced_sidebar.py
-    """Complete left sidebar containing all panels"""
-
-    # Aggregate signals from all panels
-    workflow_requested = Signal(str) # This seems unused here, workflow is usually from chat input
-    model_changed = Signal(str, str)
-    temperature_changed = Signal(float)
-    action_triggered = Signal(str)
-    # new_project_sidebar_action = Signal() # This was from the internal sidebar, handle via project_panel.new_project_btn
+# Enhanced Sidebar Panel for Model Status
+class ModelStatusPanel(StyledPanel):
+    """Panel showing AI specialist model assignments"""
 
     def __init__(self):
-        super().__init__()
-        self.setFixedWidth(280)
+        super().__init__("AI Specialists Status")
         self._init_ui()
-        self._connect_signals()
 
     def _init_ui(self):
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(6, 6, 6, 6) # MODIFIED: Reduced outer margins
-        main_layout.setSpacing(0) # MODIFIED: Reduced spacing, panels have their own margins
+        """Initialize model status displays"""
+        specialists = [
+            ("🧠 Planner", "planner_status"),
+            ("⚙️ Coder", "coder_status"),
+            ("📄 Assembler", "assembler_status"),
+            ("🧐 Reviewer", "reviewer_status"),
+            ("💬 Chat", "chat_status")
+        ]
 
-        # Create scrollable area for panels
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                background: transparent;
-                border: none;
-            }
-            QScrollBar:vertical {
-                background: #2d2d30;
-                width: 8px;
-                border-radius: 4px;
-                margin: 0px; /* MODIFIED */
-            }
-            QScrollBar::handle:vertical {
-                background: #404040;
-                border-radius: 4px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #00d7ff;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px; /* MODIFIED */
-                border: none;
-                background: none;
-            }
-            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
-                 background: none;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                 background: none;
-            }
-        """)
+        for label_text, attr_name in specialists:
+            status_layout = QHBoxLayout()
+            status_layout.setContentsMargins(0, 4, 0, 4)
 
-        # Content widget for scroll area
-        content_widget = QWidget()
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(6) # MODIFIED: Spacing between panels
+            # Status indicator
+            indicator = StatusIndicator("offline")
 
-        # Create all panels
-        self.project_panel = ProjectSessionPanel()
-        self.llm_panel = LLMConfigPanel()
-        self.rag_panel = KnowledgeBasePanel()
-        self.actions_panel = ChatActionsPanel()
+            # Status label
+            status_label = QLabel(f"{label_text}: Not configured")
+            status_label.setFont(Typography.body_small())
+            status_label.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
 
-        # Add panels to content layout
-        content_layout.addWidget(self.project_panel)
-        content_layout.addWidget(self.llm_panel)
-        content_layout.addWidget(self.rag_panel)
-        content_layout.addWidget(self.actions_panel)
-        content_layout.addStretch()
+            status_layout.addWidget(indicator)
+            status_layout.addWidget(status_label, 1)
 
-        content_widget.setLayout(content_layout)
-        scroll_area.setWidget(content_widget)
+            self.add_layout(status_layout)
 
-        main_layout.addWidget(scroll_area)
-        self.setLayout(main_layout)
+            # Store references for updating
+            setattr(self, attr_name, status_label)
+            setattr(self, f"{attr_name}_indicator", indicator)
 
-        # Apply overall styling
-        self.setStyleSheet("""
-            AvALeftSidebar {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1e1e1e, stop:1 #252526);
-                border-right: 2px solid #00d7ff;
-            }
-        """)
+    def update_model_status_display(self, config_summary: dict):
+        """Update the model status display"""
 
-    def _connect_signals(self):
-        """Connect panel signals to main signals"""
-        self.llm_panel.model_changed.connect(self.model_changed)
-        self.llm_panel.temperature_changed.connect(self.temperature_changed)
-        self.actions_panel.action_triggered.connect(self.action_triggered)
-        # Note: The new_project_btn signal is connected in AvAMainWindow directly to project_panel.new_project_btn
+        def truncate_model(name, length=22):
+            return name[:length - 3] + "..." if name and len(name) > length else name or "Not configured"
 
-    def get_current_models(self):
-        """Get currently selected models"""
-        return {
-            "chat_model": self.llm_panel.chat_combo.currentText(),
-            "code_model": self.llm_panel.code_combo.currentText(),
-            "temperature": self.llm_panel.temp_slider.value() / 100.0
+        status_map = {
+            "planner": (self.planner_status, self.planner_status_indicator, "🧠 Planner"),
+            "coder": (self.coder_status, self.coder_status_indicator, "⚙️ Coder"),
+            "assembler": (self.assembler_status, self.assembler_status_indicator, "📄 Assembler"),
+            "reviewer": (self.reviewer_status, self.reviewer_status_indicator, "🧐 Reviewer"),
+            "chat": (self.chat_status, self.chat_status_indicator, "💬 Chat")
         }
 
-    def set_status(self, component: str, status: str):
-        """Update component status"""
-        # Could update status indicators in panels
-        pass
+        for role_str, (label_widget, indicator_widget, prefix) in status_map.items():
+            model_name = config_summary.get(role_str, "Not configured")
+            display_name = truncate_model(model_name)
+            label_widget.setText(f"{prefix}: {display_name}")
+
+            if model_name and model_name != "Not configured":
+                label_widget.setStyleSheet(f"color: {Colors.ACCENT_GREEN};")
+                indicator_widget.update_status("success")
+            else:
+                label_widget.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
+                indicator_widget.update_status("offline")
+
+
+# Project Management Panel
+class ProjectManagementPanel(StyledPanel):
+    """Modern project management panel"""
+
+    new_project_requested = Signal()
+
+    def __init__(self):
+        super().__init__("Project Management")
+        self._init_ui()
+
+    def _init_ui(self):
+        # New Project button - make it prominent
+        self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
+        self.new_project_btn.clicked.connect(self.new_project_requested.emit)
+        self.add_widget(self.new_project_btn)
+
+        # Current project display
+        project_layout = QHBoxLayout()
+        project_layout.setContentsMargins(0, 8, 0, 0)
+
+        project_label = QLabel("Project:")
+        project_label.setFont(Typography.body())
+        project_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+
+        self.project_display = QLabel("Default Project")
+        self.project_display.setFont(Typography.body())
+        self.project_display.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: 500;")
+
+        project_layout.addWidget(project_label)
+        project_layout.addWidget(self.project_display, 1)
+
+        self.add_layout(project_layout)
+
+    def update_project_display(self, project_name: str):
+        """Update the project display"""
+        self.project_display.setText(project_name)
