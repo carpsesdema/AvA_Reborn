@@ -6,19 +6,30 @@ import json
 import requests
 import zipfile
 import subprocess
+import shutil
 from pathlib import Path
 from packaging.version import parse as parse_version
 
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QFont, QIcon  # Assuming you might want an icon later
+from PySide6.QtGui import QFont, QIcon
 
 # --- Configuration ---
-# This is the URL to the raw version.json file on your GitHub repo.
-# IMPORTANT: Make sure it's the "raw" link!
 VERSION_URL = "https://raw.githubusercontent.com/your-username/your-repo/main/version.json"
 APP_DIR = Path("./app")
 CURRENT_VERSION_FILE = Path("./current_version.txt")
+
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        base_path = Path(sys._MEIPASS)
+    except Exception:
+        base_path = Path(".").resolve()
+    return base_path / relative_path
+
+
+ICON_PATH = resource_path(Path("assets/icons/Ava_Icon.ico"))
 MAIN_APP_SCRIPT = APP_DIR / "main.py"
 
 
@@ -32,7 +43,6 @@ class UpdateWorker(QThread):
 
     def run(self):
         try:
-            # 1. Get current version
             self.status_updated.emit("Checking local version...")
             if CURRENT_VERSION_FILE.exists():
                 current_v_str = CURRENT_VERSION_FILE.read_text().strip()
@@ -41,23 +51,20 @@ class UpdateWorker(QThread):
             current_version = parse_version(current_v_str)
             self.status_updated.emit(f"Current version: {current_version}")
 
-            # 2. Fetch latest version info from server
             self.status_updated.emit("Contacting update server...")
             response = requests.get(VERSION_URL, timeout=10)
-            response.raise_for_status()  # Raises an exception for bad status codes
+            response.raise_for_status()
             latest_info = response.json()
             latest_v_str = latest_info["version"]
             latest_version = parse_version(latest_v_str)
             self.status_updated.emit(f"Latest version: {latest_version}")
 
-            # 3. Compare versions
             if latest_version > current_version:
                 self.status_updated.emit(f"New version available! Downloading {latest_version}...")
                 download_url = latest_info["download_url"]
 
-                # 4. Download the update
                 zip_path = Path("./update.zip")
-                with requests.get(download_url, stream=True, timeout=30) as r:
+                with requests.get(download_url, stream=True, timeout=60) as r:
                     r.raise_for_status()
                     total_size = int(r.headers.get('content-length', 0))
                     bytes_downloaded = 0
@@ -70,24 +77,18 @@ class UpdateWorker(QThread):
                                 self.progress_updated.emit(progress)
 
                 self.status_updated.emit("Download complete. Extracting files...")
-                self.progress_updated.emit(0)  # Reset progress for extraction
+                self.progress_updated.emit(100)
 
-                # 5. Unzip the contents
+                # NEW ROBUST UNZIP LOGIC
+                # Clear out the old app directory before extracting the new one
+                if APP_DIR.exists():
+                    shutil.rmtree(APP_DIR)
                 APP_DIR.mkdir(exist_ok=True)
-                with zipfile.ZipFile(zip_path) as zf:
-                    # This is tricky because GitHub zips include a root folder.
-                    # We need to extract files from that root folder into our ./app/ dir.
-                    file_list = zf.infolist()
-                    # The first item is usually the root directory name, e.g., "AvA-Release-1.0.1/"
-                    root_dir_name = file_list[0].filename
-                    for member in file_list:
-                        # Strip the root directory from the path
-                        member.filename = member.filename.replace(root_dir_name, "", 1)
-                        if member.filename:  # Don't extract the root dir itself
-                            zf.extract(member, APP_DIR)
 
-                # 6. Clean up and update version file
-                zip_path.unlink()  # Delete the zip file
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(APP_DIR)
+
+                zip_path.unlink()
                 CURRENT_VERSION_FILE.write_text(latest_v_str)
                 self.status_updated.emit(f"Update to version {latest_v_str} complete!")
                 self.update_finished.emit(True, "Update successful!")
@@ -104,11 +105,14 @@ class UpdateWorker(QThread):
 class LauncherWindow(QWidget):
     def __init__(self):
         super().__init__()
+
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
         self._setup_ui()
         self.worker = UpdateWorker()
         self._connect_signals()
 
-        # Start the update process shortly after the window appears
         QTimer.singleShot(500, self.worker.start)
 
     def _setup_ui(self):
@@ -116,7 +120,6 @@ class LauncherWindow(QWidget):
         self.setFixedSize(400, 150)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
 
-        # Center the window
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
 
@@ -130,14 +133,12 @@ class LauncherWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Title Label
         title_font = QFont("Segoe UI", 14, QFont.Weight.Bold)
         self.title_label = QLabel("AvA Launcher")
         self.title_label.setFont(title_font)
         self.title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.title_label)
 
-        # Status Label
         status_font = QFont("Segoe UI", 10)
         self.status_label = QLabel("Initializing...")
         self.status_label.setFont(status_font)
@@ -145,7 +146,6 @@ class LauncherWindow(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        # Progress Bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(8)
         self.progress_bar.setTextVisible(False)
@@ -173,8 +173,7 @@ class LauncherWindow(QWidget):
             self.launch_app()
         else:
             self.status_label.setText(f"Failed to start: {message}")
-            # In a real app, you might show a close button here or auto-close after a delay
-            QTimer.singleShot(5000, self.close)  # Close after 5 seconds on error
+            QTimer.singleShot(5000, self.close)
 
     def launch_app(self):
         if not MAIN_APP_SCRIPT.exists():
@@ -183,12 +182,9 @@ class LauncherWindow(QWidget):
             return
 
         try:
-            # Use subprocess.Popen to launch the main application detached from the launcher
-            # We need to find the python executable to ensure it runs correctly
             python_exe = sys.executable
-            subprocess.Popen([python_exe, str(MAIN_APP_SCRIPT)], cwd=APP_DIR)
+            subprocess.Popen([python_exe, str(MAIN_APP_SCRIPT)], cwd=str(APP_DIR.resolve()))
 
-            # Close the launcher
             QTimer.singleShot(100, self.close)
 
         except Exception as e:
@@ -197,7 +193,6 @@ class LauncherWindow(QWidget):
 
 
 if __name__ == "__main__":
-    # IMPORTANT: You must update the VERSION_URL at the top of this file!
     if "your-username" in VERSION_URL:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print("!!! CRITICAL: Please update the VERSION_URL in launcher.py !!!")
@@ -205,6 +200,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     app = QApplication(sys.argv)
+
+    if ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(ICON_PATH)))
+
     window = LauncherWindow()
     window.show()
     sys.exit(app.exec())

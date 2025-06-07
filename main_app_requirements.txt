@@ -1,0 +1,13 @@
+# main_app_requirements.txt
+
+PySide6
+qasync
+python-dotenv
+pydantic
+openai
+anthropic
+google-generativeai
+httpx
+chromadb
+sentence-transformers
+# We'll add any others if PyInstaller complains, but this is a good start.

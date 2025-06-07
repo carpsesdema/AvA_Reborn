@@ -14,3 +14,5 @@ __pycache__/
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/vcs.xml
 /workspace/
+!/launcher.spec
+!/main_app.spec
