@@ -36,6 +36,7 @@ class AvAMainWindow(QMainWindow):
     def __init__(self, ava_app=None):
         super().__init__()
         self.ava_app = ava_app
+        self.last_user_prompt = "" # Store the last prompt
 
         # Setup window
         self.setWindowTitle("AvA - Fast Professional AI Development")
@@ -132,6 +133,7 @@ class AvAMainWindow(QMainWindow):
 
     def handle_user_message(self, message: str):
         """Enhanced message handling with streaming workflow integration"""
+        self.last_user_prompt = message # Store the prompt
 
         # The chat_interface now handles adding the user message bubble itself.
         # We just need to decide what to do with the message.
@@ -209,6 +211,15 @@ class AvAMainWindow(QMainWindow):
                 self.ava_app.load_session()
             return
 
+        # NEW: Handle Add Project Files action
+        if action == "add_project_files":
+            if hasattr(self.ava_app, 'add_files_to_project_rag'): # Assuming a method like this exists in AvAApplication
+                self.ava_app.add_files_to_project_rag()
+            else:
+                 self.chat_interface.add_assistant_response("⚠️ 'Add Files' functionality not yet implemented.")
+            return
+
+
         action_messages = {
             "new_session": "🔄 Starting new session...",
             "view_log": "📊 Opening LLM log viewer...",
@@ -217,8 +228,12 @@ class AvAMainWindow(QMainWindow):
             "check_updates": "🔄 Checking for updates..."
         }
 
-        message = action_messages.get(action, f"Action '{action}' not implemented yet.")
-        self.chat_interface.add_assistant_response(message)
+        # Delegate the action to the main application if it exists
+        if hasattr(self.ava_app, '_handle_sidebar_action'):
+             self.ava_app._handle_sidebar_action(action)
+        else:
+            message = action_messages.get(action, f"Action '{action}' not implemented yet.")
+            self.chat_interface.add_assistant_response(message)
 
     # Status update methods
     @Slot(str, str)
@@ -242,6 +257,7 @@ class AvAMainWindow(QMainWindow):
         """Handle workflow completion"""
         if result.get("success", False):
             project_name = result.get("project_name", "Unknown")
+            project_dir = result.get("project_dir")
             num_files = result.get("num_files", 0)
             strategy = result.get("strategy", "Standard")
             elapsed_time = result.get("elapsed_time", 0)
@@ -252,13 +268,18 @@ class AvAMainWindow(QMainWindow):
 📁 **Files Generated:** {num_files}
 ⚡ **Strategy:** {strategy}
 ⏱️ **Time:** {elapsed_time:.1f}s
-📂 **Location:** {result.get('project_dir', 'Generated')}
+📂 **Location:** {project_dir}
 
 Your professional code is ready! Check the Code Viewer to explore the generated files."""
 
             self.chat_interface.add_assistant_response(message)
             self.chat_interface.update_specialists_status("AI Specialists: Complete", "success")
             self.chat_interface.update_performance_status(f"Performance: {elapsed_time:.1f}s", "success")
+
+            # --- THE DIRECT FIX ---
+            if "run" in self.last_user_prompt.lower() and self.ava_app and project_dir:
+                self.chat_interface.add_workflow_status("🚀 Auto-running project as requested...")
+                QTimer.singleShot(500, lambda: self.ava_app.run_project_in_terminal())
 
         else:
             error_msg = result.get("error", "Unknown error.")

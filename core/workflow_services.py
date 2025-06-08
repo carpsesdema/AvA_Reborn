@@ -11,7 +11,7 @@ from core.project_state_manager import ProjectStateManager  # NEW IMPORT
 
 # --- Prompt Templates ---
 
-# V4 ARCHITECT PROMPT - This is still perfect for generating the master spec.
+# V4 ARCHITECT PROMPT - MODIFIED TO INCLUDE REQUIREMENTS
 ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the ARCHITECT AI. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.
 
@@ -20,7 +20,9 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     RELEVANT CONTEXT FROM KNOWLEDGE BASE:
     {rag_context}
 
-    Your output MUST be a single, valid JSON object. This object will contain the project name, a description, a dependency-sorted build order, and a detailed `technical_specs` dictionary for every file.
+    Your output MUST be a single, valid JSON object. This object will contain the project name, a description, a list of required libraries, a dependency-sorted build order, and a detailed `technical_specs` dictionary for every file.
+
+    **NEW REQUIREMENT**: You MUST identify any necessary third-party Python libraries (e.g., "flask", "requests", "pygame", "ursina") and list them in a `requirements` array.
 
     For each file in `technical_specs`, you must define its `purpose`, its `dependencies`, and its `api_contract`.
     The `api_contract` is the most critical part. It must define:
@@ -34,6 +36,7 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     {{
       "project_name": "a-descriptive-snake-case-name",
       "project_description": "A one-sentence description of the application.",
+      "requirements": ["ursina==0.7.2"],
       "dependency_order": ["config.py", "player.py", "main.py"],
       "technical_specs": {{
         "config.py": {{
@@ -66,8 +69,9 @@ ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
     This JSON object must contain:
     1.  `project_name`: The name of the project.
     2.  `project_description`: A one-sentence summary of what the project does.
-    3.  `dependency_order`: A topologically sorted list of filenames for the correct build order.
-    4.  `technical_specs`: A dictionary where each key is a filename. The value for each filename must contain:
+    3.  `requirements`: A list of third-party libraries used in the project.
+    4.  `dependency_order`: A topologically sorted list of filenames for the correct build order.
+    5.  `technical_specs`: A dictionary where each key is a filename. The value for each filename must contain:
         - `purpose`: A brief description of the file's role.
         - `dependencies`: A list of other project files it depends on.
         - `api_contract`: An object defining the public API of the file (classes, methods, variables).
@@ -76,6 +80,7 @@ ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
     {{
       "project_name": "existing-project",
       "project_description": "A Python application for managing user data.",
+      "requirements": ["flask", "sqlalchemy"],
       "dependency_order": ["config.py", "database.py", "models.py", "main.py"],
       "technical_specs": {{
         "config.py": {{
@@ -242,6 +247,7 @@ class ArchitectService(BaseAIService):
         # This handles datetime objects and other non-serializable types
         serializable_context = json.loads(json.dumps(project_context, default=str))
 
+        # Update the analysis prompt to also look for requirements
         analysis_prompt = ARCHITECT_ANALYSIS_PROMPT_TEMPLATE.format(
             project_context_json=json.dumps(serializable_context, indent=2)
         )

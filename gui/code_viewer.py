@@ -1,16 +1,21 @@
 # windows/code_viewer.py - Professional Code Viewer/IDE Window
 
 import os
+import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTreeWidget, QTreeWidgetItem, QTextEdit, QPushButton, QLabel,
     QFileDialog, QMessageBox, QTabWidget, QFrame, QToolBar, QMenuBar,
-    QMenu, QApplication, QHeaderView
+    QMenu, QApplication, QHeaderView, QTabBar
 )
 from PySide6.QtCore import Qt, Signal, Slot, QFileSystemWatcher
 from PySide6.QtGui import QFont, QAction, QIcon, QSyntaxHighlighter, QTextCharFormat, QColor
 import re
+
+from gui.components import Colors
+# NEW: Import our interactive terminal
+from gui.interactive_terminal import InteractiveTerminal
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
@@ -149,7 +154,6 @@ class FileTree(QTreeWidget):
                 border: 1px solid #3e3e42;
                 border-radius: 4px;
                 outline: none;
-                selection-background-color: #0078d4;
             }
             QTreeWidget::item {
                 padding: 4px;
@@ -182,6 +186,8 @@ class FileTree(QTreeWidget):
             self.project_root.mkdir(parents=True, exist_ok=True)
 
         # Watch for changes
+        if self.watcher.directories():
+            self.watcher.removePaths(self.watcher.directories())
         self.watcher.addPath(str(self.project_root))
 
         # Build tree
@@ -198,8 +204,8 @@ class FileTree(QTreeWidget):
             items = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
 
             for item_path in items:
-                if item_path.name.startswith('.'):
-                    continue  # Skip hidden files
+                if item_path.name.startswith('.') or item_path.name == '__pycache__':
+                    continue  # Skip hidden files/dirs
 
                 item = QTreeWidgetItem(parent_item)
                 item.setText(0, item_path.name)
@@ -214,13 +220,15 @@ class FileTree(QTreeWidget):
                 else:
                     # Set file icon based on extension
                     if item_path.suffix == '.py':
-                        item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
+                        item.setIcon(0, QIcon.fromTheme("python", self.style().standardIcon(
+                            self.style().StandardPixmap.SP_FileIcon)))  # Placeholder
                     else:
                         item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
 
         except PermissionError:
             pass  # Skip directories we can't access
 
+    @Slot()
     def refresh_tree(self):
         """Refresh the entire tree"""
         if self.project_root:
@@ -244,7 +252,6 @@ class FileTree(QTreeWidget):
 
         menu = QMenu(self)
 
-        # Add actions
         refresh_action = QAction("Refresh", self)
         refresh_action.triggered.connect(self.refresh_tree)
         menu.addAction(refresh_action)
@@ -269,11 +276,11 @@ class CodeViewerWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AvA - Code Viewer & Editor")
+        self.setWindowTitle("AvA - Code Viewer & IDE")
         self.setGeometry(200, 100, 1200, 800)
 
         # State
-        self.open_files = {}  # file_path -> CodeEditor
+        self.open_files = {}  # file_path -> CodeEditor widget
         self.current_project = None
 
         self._init_ui()
@@ -285,155 +292,42 @@ class CodeViewerWindow(QMainWindow):
         """Initialize the UI components"""
         central_widget = QWidget()
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # Create splitter for resizable panels
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left panel - File tree
         left_panel = QFrame()
-        left_panel.setFrameStyle(QFrame.Shape.Box)
-        left_panel.setStyleSheet("""
-            QFrame {
-                background: #252526;
-                border: 1px solid #3e3e42;
-                border-radius: 6px;
-            }
-        """)
-        left_panel.setMinimumWidth(250)
-        left_panel.setMaximumWidth(400)
-
-        left_layout = QVBoxLayout()
+        left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)
-
-        # File tree header
-        tree_header = QLabel("📁 Project Explorer")
-        tree_header.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        tree_header.setStyleSheet("color: #0078d4; margin-bottom: 8px;")
-
-        # File tree
         self.file_tree = FileTree()
-
-        # Tree controls
-        tree_controls = QHBoxLayout()
-        self.refresh_btn = QPushButton("🔄")
-        self.refresh_btn.setToolTip("Refresh file tree")
-        self.refresh_btn.setMaximumWidth(40)
-        self.refresh_btn.clicked.connect(self.file_tree.refresh_tree)
-
-        self.open_project_btn = QPushButton("📂 Open Project")
-        self.open_project_btn.clicked.connect(self._open_project_dialog)
-
-        tree_controls.addWidget(self.refresh_btn)
-        tree_controls.addWidget(self.open_project_btn)
-
-        left_layout.addWidget(tree_header)
         left_layout.addWidget(self.file_tree)
-        left_layout.addLayout(tree_controls)
-        left_panel.setLayout(left_layout)
 
-        # Right panel - Code editor with tabs
+        # Right panel - Code editor and terminal in tabs
         right_panel = QFrame()
-        right_panel.setFrameStyle(QFrame.Shape.Box)
-        right_panel.setStyleSheet("""
-            QFrame {
-                background: #1e1e1e;
-                border: 1px solid #3e3e42;
-                border-radius: 6px;
-            }
-        """)
-
-        right_layout = QVBoxLayout()
+        right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(8, 8, 8, 8)
+        right_layout.setSpacing(8)
 
-        # Editor header
-        editor_header = QHBoxLayout()
-        editor_title = QLabel("📝 Code Editor")
-        editor_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        editor_title.setStyleSheet("color: #0078d4;")
+        # Tab widget for multiple editors and the terminal
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setTabsClosable(True)
+        self.main_tabs.tabCloseRequested.connect(self._close_tab)
 
-        # Save button
-        self.save_btn = QPushButton("💾 Save")
-        self.save_btn.clicked.connect(self._save_current_file)
-        self.save_btn.setStyleSheet("""
-            QPushButton {
-                background: #0078d4;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #106ebe;
-            }
-        """)
+        # Add the Interactive Terminal as the first, permanent tab
+        self.interactive_terminal = InteractiveTerminal()
+        self.main_tabs.addTab(self.interactive_terminal, "📟 Terminal")
+        # Make the terminal tab not closable
+        self.main_tabs.tabBar().setTabButton(0, QTabBar.ButtonPosition.RightSide, None)
 
-        editor_header.addWidget(editor_title)
-        editor_header.addStretch()
-        editor_header.addWidget(self.save_btn)
-
-        # Tab widget for multiple files
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self._close_tab)
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #3e3e42;
-                border-radius: 4px;
-                background: #1e1e1e;
-            }
-            QTabBar::tab {
-                background: #2d2d30;
-                color: #cccccc;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-            }
-            QTabBar::tab:selected {
-                background: #0078d4;
-                color: white;
-            }
-            QTabBar::tab:hover {
-                background: #3e3e42;
-            }
-        """)
-
-        # Welcome message
-        self.welcome_widget = QWidget()
-        welcome_layout = QVBoxLayout()
-        welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        welcome_label = QLabel("Welcome to AvA Code Viewer")
-        welcome_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        welcome_label.setStyleSheet("color: #0078d4; margin: 20px;")
-        welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        instructions = QLabel("""
-        • Open a project folder to start viewing files
-        • Generated files will appear here automatically
-        • Click files in the tree to open them
-        • Multiple files can be open in tabs
-        """)
-        instructions.setStyleSheet("color: #cccccc; margin: 20px; line-height: 1.6;")
-        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        welcome_layout.addWidget(welcome_label)
-        welcome_layout.addWidget(instructions)
-        self.welcome_widget.setLayout(welcome_layout)
-
-        self.tab_widget.addTab(self.welcome_widget, "Welcome")
-
-        right_layout.addLayout(editor_header)
-        right_layout.addWidget(self.tab_widget)
-        right_panel.setLayout(right_layout)
+        right_layout.addWidget(self.main_tabs)
 
         # Add panels to splitter
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([300, 900])  # Give more space to editor
+        splitter.setSizes([300, 900])  # Adjust initial sizes
 
         main_layout.addWidget(splitter)
         central_widget.setLayout(main_layout)
@@ -441,181 +335,142 @@ class CodeViewerWindow(QMainWindow):
 
     def _apply_theme(self):
         """Apply dark theme to the window"""
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e1e;
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{
+                background-color: {Colors.SECONDARY_BG};
                 color: #cccccc;
-            }
-            QPushButton {
-                background: #2d2d30;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                color: #cccccc;
-                padding: 6px 12px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background: #3e3e42;
-                border-color: #0078d4;
-            }
+            }}
+            QSplitter::handle {{
+                background-color: {Colors.BORDER_DEFAULT};
+            }}
+            QTabWidget::pane {{
+                border-top: 2px solid {Colors.BORDER_ACCENT};
+            }}
+            QTabBar::tab {{
+                background: {Colors.ELEVATED_BG};
+                color: {Colors.TEXT_SECONDARY};
+                padding: 8px 16px;
+                margin-right: 1px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                border: 1px solid {Colors.BORDER_DEFAULT};
+                border-bottom: none;
+            }}
+            QTabBar::tab:selected {{
+                background: {Colors.PRIMARY_BG};
+                color: {Colors.TEXT_PRIMARY};
+                border-color: {Colors.BORDER_ACCENT};
+                border-bottom: 2px solid {Colors.PRIMARY_BG}; /* Overlap pane border */
+            }}
+            QTabBar::tab:hover {{
+                background: {Colors.HOVER_BG};
+            }}
+            QTabBar::close-button {{
+                image: url(none); /* Hide default icon, or use custom */
+                subcontrol-position: right;
+            }}
+            QTabBar::close-button:hover {{
+                background: {Colors.HOVER_BG};
+            }}
         """)
 
     def _create_menus(self):
-        """Create menu bar"""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("File")
-
-        open_action = QAction("Open Project...", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._open_project_dialog)
-        file_menu.addAction(open_action)
-
-        save_action = QAction("Save", self)
-        save_action.setShortcut("Ctrl+S")
-        save_action.triggered.connect(self._save_current_file)
-        file_menu.addAction(save_action)
-
-        file_menu.addSeparator()
-
-        close_action = QAction("Close Tab", self)
-        close_action.setShortcut("Ctrl+W")
-        close_action.triggered.connect(lambda: self._close_tab(self.tab_widget.currentIndex()))
-        file_menu.addAction(close_action)
+        pass  # For now, keeping it simple. Can add later.
 
     def _connect_signals(self):
         """Connect component signals"""
         self.file_tree.file_selected.connect(self._open_file)
         self.file_tree.folder_selected.connect(self._focus_folder)
 
+    @Slot(str)
     def load_project(self, project_path: str):
         """Load a project directory - main entry point for workflow integration"""
         self.current_project = project_path
         self.file_tree.load_project(project_path)
+        self.interactive_terminal.set_working_directory(project_path)
+        self.setWindowTitle(f"AvA - IDE [{Path(project_path).name}]")
 
-        # Remove welcome tab if it exists
-        if self.tab_widget.count() > 0 and self.tab_widget.tabText(0) == "Welcome":
-            self.tab_widget.removeTab(0)
-
-        self.setWindowTitle(f"AvA - Code Viewer [{Path(project_path).name}]")
-
-    def _open_project_dialog(self):
-        """Open project selection dialog"""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Project Folder",
-            str(Path.home()),
-            QFileDialog.Option.ShowDirsOnly
-        )
-
-        if folder:
-            self.load_project(folder)
-
+    @Slot(str)
     def _open_file(self, file_path: str):
         """Open file in a new tab or switch to existing tab"""
-        file_path = str(Path(file_path))
+        file_path_obj = Path(file_path)
 
         # Check if file is already open
-        for i in range(self.tab_widget.count()):
-            widget = self.tab_widget.widget(i)
-            if isinstance(widget, CodeEditor) and widget.file_path == file_path:
-                self.tab_widget.setCurrentIndex(i)
-                return
+        if file_path in self.open_files:
+            editor_widget = self.open_files[file_path]
+            self.main_tabs.setCurrentWidget(editor_widget)
+            return
 
-        # Create new editor tab
+        # Create new editor tab for the file
         editor = CodeEditor()
-        editor.load_file(file_path)
+        editor.load_file(str(file_path_obj))
         editor.file_modified.connect(self._on_file_modified)
 
-        # Add tab with file name
-        file_name = Path(file_path).name
-        tab_index = self.tab_widget.addTab(editor, file_name)
-        self.tab_widget.setCurrentIndex(tab_index)
+        tab_index = self.main_tabs.addTab(editor, file_path_obj.name)
+        self.main_tabs.setCurrentIndex(tab_index)
 
-        # Store reference
         self.open_files[file_path] = editor
 
     def _focus_folder(self, folder_path: str):
-        """Handle folder selection"""
-        # Could expand folder or show folder contents
         pass
 
+    @Slot(int)
     def _close_tab(self, index: int):
-        """Close a tab"""
-        if index < 0 or index >= self.tab_widget.count():
+        """Close an editor tab"""
+        # Do not close the terminal tab (index 0)
+        if index <= 0:
             return
 
-        widget = self.tab_widget.widget(index)
+        widget = self.main_tabs.widget(index)
         if isinstance(widget, CodeEditor):
-            # Check if file is modified
+            # Check for unsaved changes before closing
             if widget.is_modified:
                 reply = QMessageBox.question(
-                    self,
-                    "Unsaved Changes",
+                    self, "Unsaved Changes",
                     f"File '{Path(widget.file_path).name}' has unsaved changes. Save before closing?",
-                    QMessageBox.StandardButton.Save |
-                    QMessageBox.StandardButton.Discard |
-                    QMessageBox.StandardButton.Cancel
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
                 )
-
                 if reply == QMessageBox.StandardButton.Save:
                     widget.save_file()
                 elif reply == QMessageBox.StandardButton.Cancel:
                     return
 
-            # Remove from open files
+            # Remove from open files dict and close tab
             if widget.file_path in self.open_files:
                 del self.open_files[widget.file_path]
 
-        self.tab_widget.removeTab(index)
+        self.main_tabs.removeTab(index)
 
     def _save_current_file(self):
-        """Save the currently active file"""
-        current_widget = self.tab_widget.currentWidget()
+        """Save the currently active editor file"""
+        current_widget = self.main_tabs.currentWidget()
         if isinstance(current_widget, CodeEditor):
             if current_widget.save_file():
-                # Update tab title to remove modified indicator
-                current_index = self.tab_widget.currentIndex()
+                current_index = self.main_tabs.currentIndex()
                 file_name = Path(current_widget.file_path).name
-                self.tab_widget.setTabText(current_index, file_name)
+                self.main_tabs.setTabText(current_index, file_name)
 
     def _on_file_modified(self, file_path: str):
-        """Handle file modification"""
-        # Update tab title to show modified state
-        for i in range(self.tab_widget.count()):
-            widget = self.tab_widget.widget(i)
-            if isinstance(widget, CodeEditor) and widget.file_path == file_path:
-                file_name = Path(file_path).name
-                self.tab_widget.setTabText(i, f"{file_name} *")
-                break
-
-        # Emit signal for external listeners
+        """Handle file modification by updating tab title"""
         if file_path in self.open_files:
-            content = self.open_files[file_path].toPlainText()
-            self.file_changed.emit(file_path, content)
+            editor_widget = self.open_files[file_path]
+            for i in range(self.main_tabs.count()):
+                if self.main_tabs.widget(i) == editor_widget:
+                    file_name = Path(file_path).name
+                    self.main_tabs.setTabText(i, f"{file_name} *")
+                    break
 
+        content = editor_widget.toPlainText()
+        self.file_changed.emit(file_path, content)
+
+    @Slot()
     def refresh_project(self):
-        """Refresh the project view - called when new files are generated"""
+        """Refresh the project view"""
         if self.current_project:
             self.file_tree.refresh_tree()
 
+    @Slot(str)
     def auto_open_file(self, file_path: str):
-        """Automatically open a file (called by workflow when files are generated)"""
+        """Automatically open a file, called by the workflow"""
         if Path(file_path).exists():
             self._open_file(file_path)
-            # Switch to the new file
-            for i in range(self.tab_widget.count()):
-                widget = self.tab_widget.widget(i)
-                if isinstance(widget, CodeEditor) and widget.file_path == file_path:
-                    self.tab_widget.setCurrentIndex(i)
-                    break
-
-    def get_open_files(self) -> list:
-        """Get list of currently open file paths"""
-        return list(self.open_files.keys())
-
-    def close_all_files(self):
-        """Close all open files"""
-        while self.tab_widget.count() > 0:
-            self._close_tab(0)

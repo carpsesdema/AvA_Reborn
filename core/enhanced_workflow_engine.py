@@ -1,27 +1,22 @@
-# enhanced_workflow_engine.py - V5 "Rolling Context" Engine
+# enhanced_workflow_engine.py - V6 "Surgical Modification" Engine
 
 import asyncio
 import json
 import logging
 import traceback
+import shutil
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 
 from PySide6.QtCore import QObject, Signal
 
-# Import our V5 services
 from core.workflow_services import ArchitectService, CoderService, ReviewerService
 from core.project_state_manager import ProjectStateManager
 
 
 class EnhancedWorkflowEngine(QObject):
-    """
-    🚀 V5 Workflow Engine: Implements the "Rolling Context" system.
-    Builds files sequentially, feeding the specs and source code of completed
-    files into the context for the next file, ensuring perfect integration.
-    Also handles the new "Project Awareness" analysis workflow.
-    """
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
     workflow_progress = Signal(str, str)
@@ -29,10 +24,8 @@ class EnhancedWorkflowEngine(QObject):
     project_loaded = Signal(str)
     detailed_log_event = Signal(str, str, str, str)
     task_progress = Signal(int, int)
-
-    # --- NEW: Signals for Analysis Workflow ---
-    analysis_started = Signal(str)  # project_path
-    analysis_completed = Signal(str, dict)  # project_path, tech_spec
+    analysis_started = Signal(str)
+    analysis_completed = Signal(str, dict)
 
     def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
@@ -53,7 +46,7 @@ class EnhancedWorkflowEngine(QObject):
         self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
 
         self._connect_terminal_signals()
-        self.logger.info("✅ V5 'Rolling Context' Workflow Engine initialized.")
+        self.logger.info("✅ V6 'Surgical Modification' Workflow Engine initialized.")
 
     def _connect_terminal_signals(self):
         if not self.terminal_window: return
@@ -65,147 +58,132 @@ class EnhancedWorkflowEngine(QObject):
             self.logger.error(f"❌ Failed to connect terminal signals: {e}")
 
     async def execute_analysis_workflow(self, project_path_str: str):
-        """NEW: Executes the analysis workflow for an existing project."""
         self.logger.info(f"🚀 Starting Analysis workflow for: {project_path_str}...")
         self.analysis_started.emit(project_path_str)
         self.detailed_log_event.emit("WorkflowEngine", "stage_start",
                                      f"🚀 Initializing Analysis for '{Path(project_path_str).name}'...", "0")
-
         try:
-            # Step 1: Initialize Project State Manager for the given path
             self.project_state_manager = ProjectStateManager(Path(project_path_str))
             self.detailed_log_event.emit("WorkflowEngine", "info", "Project State Manager initialized. Scanned files.",
                                          "1")
-
-            # Step 2: Use ArchitectService to analyze the project and create the spec
             tech_spec = await self.architect_service.analyze_and_create_spec_from_project(self.project_state_manager)
             if not tech_spec:
-                raise Exception("Analysis failed. Architect could not produce a technical specification from the project files.")
-
-            # Step 3: Store the spec for future modification workflows
+                raise Exception(
+                    "Analysis failed. Architect could not produce a technical specification from the project files.")
             self.current_tech_spec = tech_spec
             self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
                                          "0")
-
-            # Emit completion signal
             self.analysis_completed.emit(project_path_str, self.current_tech_spec)
-
-            # Signal to the main app that the project is now "loaded" and understood
             self.project_loaded.emit(project_path_str)
-
         except Exception as e:
             self.logger.error(f"❌ Analysis Workflow failed: {e}", exc_info=True)
             self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Analysis Error: {str(e)}", "0")
-            self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
-            # We might want a dedicated error signal for analysis failures
-            self.project_loaded.emit(project_path_str) # Still load it, but maybe with a warning
+            self.project_loaded.emit(project_path_str)
 
+    def _get_files_to_modify(self, user_prompt: str, all_files: List[str]) -> List[str]:
+        """Identifies which files should be modified based on the user's prompt."""
+        files_to_modify = []
+        # A simple but effective heuristic: if a filename is mentioned, it's a target.
+        for filename in all_files:
+            if re.search(r'\b' + re.escape(filename) + r'\b', user_prompt, re.IGNORECASE):
+                files_to_modify.append(filename)
+
+        # If no files are explicitly mentioned, we might need a more advanced AI step.
+        # For now, if none are mentioned, we'll assume we modify everything (the old behavior).
+        if not files_to_modify:
+            self.logger.warning("No specific files mentioned in modification prompt. Will attempt to regenerate all.")
+            return all_files
+
+        self.logger.info(f"Identified files to modify from prompt: {files_to_modify}")
+        return files_to_modify
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        self.logger.info(f"🚀 Starting V5 workflow: {user_prompt[:100]}...")
+        self.logger.info(f"🚀 Starting V6 workflow: {user_prompt[:100]}...")
         workflow_start_time = datetime.now()
         self.workflow_started.emit(user_prompt)
-        self.detailed_log_event.emit("WorkflowEngine", "stage_start", "🚀 Initializing V5 'Rolling Context' workflow...",
-                                     "0")
-
         try:
-            # --- PHASE 1: ARCHITECTURE ---
-            self.workflow_progress.emit("planning", "Phase 1: Architecting project technical specification...")
-            self._update_task_progress(1, 4)
-            tech_spec = await self.architect_service.create_tech_spec(user_prompt, conversation_context)
+            is_modification = self.project_state_manager is not None and self.current_tech_spec is not None
+
+            # --- PHASE 1: GET TECH SPEC ---
+            tech_spec = self.current_tech_spec if is_modification else await self.architect_service.create_tech_spec(
+                user_prompt, conversation_context)
             if not tech_spec or 'technical_specs' not in tech_spec:
-                raise Exception("Architecture failed. Could not produce a valid Technical Specification Sheet.")
+                raise Exception("Architecture phase failed. No valid technical specification available.")
 
-            project_name = tech_spec.get("project_name", "ai_project")
-            project_dir = Path("./workspace") / f"{project_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # --- PHASE 2: SETUP PROJECT DIRECTORY ---
+            project_name = tech_spec.get("project_name", "ai-project").replace(" ", "-")
+            new_project_dir_name = f"{project_name}-mod-{datetime.now().strftime('%Y%m%d_%H%M%S')}" if is_modification else f"{project_name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            project_dir = Path("./workspace") / new_project_dir_name
             project_dir.mkdir(parents=True, exist_ok=True)
-            self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project directory created: {project_dir}", "1")
 
-            # --- PHASE 2: SEQUENTIAL, CONTEXT-AWARE GENERATION ---
+            # --- NEW: WRITE REQUIREMENTS.TXT ---
+            requirements = tech_spec.get("requirements", [])
+            if requirements:
+                req_content = "\n".join(requirements)
+                self._write_file(project_dir, "requirements.txt", req_content)
+                self.detailed_log_event.emit("WorkflowEngine", "file_op", "Generated requirements.txt", "1")
+
+            # --- PHASE 3: FILE HANDLING (MODIFICATION-AWARE) ---
             build_order = tech_spec.get("dependency_order", [])
-            if not build_order:
-                raise Exception("Architecture failed. The dependency order is empty.")
+            files_in_spec = list(tech_spec.get("technical_specs", {}).keys())
+            files_to_actively_modify = self._get_files_to_modify(user_prompt,
+                                                                 files_in_spec) if is_modification else files_in_spec
 
-            self.workflow_progress.emit("generation", f"Phase 2: Building {len(build_order)} files sequentially...")
-            self._update_task_progress(2, 4)
-            self.detailed_log_event.emit("WorkflowEngine", "info", f"Determined build order: {', '.join(build_order)}",
-                                         "1")
-
-            knowledge_packets: Dict[str, Dict] = {}
+            knowledge_packets = {}
             results = {"files_created": [], "project_dir": str(project_dir), "failed_files": []}
 
-            for i, filename in enumerate(build_order):
-                self.detailed_log_event.emit("WorkflowEngine", "stage_start",
-                                             f"Processing file {i + 1}/{len(build_order)}: {filename}", "1")
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         f"Files targeted for modification: {files_to_actively_modify}", "1")
 
+            for filename in build_order:
                 file_spec = tech_spec["technical_specs"].get(filename)
-                if not file_spec:
-                    self.logger.error(f"Spec for {filename} not found. Skipping.")
-                    results["failed_files"].append(filename)
-                    continue
+                if not file_spec: continue
 
-                # Assemble the "Knowledge Packet" for the dependencies
-                dependency_files = file_spec.get("dependencies", [])
-                dependency_context = self._build_dependency_context(dependency_files, knowledge_packets)
+                # Determine if we should generate this file or copy it
+                if filename in files_to_actively_modify:
+                    # GENERATE the modified file
+                    self.detailed_log_event.emit("WorkflowEngine", "stage_start",
+                                                 f"🧬 Generating modified file: {filename}", "1")
+                    dependency_context = self._build_dependency_context(file_spec.get("dependencies", []),
+                                                                        knowledge_packets)
+                    project_context = {"description": tech_spec.get("project_description", "")}
+                    generated_code = await self.coder_service.generate_file_from_spec(filename, file_spec,
+                                                                                      project_context,
+                                                                                      dependency_context)
 
-                project_context = {"description": tech_spec.get("project_description", "")}
+                    if "# FALLBACK" in generated_code:
+                        results["failed_files"].append(filename);
+                        continue
 
-                # Generate the full file code
-                generated_code = await self.coder_service.generate_file_from_spec(filename, file_spec, project_context,
-                                                                                  dependency_context)
+                    self._write_file(project_dir, filename, generated_code)
+                    knowledge_packets[filename] = {"spec": file_spec, "source_code": generated_code}
+                elif is_modification:
+                    # COPY the original, unchanged file
+                    original_file_path = self.project_state_manager.project_root / filename
+                    if original_file_path.exists():
+                        destination_path = project_dir / filename
+                        shutil.copy2(original_file_path, destination_path)
+                        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Copied unchanged file: {filename}",
+                                                     "1")
+                        knowledge_packets[filename] = {"spec": file_spec, "source_code": original_file_path.read_text()}
+                    else:
+                        self.logger.warning(f"Wanted to copy {filename} but it doesn't exist in the source project.")
+                # (The case for a new project is handled by the initial `if` block)
 
-                if "# FALLBACK" in generated_code:
-                    self.detailed_log_event.emit("WorkflowEngine", "error",
-                                                 f"Coder service returned a fallback for {filename}. Halting file processing.",
-                                                 "2")
-                    results["failed_files"].append(filename)
-                    continue
-
-                # Final quality check
-                review_data, review_passed = await self.reviewer_service.review_code(filename, generated_code,
-                                                                                     project_context['description'])
-
-                if not review_passed:
-                    self.detailed_log_event.emit("Reviewer", "warning",
-                                                 f"⚠️ Final review for '{filename}' failed, but proceeding with generated code.",
-                                                 "2")
-
-                self._write_file(project_dir, filename, generated_code)
-
-                # Create and store the knowledge packet for this completed file
-                knowledge_packets[filename] = {
-                    "spec": file_spec,
-                    "source_code": generated_code
-                }
                 results["files_created"].append(filename)
-                self.detailed_log_event.emit("WorkflowEngine", "success", f"✅ Completed processing for {filename}", "1")
 
-            # --- PHASE 3: FINALIZATION ---
-            self._update_task_progress(3, 4)
-            self.workflow_progress.emit("finalization", "Finalizing project...")
-            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
-            final_result = await self._finalize_project(results, elapsed_time)
-            self._update_task_progress(4, 4)
-
-            self.workflow_progress.emit("complete", "AI workflow completed successfully")
-            self.detailed_log_event.emit("WorkflowEngine", "success", "✅ AI workflow completed successfully!", "0")
+            # --- PHASE 4: FINALIZATION ---
+            final_result = await self._finalize_project(results, (datetime.now() - workflow_start_time).total_seconds())
             self.workflow_completed.emit(final_result)
             return final_result
-
         except Exception as e:
             self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
-            elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
-            self.workflow_progress.emit("error", f"AI workflow failed: {str(e)}")
-            self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Workflow Error: {str(e)}", "0")
-            self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
-            self.workflow_completed.emit({"success": False, "error": str(e), "elapsed_time": elapsed_time})
+            self.workflow_completed.emit({"success": False, "error": str(e),
+                                          "elapsed_time": (datetime.now() - workflow_start_time).total_seconds()})
             raise
 
     def _build_dependency_context(self, dependency_files: List[str], knowledge_packets: Dict[str, Dict]) -> str:
-        """Constructs a context string from the knowledge packets of completed dependencies."""
-        if not dependency_files:
-            return "This file has no dependencies."
-
+        if not dependency_files: return "This file has no dependencies."
         context_str = ""
         for dep_file in dependency_files:
             if dep_file in knowledge_packets:
@@ -216,35 +194,22 @@ class EnhancedWorkflowEngine(QObject):
             else:
                 self.logger.warning(
                     f"Dependency '{dep_file}' was not found in knowledge packets. Context will be incomplete.")
-                context_str += f"\n\n--- NOTE: Context for '{dep_file}' was not available. ---\n"
-
         return context_str
 
     def _write_file(self, project_dir: Path, filename: str, content: str):
         file_path_obj = project_dir / filename
         file_path_obj.parent.mkdir(parents=True, exist_ok=True)
         file_path_obj.write_text(content, encoding='utf-8')
-        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written: {file_path_obj}", "2")
+        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"File written/overwritten: {file_path_obj}", "2")
         self.file_generated.emit(str(file_path_obj))
-
-    def _update_task_progress(self, completed: int, total: int):
-        self.task_progress.emit(completed, total)
 
     async def _finalize_project(self, results: Dict[str, Any], elapsed_time: float) -> Dict[str, Any]:
         project_dir = results.get("project_dir")
         if project_dir:
             self.project_loaded.emit(project_dir)
             self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project loaded into UI: {project_dir}", "1")
-
-        final_result = {
-            "success": len(results.get("failed_files", [])) == 0,
-            "project_name": Path(project_dir).name if project_dir else "Unknown",
-            "project_dir": project_dir,
-            "num_files": len(results.get("files_created", [])),
-            "files_created": results.get("files_created", []),
-            "failed_files": results.get("failed_files", []),
-            "elapsed_time": elapsed_time,
-            "strategy": "V5 Rolling Context"
-        }
-        self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
-        return final_result
+        return {"success": len(results.get("failed_files", [])) == 0,
+                "project_name": Path(project_dir).name if project_dir else "Unknown", "project_dir": project_dir,
+                "num_files": len(results.get("files_created", [])), "files_created": results.get("files_created", []),
+                "failed_files": results.get("failed_files", []), "elapsed_time": elapsed_time,
+                "strategy": "V6 Surgical Modification"}
