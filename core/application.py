@@ -4,14 +4,17 @@ import asyncio
 import logging
 import json
 import sys
+import shutil
+import subprocess  # Import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 # noinspection PyUnresolvedReferences
 from functools import partial
 
-from PySide6.QtCore import QObject, Signal, QTimer
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog
+# Import the necessary Qt components
+from PySide6.QtCore import QObject, Signal, QTimer, Qt, Q_ARG, QMetaObject
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog, QWidget
 
 from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
@@ -31,8 +34,6 @@ except ImportError as e:
 
 
 # ============================================================================
-# THE CLASS NAME IS FIXED HERE. THIS IS THE ONLY CHANGE.
-# ============================================================================
 class AvAApplication(QObject):
     fully_initialized_signal = Signal()
     workflow_started = Signal(str)
@@ -40,6 +41,14 @@ class AvAApplication(QObject):
     error_occurred = Signal(str, str)
     rag_status_changed = Signal(str, str)
     project_loaded = Signal(str)
+
+    # --- Signals for thread-safe terminal updates ---
+    terminal_command_to_run = Signal(str)
+    terminal_output = Signal(str)
+    terminal_error = Signal(str)
+    terminal_system_message = Signal(str)
+    terminal_focus_requested = Signal()
+    chat_message_received = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -98,47 +107,45 @@ class AvAApplication(QObject):
         if self.main_window and not self.main_window.isVisible():
             self.main_window.show()
             self.logger.info("Main window shown.")
-            await asyncio.sleep(0.01)
-        self.logger.info("Starting async component initialization...")
-        await self.async_initialize_components()
-        self.logger.info("Async component initialization completed.")
-
-    async def async_initialize_components(self):
-        self.logger.info("[START] Initializing streamlined components...")
-        try:
-            await self._initialize_rag_manager_async()
-            self.logger.info("RAG Manager initialization complete.")
-            self._initialize_workflow_engine()
-            self.execution_engine = ExecutionEngine(None,
-                                                    self.code_viewer.interactive_terminal if self.code_viewer else None)
-            self.logger.info("[OK] Execution engine initialized.")
-            self._connect_components()
-            self._setup_window_behaviors()
-            status = self.get_status()
-            self.logger.info(f"System status: {status}")
-            self.logger.info("[OK] Streamlined AvA Application initialized successfully.")
-        except Exception as e:
-            self.logger.error(f"[ERROR] Failed to initialize components: {e}", exc_info=True)
-            self.error_occurred.emit("async_initialization", str(e))
-        finally:
-            self.fully_initialized_signal.emit()
+        asyncio.create_task(self._initialize_async_components())
+        return True
 
     def _initialize_core_services(self):
         self.logger.info("Initializing core services...")
         self.llm_client = EnhancedLLMClient()
-        available_models = self.llm_client.get_available_models()
-        self.logger.info(f"Available LLM models: {available_models}")
-        if not available_models or "No LLM services available" in available_models[0]:
-            self.logger.warning("[WARN] No LLM services available!")
+        self.logger.info(f"Available LLM models: {self.llm_client.get_available_models()}")
+        print("Assigning default models for consolidated roles...")
+        self.execution_engine = ExecutionEngine(project_state_manager=None, terminal=self.terminal_window)
+        self.logger.info("[OK] Core services initialized.")
 
-    async def _initialize_rag_manager_async(self):
-        self.logger.info("Attempting to initialize RAG manager...")
+    async def _initialize_async_components(self):
+        self.logger.info("Starting async component initialization...")
+        self.logger.info("[START] Initializing streamlined components...")
+        await self._initialize_rag_manager()
+        self._initialize_workflow_engine()
+        self._initialize_execution_engine()
+        self._connect_components()
+        self._setup_window_behaviors()
+        self.logger.info("Async component initialization completed.")
+        self.fully_initialized_signal.emit()
+        self.logger.info("[OK] Streamlined AvA Application initialized successfully.")
+
+    async def _initialize_rag_manager(self):
         if RAG_MANAGER_AVAILABLE:
             try:
+                self.logger.info("Attempting to initialize RAG manager...")
                 self.rag_manager = RAGManager()
-                self.rag_manager.status_changed.connect(self._on_rag_status_changed)
-                self.rag_manager.upload_completed.connect(self._on_rag_upload_completed)
+
+                if hasattr(self.rag_manager, 'status_changed'):
+                    self.rag_manager.status_changed.connect(self._on_rag_status_changed)
+                elif hasattr(self.rag_manager, 'rag_status_changed'):
+                    self.rag_manager.rag_status_changed.connect(self._on_rag_status_changed)
+
+                if hasattr(self.rag_manager, 'upload_completed'):
+                    self.rag_manager.upload_completed.connect(self._on_rag_upload_completed)
+
                 await self.rag_manager.async_initialize()
+
                 self.logger.info(f"[OK] RAG manager initialized. Ready: {self.rag_manager.is_ready}")
             except Exception as e:
                 self.logger.error(f"[ERROR] RAG manager initialization failed: {e}", exc_info=True)
@@ -165,14 +172,31 @@ class AvAApplication(QObject):
             self.main_window.load_project_requested.connect(self.load_existing_project_dialog)
             if hasattr(self.main_window.sidebar, 'action_triggered'):
                 self.main_window.sidebar.action_triggered.connect(self._handle_sidebar_action)
+
+        if self.code_viewer and hasattr(self.code_viewer, 'interactive_terminal'):
+            terminal = self.code_viewer.interactive_terminal
+            terminal.force_run_requested.connect(
+                lambda: asyncio.create_task(asyncio.to_thread(self.run_project_in_terminal))
+            )
+            self.terminal_command_to_run.connect(terminal.append_command)
+            self.terminal_output.connect(terminal.append_output)
+            self.terminal_error.connect(terminal.append_error)
+            self.terminal_system_message.connect(terminal.append_system_message)
+            self.terminal_focus_requested.connect(self.code_viewer.focus_terminal_tab)
+
+        if self.main_window:
+            self.chat_message_received.connect(self.main_window.chat_interface.add_assistant_response)
+
         if self.workflow_engine and self.main_window:
-            self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
+            # --- THE FIX ---
+            self.workflow_engine.workflow_completed.connect(self._on_workflow_completed)
         self.workflow_started.connect(self._on_workflow_started)
         self.workflow_completed.connect(self._on_workflow_completed)
         self.error_occurred.connect(self._on_error_occurred)
         if self.workflow_engine:
             self.workflow_engine.file_generated.connect(self._on_file_generated)
-            self.workflow_engine.project_loaded.connect(self._on_project_loaded)
+            self.workflow_engine.project_loaded.connect(self.project_loaded.emit)
+        self.project_loaded.connect(self._on_project_loaded)
         self.logger.info("[OK] Components connected.")
 
     def _setup_window_behaviors(self):
@@ -219,93 +243,124 @@ class AvAApplication(QObject):
         self._open_terminal()
         asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history))
 
-    async def run_project_in_terminal(self, project_path: Optional[Path] = None):
-        """Asynchronously runs a sequence of commands to set up and execute a project."""
-        path_to_run = (project_path or self.current_project_path).resolve()
-
-        # --- Helper to run a single command and wait for it ---
-        async def run_command_and_wait(command: str) -> bool:
-            loop = asyncio.get_event_loop()
-            future = loop.create_future()
-
-            # Connect the terminal's signal to our future
-            def on_complete(exit_code):
-                if not future.done():
-                    if exit_code == 0:
-                        future.set_result(True)
-                    else:
-                        future.set_exception(Exception(f"Command failed with exit code {exit_code}"))
-
-            # Ensure we only have one connection for this run
-            terminal = self.code_viewer.interactive_terminal
+    def _find_system_python(self) -> str:
+        # This function is unchanged
+        import subprocess, os
+        ava_venv_marker, current_executable = ".venv", sys.executable
+        potential_pythons = []
+        if sys.platform == "win32":
+            potential_pythons = ["python", "py", "py -3", r"C:\Python312\python.exe", r"C:\Python311\python.exe"]
+            user_appdata = os.environ.get('LOCALAPPDATA', '')
+            if user_appdata:
+                for version in ['312', '311']: potential_pythons.append(
+                    f"{user_appdata}\\Programs\\Python\\Python{version}\\python.exe")
+        else:
+            potential_pythons = ["python3", "python", "/usr/bin/python3"]
+        for python_cmd in potential_pythons:
             try:
-                terminal.command_completed.disconnect()  # Disconnect any previous connections
-            except (TypeError, RuntimeError):  # It's okay if it wasn't connected
-                pass
-            terminal.command_completed.connect(on_complete)
+                cmd_parts = python_cmd.split()
+                result = subprocess.run(cmd_parts + ["--version"], capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    result2 = subprocess.run(cmd_parts + ["-c", "import sys; print(sys.executable)"],
+                                             capture_output=True, text=True, timeout=10)
+                    if result2.returncode == 0:
+                        python_path = result2.stdout.strip()
+                        if ava_venv_marker not in python_path and python_path != current_executable:
+                            return python_cmd
+            except(Exception):
+                continue
+        return "python"
 
-            # Execute command
-            terminal.input_line.setText(command)
-            terminal.run_command()
+    def run_project_in_terminal(self, project_path_str: Optional[str] = None):
+        """
+        Synchronous, smart, and snappy method to run the project.
+        """
+        path_to_run = Path(project_path_str) if project_path_str else self.current_project_path
+        path_to_run = path_to_run.resolve()
 
+        def run_command_and_wait(command_parts: List[str], timeout_override: int = None) -> bool:
+            command_str = ' '.join(f'"{part}"' if ' ' in part else part for part in command_parts)
+            self.terminal_command_to_run.emit(command_str)
             try:
-                await future  # Wait for the command to finish
-                return True
+                result = subprocess.run(
+                    command_parts, capture_output=True, text=True, cwd=str(path_to_run),
+                    timeout=timeout_override or 300, check=False, encoding='utf-8', errors='ignore'
+                )
+                if result.stdout: self.terminal_output.emit(result.stdout)
+                if result.stderr: self.terminal_error.emit(result.stderr)
+                self.terminal_system_message.emit(f"Process finished with exit code {result.returncode}")
+                return result.returncode == 0
+            except subprocess.TimeoutExpired:
+                msg = f"Command '{command_str[:50]}...' timed out!"
+                self.terminal_error.emit(msg)
+                self.chat_message_received.emit(f"❌ {msg}")
+                return False
             except Exception as e:
-                self.logger.error(f"Command '{command[:50]}...' failed: {e}")
+                msg = f"Command '{command_str[:50]}...' failed: {e}"
+                self.terminal_error.emit(msg)
+                self.chat_message_received.emit(f"❌ {msg}")
                 return False
 
-        # --- Main Logic ---
-        if str(path_to_run) == str(self.workspace_dir.resolve()) and self.current_project == "Default Project":
-            self.main_window.chat_interface.add_assistant_response("Please load or create a project first!")
-            return
+        self.chat_message_received.emit(f"🚀 Preparing to run `{path_to_run.name}`...")
+        self.terminal_focus_requested.emit()
 
-        if not self.code_viewer or not hasattr(self.code_viewer, 'interactive_terminal'):
-            self.error_occurred.emit("execution", "Interactive terminal is not available.")
-            return
-
-        self.main_window.chat_interface.add_assistant_response(f"🚀 Preparing to run `{path_to_run.name}`...")
-        self._open_code_viewer()
-        self.code_viewer.main_tabs.setCurrentWidget(self.code_viewer.interactive_terminal)
-        self.code_viewer.interactive_terminal.set_working_directory(str(path_to_run))
-
-        # Define the sequence of commands
         main_file = path_to_run / "main.py"
         req_file = path_to_run / "requirements.txt"
+        venv_dir = path_to_run / "venv"
 
         if sys.platform == "win32":
-            venv_python = path_to_run / "venv" / "Scripts" / "python.exe"
+            venv_python = venv_dir / "Scripts" / "python.exe"
         else:
-            venv_python = path_to_run / "venv" / "bin" / "python"
+            venv_python = venv_dir / "bin" / "python"
 
-        # Run commands sequentially
+        system_python_cmd = self._find_system_python()
+        self.chat_message_received.emit(f"Using system Python: {system_python_cmd}")
+
         if req_file.exists():
-            self.main_window.chat_interface.add_assistant_response("   - Setting up virtual environment...")
-            if not await run_command_and_wait(f'"{sys.executable}" -m venv venv'):
-                self.main_window.chat_interface.add_assistant_response("❌ Failed to create virtual environment.")
-                return
+            if not venv_dir.exists() or not venv_python.exists():
+                self.chat_message_received.emit("   - Virtual environment not found. Creating...")
+                venv_success = run_command_and_wait(system_python_cmd.split() + ['-m', 'venv', 'venv'])
+                if not venv_success:
+                    self.chat_message_received.emit("❌ Failed to create virtual environment. Aborting run.")
+                    return
+                self.chat_message_received.emit("   - Installing dependencies...")
+                pip_install_success = run_command_and_wait(
+                    [str(venv_python), "-m", "pip", "install", "-r", req_file.name])
+                if not pip_install_success:
+                    self.chat_message_received.emit("❌ Failed to install dependencies. Check terminal for errors.")
+            else:
+                self.chat_message_received.emit("   - Virtual environment found. Checking dependencies...")
+                check_script = "import pkg_resources;" + "".join(
+                    f"pkg_resources.require('{line.strip()}');" for line in req_file.read_text().splitlines() if
+                    line.strip() and not line.strip().startswith('#'))
+                reqs_met = run_command_and_wait([str(venv_python), "-c", check_script])
 
-            self.main_window.chat_interface.add_assistant_response("   - Installing dependencies...")
-            if not await run_command_and_wait(f'"{venv_python}" -m pip install -r "{req_file.name}"'):
-                self.main_window.chat_interface.add_assistant_response("❌ Failed to install requirements.")
-                return
+                if not reqs_met:
+                    self.chat_message_received.emit("   - Dependencies missing or outdated. Installing...")
+                    pip_install_success = run_command_and_wait(
+                        [str(venv_python), "-m", "pip", "install", "-r", req_file.name])
+                    if not pip_install_success:
+                        self.chat_message_received.emit("❌ Failed to install dependencies. Check terminal for errors.")
+                else:
+                    self.chat_message_received.emit("   - ✅ Dependencies are up to date!")
 
-        self.main_window.chat_interface.add_assistant_response("   - Executing main script...")
-        python_to_use = venv_python if req_file.exists() else sys.executable
-        await run_command_and_wait(f'"{python_to_use}" "{main_file.name}"')
+        if not main_file.exists():
+            self.chat_message_received.emit("❌ No main.py file found!")
+            return
 
-    def _handle_workflow_request(self, user_prompt: str):
-        self._handle_enhanced_workflow_request(user_prompt, [])
+        self.chat_message_received.emit("   - Executing main script...")
+        python_to_use = str(venv_python) if venv_python.exists() else self._find_system_python()
 
-    def _handle_sidebar_action(self, action: str):
-        if action == "run_project":
-            asyncio.create_task(self.run_project_in_terminal())
-        elif action == "open_terminal":
-            self._open_terminal()
-        elif action == "open_code_viewer":
-            self._open_code_viewer()
+        execution_success = run_command_and_wait([python_to_use, main_file.name])
+
+        if execution_success:
+            self.chat_message_received.emit("✅ Project execution completed successfully!")
         else:
-            self.logger.warning(f"Sidebar action '{action}' not implemented yet.")
+            self.chat_message_received.emit("❌ Project execution encountered errors. Check terminal output above.")
+
+    def _initialize_execution_engine(self):
+        self.execution_engine = ExecutionEngine(project_state_manager=None, terminal=self.terminal_window)
+        self.logger.info("[OK] Execution engine initialized.")
 
     def _open_terminal(self):
         if self.terminal_window: self.terminal_window.show(); self.terminal_window.raise_()
@@ -320,30 +375,33 @@ class AvAApplication(QObject):
         self.logger.info(f"Project loaded: {project_path}")
         self.current_project_path = Path(project_path)
         self.current_project = self.current_project_path.name
-        if self.main_window: self.main_window.update_project_display(self.current_project)
-        self._open_code_viewer()
-        if self.code_viewer: self.code_viewer.load_project(project_path)
+        if self.main_window:
+            QMetaObject.invokeMethod(self.main_window, 'update_project_display', Qt.QueuedConnection,
+                                     Q_ARG(str, self.current_project))
+        if self.code_viewer:
+            QMetaObject.invokeMethod(self.code_viewer, 'load_project', Qt.QueuedConnection, Q_ARG(str, project_path))
 
     def _on_workflow_started(self, prompt: str):
         self.logger.info(f"Workflow started: {prompt}")
 
     def _on_workflow_completed(self, result: dict):
         self.logger.info(f"Workflow completed: {result.get('project_name', 'N/A')}")
-        if result.get("success"):
-            new_project_dir_str = result.get("project_dir")
-            if new_project_dir_str:
-                self._on_project_loaded(new_project_dir_str)
+        self.workflow_completed.emit(result)
 
     def _on_error_occurred(self, component: str, error_message: str):
         self.logger.error(f"Error in {component}: {error_message}")
 
     def _on_rag_status_changed(self, status_text: str, color: str):
-        if self.main_window: self.main_window.update_rag_status_display(status_text, color)
+        if self.main_window:
+            QMetaObject.invokeMethod(self.main_window, 'update_rag_status_display', Qt.QueuedConnection,
+                                     Q_ARG(str, status_text), Q_ARG(str, color))
 
     def _on_rag_upload_completed(self, collection_id: str, files_processed: int):
         msg = f"RAG: Added {files_processed} files to {collection_id}"
         self.logger.info(msg)
-        if self.main_window: self.main_window.update_rag_status_display(msg, "success")
+        if self.main_window:
+            QMetaObject.invokeMethod(self.main_window, 'update_rag_status_display', Qt.QueuedConnection,
+                                     Q_ARG(str, msg), Q_ARG(str, "success"))
 
     def create_new_project_dialog(self):
         self.logger.info("Creating new project...")
@@ -363,7 +421,7 @@ class AvAApplication(QObject):
             project_path.mkdir(parents=True, exist_ok=True)
         self.current_project, self.current_project_path = project_name.strip(), project_path
         (project_path / "main.py").write_text(f'print("Hello from {project_name.strip()}!")')
-        self._on_project_loaded(str(project_path))
+        self.project_loaded.emit(str(project_path))
 
     def load_existing_project_dialog(self):
         if not self.main_window: return
@@ -377,6 +435,19 @@ class AvAApplication(QObject):
             asyncio.create_task(self.workflow_engine.execute_analysis_workflow(folder_path_str))
         else:
             self.error_occurred.emit("workflow_engine", "Engine not available for analysis.")
+
+    def _handle_workflow_request(self, user_prompt: str):
+        self._handle_enhanced_workflow_request(user_prompt, [])
+
+    def _handle_sidebar_action(self, action: str):
+        if action == "run_project":
+            asyncio.create_task(asyncio.to_thread(self.run_project_in_terminal))
+        elif action == "open_terminal":
+            self._open_terminal()
+        elif action == "open_code_viewer":
+            self._open_code_viewer()
+        else:
+            self.logger.warning(f"Sidebar action '{action}' not implemented yet.")
 
     def shutdown(self):
         self.logger.info("Shutting down...")

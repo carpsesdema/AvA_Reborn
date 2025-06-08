@@ -199,34 +199,36 @@ class FileTree(QTreeWidget):
 
     def _build_tree_recursive(self, path: Path, parent_item: QTreeWidgetItem):
         """Recursively build file tree"""
+        # --- FIX: Wrap in a try-except block to prevent crashes on disappearing files ---
         try:
             # Sort: directories first, then files
             items = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+        except FileNotFoundError:
+            # This can happen if a directory is deleted while we are refreshing
+            return
+        # --- END FIX ---
 
-            for item_path in items:
-                if item_path.name.startswith('.') or item_path.name == '__pycache__':
-                    continue  # Skip hidden files/dirs
+        for item_path in items:
+            if item_path.name.startswith('.') or item_path.name == '__pycache__':
+                continue  # Skip hidden files/dirs
 
-                item = QTreeWidgetItem(parent_item)
-                item.setText(0, item_path.name)
-                item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
+            item = QTreeWidgetItem(parent_item)
+            item.setText(0, item_path.name)
+            item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
 
-                if item_path.is_dir():
-                    item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
-                    # Watch subdirectories
-                    self.watcher.addPath(str(item_path))
-                    # Recurse into subdirectory
-                    self._build_tree_recursive(item_path, item)
+            if item_path.is_dir():
+                item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
+                # Watch subdirectories
+                self.watcher.addPath(str(item_path))
+                # Recurse into subdirectory
+                self._build_tree_recursive(item_path, item)
+            else:
+                # Set file icon based on extension
+                if item_path.suffix == '.py':
+                    item.setIcon(0, QIcon.fromTheme("python", self.style().standardIcon(
+                        self.style().StandardPixmap.SP_FileIcon)))  # Placeholder
                 else:
-                    # Set file icon based on extension
-                    if item_path.suffix == '.py':
-                        item.setIcon(0, QIcon.fromTheme("python", self.style().standardIcon(
-                            self.style().StandardPixmap.SP_FileIcon)))  # Placeholder
-                    else:
-                        item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
-
-        except PermissionError:
-            pass  # Skip directories we can't access
+                    item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
 
     @Slot()
     def refresh_tree(self):
@@ -366,7 +368,7 @@ class CodeViewerWindow(QMainWindow):
                 background: {Colors.HOVER_BG};
             }}
             QTabBar::close-button {{
-                image: url(none); /* Hide default icon, or use custom */
+                image: none; /* Hide default icon, or use custom */
                 subcontrol-position: right;
             }}
             QTabBar::close-button:hover {{
@@ -410,6 +412,17 @@ class CodeViewerWindow(QMainWindow):
         self.main_tabs.setCurrentIndex(tab_index)
 
         self.open_files[file_path] = editor
+
+    # --- SLOT to focus the terminal tab ---
+    @Slot()
+    def focus_terminal_tab(self):
+        """Switches the main tab view to the interactive terminal."""
+        if hasattr(self, 'interactive_terminal'):
+            self.show()
+            self.raise_()
+            self.main_tabs.setCurrentWidget(self.interactive_terminal)
+
+    # --- END SLOT ---
 
     def _focus_folder(self, folder_path: str):
         pass

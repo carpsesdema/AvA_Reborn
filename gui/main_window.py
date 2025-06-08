@@ -97,6 +97,7 @@ class AvAMainWindow(QMainWindow):
             self.ava_app.workflow_completed.connect(self.on_workflow_completed)
             self.ava_app.error_occurred.connect(self.on_app_error_occurred)
             self.ava_app.project_loaded.connect(self.update_project_display)
+            self.ava_app.chat_message_received.connect(self.chat_interface.add_assistant_response)
 
             if hasattr(self.ava_app, 'workflow_engine') and self.ava_app.workflow_engine:
                 self.ava_app.workflow_engine.workflow_started.connect(self.on_workflow_started)
@@ -167,11 +168,10 @@ class AvAMainWindow(QMainWindow):
             self.chat_interface.add_assistant_response("Sorry, LLM client is not available right now.")
             return
 
-        # This is the logic I accidentally removed
         self.chat_interface.update_specialists_status("AI Specialists: Thinking...", "working")
         try:
             if hasattr(self.ava_app, 'handle_casual_chat'):
-                response = self.ava_app.handle_casual_chat(message)  # This method needs to exist on AvAApplication
+                response = self.ava_app.handle_casual_chat(message)
                 self.chat_interface.add_assistant_response(response)
             else:
                 self.chat_interface.add_assistant_response(
@@ -189,8 +189,6 @@ class AvAMainWindow(QMainWindow):
             self.chat_interface.add_assistant_response("⚠️ Directory scanning not available.")
 
     def _handle_sidebar_action(self, action: str):
-        """Handle sidebar action triggers"""
-        # Let the main application handle all actions now.
         if hasattr(self.ava_app, '_handle_sidebar_action'):
             self.ava_app._handle_sidebar_action(action)
         else:
@@ -211,16 +209,12 @@ class AvAMainWindow(QMainWindow):
         """Handle workflow completion"""
         if result.get("success", False):
             project_dir = result.get("project_dir")
-            # ... existing success message logic ...
             self.chat_interface.add_assistant_response("✅ Workflow Complete!")
 
-            # --- THE DIRECT FIX ---
             if "run" in self.last_user_prompt.lower() and self.ava_app and project_dir:
                 self.chat_interface.add_workflow_status("🚀 Auto-running project as requested...")
-                # Use asyncio.create_task to run the async method from a sync slot
-                asyncio.create_task(self.ava_app.run_project_in_terminal())
+                asyncio.create_task(asyncio.to_thread(self.ava_app.run_project_in_terminal))
         else:
-            # ... existing failure message logic ...
             self.chat_interface.add_assistant_response(f"❌ Workflow Failed: {result.get('error')}")
 
         self._update_chat_llm_status()
@@ -233,7 +227,6 @@ class AvAMainWindow(QMainWindow):
         self._update_chat_llm_status()
         self._update_specialists_status()
         self._update_model_config_display()
-        self.update_rag_status_display("RAG: Ready", "success")
         self.update_project_display("Default Project")
 
     def _update_chat_llm_status(self):
@@ -245,12 +238,17 @@ class AvAMainWindow(QMainWindow):
     def _update_model_config_display(self):
         pass
 
+    @Slot(str)
     def update_project_display(self, project_name: str):
         if hasattr(self.sidebar, 'update_project_display'):
             self.sidebar.update_project_display(project_name)
 
+    @Slot(str, str)
     def update_rag_status_display(self, status_text: str, status_color: str = "working"):
         self.chat_interface.update_rag_status(status_text, status_color)
+        if hasattr(self.sidebar, 'update_rag_status_display'):
+            self.sidebar.update_rag_status_display(status_text)
+
 
     def load_chat_history(self, history: list):
         self.chat_interface.load_history(history)
