@@ -15,8 +15,8 @@ class InteractiveTerminal(QWidget):
     """
     A beautiful and functional interactive terminal for running commands within AvA.
     """
-    # Signal emitted when a command finishes, providing all its output and exit code.
-    command_completed = Signal(str, str, int)  # stdout, stderr, exit_code
+    # MODIFIED: Signal now just emits the exit code.
+    command_completed = Signal(int)  # stdout, stderr, exit_code
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -165,8 +165,7 @@ class InteractiveTerminal(QWidget):
         """Handle the completion of a command."""
         self.append_system_message(f"Process finished with exit code {exit_code}\n")
         self.input_line.setFocus()
-        # For simplicity, we assume all output was captured in real-time.
-        # Here you could emit a final signal if needed, but the UI is already updated.
+        self.command_completed.emit(exit_code) # Emit signal with exit code
         self.current_process = None
 
 

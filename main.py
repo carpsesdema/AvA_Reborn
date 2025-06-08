@@ -6,10 +6,12 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QCoreApplication  # For aboutToQuit
 import qasync  # Make sure qasync is imported
 
+from core.application import AvAApplication
+
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.application import AvAApplication
+  # Import the AvAApplication class
 
 ava_app_instance_container = []  # Global to hold the instance for shutdown
 app_quit_future = None  # Global future to signal application quit
@@ -41,7 +43,10 @@ async def main_async_logic():
     app.aboutToQuit.connect(handle_about_to_quit)
     print("main_async_logic: Connected aboutToQuit signal.")
 
+    # THE FIX IS HERE
     ava_app = AvAApplication()
+    # THE FIX IS HERE
+
     ava_app_instance_container.append(ava_app)
 
     def on_fully_initialized():

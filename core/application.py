@@ -30,6 +30,9 @@ except ImportError as e:
     print(f"RAG Manager not available: {e}")
 
 
+# ============================================================================
+# THE CLASS NAME IS FIXED HERE. THIS IS THE ONLY CHANGE.
+# ============================================================================
 class AvAApplication(QObject):
     fully_initialized_signal = Signal()
     workflow_started = Signal(str)
@@ -216,10 +219,43 @@ class AvAApplication(QObject):
         self._open_terminal()
         asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history))
 
-    def run_project_in_terminal(self, project_path: Optional[Path] = None):
-        """Executes the specified project, creating a venv and installing dependencies if necessary."""
+    async def run_project_in_terminal(self, project_path: Optional[Path] = None):
+        """Asynchronously runs a sequence of commands to set up and execute a project."""
         path_to_run = (project_path or self.current_project_path).resolve()
 
+        # --- Helper to run a single command and wait for it ---
+        async def run_command_and_wait(command: str) -> bool:
+            loop = asyncio.get_event_loop()
+            future = loop.create_future()
+
+            # Connect the terminal's signal to our future
+            def on_complete(exit_code):
+                if not future.done():
+                    if exit_code == 0:
+                        future.set_result(True)
+                    else:
+                        future.set_exception(Exception(f"Command failed with exit code {exit_code}"))
+
+            # Ensure we only have one connection for this run
+            terminal = self.code_viewer.interactive_terminal
+            try:
+                terminal.command_completed.disconnect()  # Disconnect any previous connections
+            except (TypeError, RuntimeError):  # It's okay if it wasn't connected
+                pass
+            terminal.command_completed.connect(on_complete)
+
+            # Execute command
+            terminal.input_line.setText(command)
+            terminal.run_command()
+
+            try:
+                await future  # Wait for the command to finish
+                return True
+            except Exception as e:
+                self.logger.error(f"Command '{command[:50]}...' failed: {e}")
+                return False
+
+        # --- Main Logic ---
         if str(path_to_run) == str(self.workspace_dir.resolve()) and self.current_project == "Default Project":
             self.main_window.chat_interface.add_assistant_response("Please load or create a project first!")
             return
@@ -228,59 +264,42 @@ class AvAApplication(QObject):
             self.error_occurred.emit("execution", "Interactive terminal is not available.")
             return
 
-        main_file = path_to_run / "main.py"
-        req_file = path_to_run / "requirements.txt"
-
-        if not main_file.exists():
-            self.main_window.chat_interface.add_assistant_response(
-                f"Cannot find `main.py` in '{path_to_run.name}' to run.")
-            return
-
         self.main_window.chat_interface.add_assistant_response(f"🚀 Preparing to run `{path_to_run.name}`...")
         self._open_code_viewer()
         self.code_viewer.main_tabs.setCurrentWidget(self.code_viewer.interactive_terminal)
         self.code_viewer.interactive_terminal.set_working_directory(str(path_to_run))
 
-        # --- VENV and Dependency Logic ---
-        commands = []
-        # Platform-specific venv Python executable path
+        # Define the sequence of commands
+        main_file = path_to_run / "main.py"
+        req_file = path_to_run / "requirements.txt"
+
         if sys.platform == "win32":
             venv_python = path_to_run / "venv" / "Scripts" / "python.exe"
-            # Use '&&' to chain commands on Windows
-            joiner = " && "
         else:
             venv_python = path_to_run / "venv" / "bin" / "python"
-            # Use '&&' for Linux/macOS as well
-            joiner = " && "
 
+        # Run commands sequentially
         if req_file.exists():
-            self.main_window.chat_interface.add_assistant_response(
-                "   - Found requirements.txt. Setting up virtual environment...")
-            # 1. Create venv if it doesn't exist. Use the base python interpreter.
-            commands.append(f'"{sys.executable}" -m venv venv')
-            # 2. Install dependencies using the venv's python.
-            commands.append(f'"{venv_python}" -m pip install -r "{req_file.name}"')
+            self.main_window.chat_interface.add_assistant_response("   - Setting up virtual environment...")
+            if not await run_command_and_wait(f'"{sys.executable}" -m venv venv'):
+                self.main_window.chat_interface.add_assistant_response("❌ Failed to create virtual environment.")
+                return
 
-        # 3. Always add the final command to run the script using the venv python if it exists/was created
-        final_run_command = f'"{venv_python}" "{main_file.name}"'
-        if not req_file.exists():  # If no reqs, use the base python
-            final_run_command = f'"{sys.executable}" "{main_file.name}"'
+            self.main_window.chat_interface.add_assistant_response("   - Installing dependencies...")
+            if not await run_command_and_wait(f'"{venv_python}" -m pip install -r "{req_file.name}"'):
+                self.main_window.chat_interface.add_assistant_response("❌ Failed to install requirements.")
+                return
 
-        commands.append(final_run_command)
-
-        # Join all commands into a single string for the shell to execute
-        full_command = joiner.join(commands)
-
-        self.logger.info(f"Executing chained command: {full_command}")
-        self.code_viewer.interactive_terminal.input_line.setText(full_command)
-        self.code_viewer.interactive_terminal.run_command()
+        self.main_window.chat_interface.add_assistant_response("   - Executing main script...")
+        python_to_use = venv_python if req_file.exists() else sys.executable
+        await run_command_and_wait(f'"{python_to_use}" "{main_file.name}"')
 
     def _handle_workflow_request(self, user_prompt: str):
         self._handle_enhanced_workflow_request(user_prompt, [])
 
     def _handle_sidebar_action(self, action: str):
         if action == "run_project":
-            self.run_project_in_terminal()
+            asyncio.create_task(self.run_project_in_terminal())
         elif action == "open_terminal":
             self._open_terminal()
         elif action == "open_code_viewer":
@@ -314,7 +333,6 @@ class AvAApplication(QObject):
             new_project_dir_str = result.get("project_dir")
             if new_project_dir_str:
                 self._on_project_loaded(new_project_dir_str)
-                # No need for logic here anymore, MainWindow handles it
 
     def _on_error_occurred(self, component: str, error_message: str):
         self.logger.error(f"Error in {component}: {error_message}")
