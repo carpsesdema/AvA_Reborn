@@ -8,23 +8,20 @@ from PySide6.QtCore import Qt, Signal, QProcess
 from PySide6.QtGui import QFont, QTextCursor, QColor
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxLayout, QLabel, QPushButton
 
-from gui.components import Colors, Typography
+from gui.components import Colors, Typography, ModernButton
 
 
 class InteractiveTerminal(QWidget):
     """
     A beautiful and functional interactive terminal for running commands within AvA.
     """
-    # MODIFIED: Signal now just emits the exit code.
-    command_completed = Signal(int)  # stdout, stderr, exit_code
-
-    # NEW: Signal for the Force Run button
+    command_completed = Signal(int)
     force_run_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_process = None
-        self.working_directory = Path.cwd()  # Start in the current directory
+        self.working_directory = Path.cwd()
 
         self._init_ui()
         self._apply_style()
@@ -42,7 +39,7 @@ class InteractiveTerminal(QWidget):
         self.output_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.output_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Input Area (with custom prompt and FORCE RUN button)
+        # Input Area (with new Run button)
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 8, 0, 0)
         input_layout.setSpacing(8)
@@ -55,17 +52,16 @@ class InteractiveTerminal(QWidget):
         self.input_line.setFrame(False)
         self.input_line.returnPressed.connect(self.run_command)
 
-        # EPIC FORCE RUN BUTTON! 🔥
-        self.force_run_btn = QPushButton("🔥 FORCE RUN")
-        self.force_run_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.force_run_btn.setMinimumHeight(32)
-        self.force_run_btn.setMaximumWidth(120)
-        self.force_run_btn.clicked.connect(self.force_run_requested.emit)
-        self.force_run_btn.setToolTip("Force run the current project (bypasses normal checks)")
+        # Use ModernButton for consistent styling, then customize it
+        self.run_project_btn = ModernButton("▶️ Run Project", button_type="primary")
+        self.run_project_btn.setMinimumHeight(32)
+        self.run_project_btn.setMaximumWidth(140)
+        self.run_project_btn.clicked.connect(self.force_run_requested.emit)
+        self.run_project_btn.setToolTip("Run the current project and capture output/errors for Ava.")
 
         input_layout.addWidget(self.prompt_label)
-        input_layout.addWidget(self.input_line, 1)  # Give input line most space
-        input_layout.addWidget(self.force_run_btn)
+        input_layout.addWidget(self.input_line, 1)
+        input_layout.addWidget(self.run_project_btn)
 
         main_layout.addWidget(self.output_area, 1)
         main_layout.addLayout(input_layout)
@@ -118,36 +114,31 @@ class InteractiveTerminal(QWidget):
             }}
         """)
 
-        # EPIC FORCE RUN BUTTON STYLING! 🔥
-        self.force_run_btn.setStyleSheet(f"""
+        # Apply the green 'Run' button styling
+        self.run_project_btn.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                          stop: 0 {Colors.ACCENT_ORANGE}, 
-                                          stop: 1 {Colors.ACCENT_RED});
+                                          stop: 0 {Colors.ACCENT_GREEN}, 
+                                          stop: 1 #2d863a);
                 color: white;
-                border: 2px solid {Colors.ACCENT_RED};
+                border: 2px solid #2d863a;
                 border-radius: 6px;
                 padding: 6px 12px;
                 font-weight: bold;
-                text-transform: uppercase;
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                          stop: 0 #ff6b35, 
-                                          stop: 1 #ff4757);
-                border: 2px solid #ff4757;
-                transform: scale(1.05);
+                                          stop: 0 #4dce5d, 
+                                          stop: 1 #3fb950);
+                border-color: #3fb950;
             }}
             QPushButton:pressed {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                          stop: 0 {Colors.ACCENT_RED}, 
-                                          stop: 1 #c44536);
-                border: 2px solid #c44536;
+                background: #2d863a;
             }}
             QPushButton:disabled {{
                 background: {Colors.BORDER_DEFAULT};
                 color: {Colors.TEXT_MUTED};
-                border: 2px solid {Colors.BORDER_MUTED};
+                border-color: {Colors.BORDER_MUTED};
             }}
         """)
 
@@ -162,7 +153,6 @@ class InteractiveTerminal(QWidget):
 
     def _update_prompt_label(self):
         """Updates the visual command prompt label."""
-        # Use a more compact representation for long paths
         prompt_path = str(self.working_directory)
         if len(prompt_path) > 30:
             prompt_path = f"...{prompt_path[-27:]}"
@@ -185,12 +175,10 @@ class InteractiveTerminal(QWidget):
         self.current_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.current_process.setWorkingDirectory(str(self.working_directory))
 
-        # Connect signals to handle output
         self.current_process.readyReadStandardOutput.connect(self._handle_stdout)
         self.current_process.readyReadStandardError.connect(self._handle_stderr)
         self.current_process.finished.connect(self._on_command_finished)
 
-        # For Windows, run commands through cmd.exe
         if "win" in str(sys.platform).lower():
             self.current_process.start("cmd.exe", ["/C", command])
         else:
@@ -210,12 +198,12 @@ class InteractiveTerminal(QWidget):
         """Handle the completion of a command."""
         self.append_system_message(f"Process finished with exit code {exit_code}\n")
         self.input_line.setFocus()
-        self.command_completed.emit(exit_code)  # Emit signal with exit code
+        self.command_completed.emit(exit_code)
         self.current_process = None
 
     def set_force_run_enabled(self, enabled: bool):
-        """Enable/disable the force run button."""
-        self.force_run_btn.setEnabled(enabled)
+        """Enable/disable the run button."""
+        self.run_project_btn.setEnabled(enabled)
 
     # --- Public methods for appending text ---
 
@@ -240,10 +228,8 @@ class InteractiveTerminal(QWidget):
         cursor.setCharFormat(char_format)
         cursor.insertText(text)
 
-        # Reset format for subsequent text
         char_format.setForeground(QColor(Colors.TEXT_PRIMARY))
         cursor.setCharFormat(char_format)
-
         self.output_area.ensureCursorVisible()
 
     def append_system_message(self, text: str):
@@ -257,11 +243,9 @@ class InteractiveTerminal(QWidget):
         cursor.setCharFormat(char_format)
         cursor.insertText(text + "\n")
 
-        # Reset format
         char_format.setForeground(QColor(Colors.TEXT_PRIMARY))
         char_format.setFontItalic(False)
         cursor.setCharFormat(char_format)
-
         self.output_area.ensureCursorVisible()
 
     def append_command(self, command: str):
