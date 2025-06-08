@@ -561,7 +561,7 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         self.performance_text.setText(text)
         self.performance_indicator.update_status(status)
 
-    def update_rag_status(self, text: str, status: str = "working"):
+    def update_rag_status(self, rag_text: str, status: str = "working"):
         """Update RAG status"""
-        self.rag_text.setText(text)
+        self.rag_text.setText(rag_text)
         self.rag_indicator.update_status(status)

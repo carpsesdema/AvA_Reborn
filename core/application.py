@@ -394,6 +394,8 @@ class AvAApplication(QObject):
         if self.main_window and hasattr(self.main_window, 'update_project_display'):
             self.main_window.update_project_display(self.current_project)
         self._open_code_viewer()
+        if self.code_viewer:
+            self.code_viewer.load_project(project_path)
 
     def _on_workflow_started(self, prompt: str):
         self.logger.info(f"[OK] Workflow started: {prompt}")
@@ -569,9 +571,6 @@ class AvAApplication(QObject):
                     self.main_window.update_project_display(project_name)
 
             self._on_project_loaded(str(project_path))
-
-            if self.code_viewer and hasattr(self.code_viewer, 'load_project'):
-                self.code_viewer.load_project(str(project_path))
 
             self.project_loaded.emit(str(project_path))
 

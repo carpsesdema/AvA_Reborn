@@ -380,7 +380,7 @@ Let me know if you'd like to try again or need help with something else."""
         """Update RAG status display"""
         if hasattr(self.sidebar, 'update_rag_status_display'):
             self.sidebar.update_rag_status_display(status_text)
-        self.chat_interface.update_rag_status(text, status_color)
+        self.chat_interface.update_rag_status(status_text, status_color)
 
     def load_chat_history(self, history: list):
         """
