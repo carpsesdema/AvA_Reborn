@@ -2,17 +2,15 @@
 
 import asyncio
 import json
-import hashlib
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Callable, Any, Coroutine
-from pathlib import Path
 import re
 import textwrap
+from typing import Callable, Dict, List
 
 from core.llm_client import LLMRole, EnhancedLLMClient
 
 # --- Prompt Templates ---
 
+# V4 ARCHITECT PROMPT - This is still perfect for generating the master spec.
 ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the ARCHITECT AI. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.
 
@@ -53,43 +51,37 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     **IMPORTANT: Your _entire_ output must be ONLY the raw, valid JSON object. Do not include any conversational filler or markdown formatting.**
 """)
 
-# V2 CODER PROMPT - MORE FORCEFUL AND EXPLICIT
+# V5 CODER PROMPT - ACCEPTS FULL KNOWLEDGE PACKETS
 CODER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are an expert Python developer. Your task is to generate a complete, functional, and production-ready Python file based on a strict Technical Specification.
+    You are an expert Python developer. Your task is to generate the complete and functional source code for a single Python file, based on a strict Technical Specification and the full context of its dependencies.
 
-    PROJECT CONTEXT: {project_context_description}
-    FILE TO GENERATE: `{file_path}`
+    **PROJECT CONTEXT:** {project_context_description}
 
-    FULL SOURCE CODE OF DEPENDENCIES (Your source of truth for imports):
-    {dependency_context}
+    ---
+    **FILE TO GENERATE:** `{file_path}`
 
-    TECHNICAL SPECIFICATION FOR `{file_path}` (You MUST adhere to this contract):
+    **TECHNICAL SPECIFICATION FOR `{file_path}` (Your primary instructions):**
     ```json
     {tech_spec_json}
     ```
+    ---
+    **FULL CONTEXT OF DEPENDENCIES (Your source of truth for imports and interactions):**
+    This section contains the full technical specs and the final, generated source code for all files that `{file_path}` depends on. You MUST use this to ensure perfect integration.
 
-    CRITICAL INSTRUCTIONS:
-    1.  You are responsible for writing the **entire, complete source code** for the file `{file_path}`.
-    2.  Implement the full logic for every method and function defined in the technical specification. **DO NOT use `pass` as a placeholder.** Your code must be fully implemented and functional.
-    3.  You MUST adhere to every detail in the `api_contract`. Use the exact class names, method signatures, and config variables defined.
-    4.  You MUST correctly import necessary components from the provided dependency source code.
-    5.  Ensure the code is clean, efficient, well-commented, and follows PEP 8.
-    6.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
+    {full_dependency_context}
+    ---
+
+    **CRITICAL INSTRUCTIONS:**
+    1.  Generate the **entire, complete, and runnable source code** for the file `{file_path}`.
+    2.  Implement the full logic for every method and function defined in your technical specification. **DO NOT use `pass` as a placeholder.** Your code must be fully implemented.
+    3.  You MUST adhere to the `api_contract` from your technical specification and correctly use the classes, methods, and variables from the provided dependency context.
+    4.  **Your entire response MUST be ONLY the raw Python code.** Do not include any explanations or markdown formatting like ```python.
 
     Generate the complete and fully implemented Python code for `{file_path}` now:
 """)
 
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are a senior code reviewer examining this Python file for quality, correctness, and adherence to the plan.
-
-    FILE: {file_path}
-    PROJECT CONTEXT: {project_description}
-
-    CODE TO REVIEW:
-    ```python
-    {code}
-    ```
-    Provide a thorough review as a JSON object with keys: "approved" (boolean), "overall_quality" (string: "excellent", "good", "fair", "poor"), "critical_issues" (list of strings), "suggestions" (list of strings), and "summary" (string). Your feedback must be specific and actionable.
+    You are a senior code reviewer examining this Python file for quality and correctness. Provide a review as a JSON object with keys: "approved" (boolean), "summary" (string), "suggestions" (list of strings).
 """)
 
 
@@ -145,8 +137,8 @@ class BaseAIService:
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
-        if not self.rag_manager or not self.rag_manager.is_ready:
-            return "No RAG context available."
+        # ... (This method remains unchanged)
+        if not self.rag_manager or not self.rag_manager.is_ready: return "No RAG context available."
         self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
         dynamic_query = f"Python code example for {query}"
         try:
@@ -180,23 +172,29 @@ class ArchitectService(BaseAIService):
 
 
 class CoderService(BaseAIService):
-    # ... (This class is unchanged, but will now receive the new, more forceful prompt)
-    async def generate_file_from_spec(self, tech_spec: dict, project_context: dict, dependency_context: str) -> str:
-        file_path = tech_spec.get("filename", "unknown_file.py")
+    """V5 Coder Service: Generates a complete file using a Knowledge Packet."""
+
+    async def generate_file_from_spec(self, file_path: str, tech_spec: dict, project_context: dict,
+                                      full_dependency_context: str) -> str:
         self.stream_emitter("Coder", "thought", f"Generating full code for file: '{file_path}'...", 2)
+
         rag_context = await self._get_intelligent_rag_context(tech_spec.get("purpose", ""), k=1)
+
         code_prompt = CODER_PROMPT_TEMPLATE.format(
             project_context_description=project_context.get("description", ""),
             file_path=file_path,
-            dependency_context=dependency_context,
+            full_dependency_context=full_dependency_context,  # NEW: Pass the full Knowledge Packet
             rag_context=rag_context,
             tech_spec_json=json.dumps(tech_spec, indent=2)
         )
+
         all_chunks = []
         try:
+            # Use streaming to provide real-time feedback in the terminal
             async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
                 all_chunks.append(chunk)
                 self.stream_emitter("Coder", "llm_chunk", chunk, 3)
+
             raw_code = "".join(all_chunks)
             cleaned_code = self._clean_llm_output(raw_code)
             self.stream_emitter("Coder", "success", f"Code for file '{file_path}' is ready.", 2)
@@ -206,13 +204,16 @@ class CoderService(BaseAIService):
             return f"# FALLBACK: Failed to generate code for {file_path}. Error: {e}\npass"
 
     def _clean_llm_output(self, code: str) -> str:
-        if code.strip().startswith("```python"): code = code.split("```python", 1)[-1]
-        if code.strip().endswith("```"): code = code.rsplit("```", 1)[0]
+        if code.strip().startswith("```python"):
+            code = code.split("```python", 1)[-1]
+        if code.strip().endswith("```"):
+            code = code.rsplit("```", 1)[0]
         return code.strip()
 
 
 class ReviewerService(BaseAIService):
-    # ... (This class is unchanged)
+    """🧐 Performs a final quality check on generated code."""
+
     async def review_code(self, file_path: str, code: str, project_description: str) -> tuple[dict, bool]:
         self.stream_emitter("Reviewer", "thought", f"Requesting final quality review for '{file_path}'...", 2)
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
