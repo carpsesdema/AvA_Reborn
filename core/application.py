@@ -15,7 +15,7 @@ from core.enhanced_workflow_engine import EnhancedWorkflowEngine
 
 # Import the components
 from gui.main_window import AvAMainWindow
-from windows.code_viewer import CodeViewerWindow
+from gui.code_viewer import CodeViewerWindow
 from gui.terminals import TerminalWindow  # This is actually StreamingTerminal
 
 # Try to import RAG manager - gracefully handle if not available
@@ -193,6 +193,8 @@ class AvAApplication(QObject):
                 )
             if hasattr(self.main_window, 'new_project_requested'):
                 self.main_window.new_project_requested.connect(self.create_new_project_dialog)
+            if hasattr(self.main_window, 'load_project_requested'):
+                self.main_window.load_project_requested.connect(self.load_existing_project_dialog)
             if hasattr(self.main_window.sidebar, 'action_triggered'):
                 self.main_window.sidebar.action_triggered.connect(self._handle_sidebar_action)
 
@@ -578,6 +580,36 @@ class AvAApplication(QObject):
             self.logger.error(error_msg, exc_info=True)
             if self.terminal_window and hasattr(self.terminal_window, 'stream_log_rich'):
                 self.terminal_window.stream_log_rich("Application", "error", f"❌ {error_msg}", "0")
+
+    def load_existing_project_dialog(self):
+        """Opens a dialog to select an existing project folder."""
+        if not self.main_window:
+            return
+
+        folder_path_str = QFileDialog.getExistingDirectory(
+            self.main_window,
+            "Load Existing Project",
+            str(self.workspace_dir)
+        )
+
+        if not folder_path_str:
+            return
+
+        self.logger.info(f"User selected existing project to load: {folder_path_str}")
+
+        # --- NEW: KICK OFF ANALYSIS ---
+        if self.workflow_engine:
+            self.main_window.chat_interface.add_workflow_status(
+                f"🧠 Analyzing project '{Path(folder_path_str).name}'... Please wait."
+            )
+            self._open_terminal()
+            # We use asyncio.create_task to run this in the background
+            # so the UI doesn't freeze during analysis!
+            asyncio.create_task(self.workflow_engine.execute_analysis_workflow(folder_path_str))
+        else:
+            self.error_occurred.emit("workflow_engine", "Cannot analyze project: Workflow Engine not available.")
+
+        # --- The rest of the UI updates will be handled by signals from the workflow ---
 
     def shutdown(self):
         self.logger.info("Shutting down streamlined AvA Application...")

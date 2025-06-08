@@ -424,6 +424,7 @@ class ProjectManagementPanel(StyledPanel):
     """Modern project management panel"""
 
     new_project_requested = Signal()
+    load_project_requested = Signal()
 
     def __init__(self):
         super().__init__("Project Management")
@@ -434,6 +435,11 @@ class ProjectManagementPanel(StyledPanel):
         self.new_project_btn = ModernButton("📁 New Project", button_type="primary")
         self.new_project_btn.clicked.connect(self.new_project_requested.emit)
         self.add_widget(self.new_project_btn)
+
+        # Load Existing Project button
+        self.load_project_btn = ModernButton("📂 Load Existing Project", button_type="secondary")
+        self.load_project_btn.clicked.connect(self.load_project_requested.emit)
+        self.add_widget(self.load_project_btn)
 
         # Current project display
         project_layout = QHBoxLayout()

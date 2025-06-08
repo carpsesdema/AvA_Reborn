@@ -4,6 +4,7 @@ from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout
 )
+from rich import text
 
 from gui.chat_interface import ChatInterface  # <-- The star of the show!
 from gui.components import Colors
@@ -27,6 +28,7 @@ class AvAMainWindow(QMainWindow):
 
     # Signals for workflow integration
     new_project_requested = Signal()
+    load_project_requested = Signal()
     workflow_requested_with_context = Signal(str, list)
     # Compatibility signal for the old application core
     workflow_requested = Signal(str)
@@ -81,6 +83,7 @@ class AvAMainWindow(QMainWindow):
         """Connect UI signals"""
         self.chat_interface.message_sent.connect(self.handle_user_message)
         self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
+        self.sidebar.load_project_requested.connect(self.load_project_requested.emit)
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_directory)
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
         self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
@@ -377,7 +380,7 @@ Let me know if you'd like to try again or need help with something else."""
         """Update RAG status display"""
         if hasattr(self.sidebar, 'update_rag_status_display'):
             self.sidebar.update_rag_status_display(status_text)
-        self.chat_interface.update_rag_status(status_text, status_color)
+        self.chat_interface.update_rag_status(text, status_color)
 
     def load_chat_history(self, history: list):
         """

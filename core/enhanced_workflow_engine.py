@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 # Import our V5 services
 from core.workflow_services import ArchitectService, CoderService, ReviewerService
+from core.project_state_manager import ProjectStateManager
 
 
 class EnhancedWorkflowEngine(QObject):
@@ -19,6 +20,7 @@ class EnhancedWorkflowEngine(QObject):
     🚀 V5 Workflow Engine: Implements the "Rolling Context" system.
     Builds files sequentially, feeding the specs and source code of completed
     files into the context for the next file, ensuring perfect integration.
+    Also handles the new "Project Awareness" analysis workflow.
     """
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
@@ -28,6 +30,10 @@ class EnhancedWorkflowEngine(QObject):
     detailed_log_event = Signal(str, str, str, str)
     task_progress = Signal(int, int)
 
+    # --- NEW: Signals for Analysis Workflow ---
+    analysis_started = Signal(str)  # project_path
+    analysis_completed = Signal(str, dict)  # project_path, tech_spec
+
     def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
         self.llm_client = llm_client
@@ -35,6 +41,9 @@ class EnhancedWorkflowEngine(QObject):
         self.code_viewer = code_viewer
         self.rag_manager = rag_manager
         self.logger = logging.getLogger(__name__)
+
+        self.project_state_manager: ProjectStateManager = None
+        self.current_tech_spec: dict = None
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
             self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
@@ -54,6 +63,43 @@ class EnhancedWorkflowEngine(QObject):
             self.detailed_log_event.connect(self.terminal_window.stream_log_rich)
         except Exception as e:
             self.logger.error(f"❌ Failed to connect terminal signals: {e}")
+
+    async def execute_analysis_workflow(self, project_path_str: str):
+        """NEW: Executes the analysis workflow for an existing project."""
+        self.logger.info(f"🚀 Starting Analysis workflow for: {project_path_str}...")
+        self.analysis_started.emit(project_path_str)
+        self.detailed_log_event.emit("WorkflowEngine", "stage_start",
+                                     f"🚀 Initializing Analysis for '{Path(project_path_str).name}'...", "0")
+
+        try:
+            # Step 1: Initialize Project State Manager for the given path
+            self.project_state_manager = ProjectStateManager(Path(project_path_str))
+            self.detailed_log_event.emit("WorkflowEngine", "info", "Project State Manager initialized. Scanned files.",
+                                         "1")
+
+            # Step 2: Use ArchitectService to analyze the project and create the spec
+            tech_spec = await self.architect_service.analyze_and_create_spec_from_project(self.project_state_manager)
+            if not tech_spec:
+                raise Exception("Analysis failed. Architect could not produce a technical specification from the project files.")
+
+            # Step 3: Store the spec for future modification workflows
+            self.current_tech_spec = tech_spec
+            self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
+                                         "0")
+
+            # Emit completion signal
+            self.analysis_completed.emit(project_path_str, self.current_tech_spec)
+
+            # Signal to the main app that the project is now "loaded" and understood
+            self.project_loaded.emit(project_path_str)
+
+        except Exception as e:
+            self.logger.error(f"❌ Analysis Workflow failed: {e}", exc_info=True)
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Analysis Error: {str(e)}", "0")
+            self.detailed_log_event.emit("WorkflowEngine", "debug", traceback.format_exc(), "1")
+            # We might want a dedicated error signal for analysis failures
+            self.project_loaded.emit(project_path_str) # Still load it, but maybe with a warning
+
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
         self.logger.info(f"🚀 Starting V5 workflow: {user_prompt[:100]}...")
@@ -202,6 +248,3 @@ class EnhancedWorkflowEngine(QObject):
         }
         self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
         return final_result
-
-    def execute_workflow(self, prompt: str):
-        asyncio.create_task(self.execute_enhanced_workflow(prompt, []))

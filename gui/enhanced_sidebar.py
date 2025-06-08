@@ -14,6 +14,7 @@ class AvALeftSidebar(QWidget):
 
     # Signals
     new_project_requested = Signal()
+    load_project_requested = Signal()
     model_config_requested = Signal()
     scan_directory_requested = Signal()
     action_triggered = Signal(str)
@@ -32,6 +33,7 @@ class AvALeftSidebar(QWidget):
         # Project Management Panel
         self.project_panel = ProjectManagementPanel()
         self.project_panel.new_project_requested.connect(self.new_project_requested.emit)
+        self.project_panel.load_project_requested.connect(self.load_project_requested.emit)
         layout.addWidget(self.project_panel)
 
         # AI Model Configuration Panel

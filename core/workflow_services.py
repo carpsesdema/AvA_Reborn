@@ -7,6 +7,7 @@ import textwrap
 from typing import Callable, Dict, List
 
 from core.llm_client import LLMRole, EnhancedLLMClient
+from core.project_state_manager import ProjectStateManager  # NEW IMPORT
 
 # --- Prompt Templates ---
 
@@ -49,6 +50,64 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     }}
 
     **IMPORTANT: Your _entire_ output must be ONLY the raw, valid JSON object. Do not include any conversational filler or markdown formatting.**
+""")
+
+# NEW PROMPT for analyzing existing code!
+ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the ARCHITECT AI. Your task is to act as a reverse-engineer. You will analyze the complete context of an existing software project and create a comprehensive, machine-readable Technical Specification Sheet that accurately represents its current state.
+
+    **PROJECT CONTEXT & FILE INFORMATION (The source of truth):**
+    ```json
+    {project_context_json}
+    ```
+
+    Based on the provided project context, which includes file paths, dependencies, and exported symbols (classes/functions), your job is to generate a single, valid JSON object that represents the project's architecture.
+
+    This JSON object must contain:
+    1.  `project_name`: The name of the project.
+    2.  `project_description`: A one-sentence summary of what the project does.
+    3.  `dependency_order`: A topologically sorted list of filenames for the correct build order.
+    4.  `technical_specs`: A dictionary where each key is a filename. The value for each filename must contain:
+        - `purpose`: A brief description of the file's role.
+        - `dependencies`: A list of other project files it depends on.
+        - `api_contract`: An object defining the public API of the file (classes, methods, variables).
+
+    **EXAMPLE JSON STRUCTURE:**
+    {{
+      "project_name": "existing-project",
+      "project_description": "A Python application for managing user data.",
+      "dependency_order": ["config.py", "database.py", "models.py", "main.py"],
+      "technical_specs": {{
+        "config.py": {{
+          "purpose": "Central configuration file.",
+          "dependencies": [],
+          "api_contract": {{
+            "variables": [
+              {{"name": "DATABASE_URL", "type": "str"}},
+              {{"name": "API_TIMEOUT", "type": "int"}}
+            ]
+          }}
+        }},
+        "models.py": {{
+          "purpose": "Defines the data models for the application.",
+          "dependencies": ["database.py"],
+          "api_contract": {{
+            "classes": [
+              {{
+                "name": "User",
+                "inherits_from": "Base",
+                "methods": [
+                  {{"signature": "def __init__(self, name: str, email: str):"}},
+                  {{"signature": "def set_password(self, password: str) -> None:"}}
+                ]
+              }}
+            ]
+          }}
+        }}
+      }}
+    }}
+
+    **CRITICAL: Your _entire_ output must be ONLY the raw, valid JSON object. Do not include any conversational filler, explanations, or markdown formatting.**
 """)
 
 # V5 CODER PROMPT - ACCEPTS FULL KNOWLEDGE PACKETS
@@ -145,15 +204,15 @@ class BaseAIService:
             results = self.rag_manager.query_context(dynamic_query, k=k)
             if not results: return "No specific examples found in the knowledge base."
             return "\n\n---\n\n".join([
-                                          f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
-                                          for r in results if r.get('content')])
+                f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
+                for r in results if r.get('content')])
         except Exception as e:
             self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
             return "Could not query knowledge base due to an error."
 
 
 class ArchitectService(BaseAIService):
-    # ... (This class is unchanged)
+
     async def create_tech_spec(self, user_prompt: str, full_conversation: List[Dict] = None) -> dict:
         self.stream_emitter("Architect", "thought",
                             "Phase 1: Architecting the complete project technical specification...", 0)
@@ -168,6 +227,33 @@ class ArchitectService(BaseAIService):
                                 "Architecting failed. Could not produce a valid technical specification.", 1)
             return {}
         self.stream_emitter("Architect", "success", "Master Technical Specification created successfully!", 0)
+        return tech_spec
+
+    async def analyze_and_create_spec_from_project(self, project_state: ProjectStateManager) -> dict:
+        """NEW: Analyzes an existing project and creates a tech spec for it."""
+        self.stream_emitter("Architect", "thought",
+                            "Analyzing existing project to reverse-engineer its architecture...", 1)
+
+        # Use the ProjectStateManager to get the full context of the project
+        project_context = project_state.get_project_context()
+
+        # We need to make sure the context is serializable
+        # A simple way is to dump and load, but you might want a more elegant solution
+        # This handles datetime objects and other non-serializable types
+        serializable_context = json.loads(json.dumps(project_context, default=str))
+
+        analysis_prompt = ARCHITECT_ANALYSIS_PROMPT_TEMPLATE.format(
+            project_context_json=json.dumps(serializable_context, indent=2)
+        )
+
+        tech_spec = await self._stream_and_collect_json(analysis_prompt, LLMRole.ARCHITECT, "Architect")
+        if not tech_spec or not tech_spec.get("technical_specs"):
+            self.stream_emitter("Architect", "error",
+                                "Project analysis failed. Could not produce a valid technical specification from the provided context.",
+                                1)
+            return {}
+
+        self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
         return tech_spec
 
 
