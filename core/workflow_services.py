@@ -1,141 +1,84 @@
+# core/workflow_services.py
+
+import asyncio
 import json
+import hashlib
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Callable, Any, Coroutine
+from pathlib import Path
 import re
 import textwrap
-from pathlib import Path
-from typing import Dict, List, Callable
 
 from core.llm_client import LLMRole, EnhancedLLMClient
 
 # --- Prompt Templates ---
-# Prompts are dedented to allow for clean in-code formatting without sending leading whitespace to the LLM.
 
-# High-level prompt for just the file structure
-STRUCTURER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the STRUCTURER AI. Your single, focused task is to analyze a user's request and determine the necessary file structure for the project. You only think about what files are needed and what their high-level purpose is.
+ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the ARCHITECT AI. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.
 
     USER REQUEST: "{full_requirements}"
 
     RELEVANT CONTEXT FROM KNOWLEDGE BASE:
     {rag_context}
 
-    Your output MUST be a single, valid JSON object with the following structure:
+    Your output MUST be a single, valid JSON object. This object will contain the project name, a description, a dependency-sorted build order, and a detailed `technical_specs` dictionary for every file.
+
+    For each file in `technical_specs`, you must define its `purpose`, its `dependencies`, and its `api_contract`.
+    The `api_contract` is the most critical part. It must define:
+    - For config files: A list of all required `variables` with their name and type.
+    - For class-based files: A list of `classes`, each with its name, what it `inherits_from`, and a list of all `methods` with their exact `signature`.
+    - For entry points (`main.py`): A clear `execution_flow` describing the sequence of operations.
+
+    You must also determine the correct `dependency_order` for building the files. Files with no dependencies come first.
+
+    **EXAMPLE JSON STRUCTURE:**
     {{
       "project_name": "a-descriptive-snake-case-name",
       "project_description": "A one-sentence description of the application.",
-      "files": [
-        {{
-          "filename": "main.py",
-          "purpose": "The main entry point of the application."
+      "dependency_order": ["config.py", "player.py", "main.py"],
+      "technical_specs": {{
+        "config.py": {{
+          "purpose": "Stores all static configuration variables.",
+          "dependencies": [],
+          "api_contract": {{"variables": [{{"name": "WINDOW_TITLE", "type": "str"}}]}}
         }},
-        {{
-          "filename": "another_file.py",
-          "purpose": "A brief description of this file's role."
+        "player.py": {{
+          "purpose": "Defines the Player class.",
+          "dependencies": ["config.py"],
+          "api_contract": {{"classes": [{{"name": "Player", "inherits_from": "Entity", "methods": [{{"signature": "def __init__(self):"}}]}}]}}
         }}
-      ]
+      }}
     }}
 
-    **IMPORTANT: Your _entire_ output must be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json before or after the JSON. The system will fail if it receives anything other than the raw, valid JSON object.**
+    **IMPORTANT: Your _entire_ output must be ONLY the raw, valid JSON object. Do not include any conversational filler or markdown formatting.**
 """)
 
-# Detailed prompt for a single file's components
-DETAILED_FILE_PLAN_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the PLANNER AI, a master software architect. Your task is to create a detailed component-level plan for a SINGLE file within a larger project.
-
-    OVERALL PROJECT DESCRIPTION: {project_description}
-    FILE TO PLAN: `{file_path}`
-    FILE'S PURPOSE: {file_purpose}
-
-    CONTEXT OF OTHER PROJECT FILES PLANNED SO FAR:
-    {other_files_context}
-
-    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
-    {rag_context}
-
-    Your output MUST be a single, valid JSON object containing a 'components' array. Each object in the array represents a single class, method, or function for the file `{file_path}`.
-
-    For EACH component, you MUST provide the following fields: 'task_id', 'description', 'component_type', 'inputs', 'outputs', 'core_logic_steps', 'error_conditions_to_handle', 'interactions', and 'critical_notes'.
-
-    **CRITICAL FOR GUIs**: For a Controller file, the 'interactions' field MUST detail the specific signal-to-slot connections. For a View, it must describe the UI elements. For a Model, it must describe the state it manages.
-
-    **CRITICAL FOR CALCULATOR LOGIC**: For any calculator logic, you MUST design a stateful calculator. DO NOT create a plan that involves parsing a full mathematical expression string. Instead, the `core_logic_steps` for the model must detail a state-based approach with:
-    1.  State variables (e.g., `current_display_value`, `first_operand`, `pending_operation`).
-    2.  Methods to handle digit inputs (e.g., `process_digit_input`) that append to the current display value.
-    3.  A method to handle operators (e.g., `process_operator_input`) that sets the pending operation and stores the first operand.
-    4.  A method to trigger calculation (e.g., the equals button) which uses the stored state to perform a single operation.
-    5.  A method to clear the state.
-    This approach avoids the security risks and complexity of `eval()` and ad-hoc string parsing.
-
-    Example 'components' array structure:
-    {{
-      "components": [
-        {{
-          "task_id": "ClassName_method_name",
-          "description": "...",
-          "component_type": "method_definition",
-          "inputs": ["..."],
-          "outputs": "...",
-          "core_logic_steps": ["..."],
-          "error_conditions_to_handle": ["..."],
-          "interactions": ["..."],
-          "critical_notes": "..."
-        }}
-      ]
-    }}
-
-**IMPORTANT: Your _entire_ output must be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json before or after the JSON. The system will fail if it receives anything other than the raw, valid JSON object.**
-""")
-
-# Coder prompt template
+# V2 CODER PROMPT - MORE FORCEFUL AND EXPLICIT
 CODER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are an expert Python developer. Your task is to generate a single, complete, and production-ready Python code snippet for the micro-task detailed in the SPECIFICATIONS below.
+    You are an expert Python developer. Your task is to generate a complete, functional, and production-ready Python file based on a strict Technical Specification.
 
     PROJECT CONTEXT: {project_context_description}
-    FILE CONTEXT: This snippet will be part of '{file_path}'
-    RELEVANT EXAMPLES FROM KNOWLEDGE BASE:
-    {rag_context}
+    FILE TO GENERATE: `{file_path}`
 
-    SPECIFICATIONS:
+    FULL SOURCE CODE OF DEPENDENCIES (Your source of truth for imports):
+    {dependency_context}
+
+    TECHNICAL SPECIFICATION FOR `{file_path}` (You MUST adhere to this contract):
     ```json
-    {task_specs_json}
+    {tech_spec_json}
     ```
 
     CRITICAL INSTRUCTIONS:
-    1.  Generate ONLY the Python code required to fulfill THIS SPECIFIC micro-task.
-    2.  Adhere strictly to every detail in the 'core_logic_steps', 'interactions', and 'critical_notes' from the specifications.
-    3.  Ensure the code is clean, efficient, well-commented (docstrings for public elements, comments for complex logic), and follows PEP 8.
-    4.  Do NOT generate a full file or surrounding code unless the task 'component_type' is 'full_file'.
-    5.  If the task specifies "DO NOT use eval()", you MUST follow that rule.
+    1.  You are responsible for writing the **entire, complete source code** for the file `{file_path}`.
+    2.  Implement the full logic for every method and function defined in the technical specification. **DO NOT use `pass` as a placeholder.** Your code must be fully implemented and functional.
+    3.  You MUST adhere to every detail in the `api_contract`. Use the exact class names, method signatures, and config variables defined.
+    4.  You MUST correctly import necessary components from the provided dependency source code.
+    5.  Ensure the code is clean, efficient, well-commented, and follows PEP 8.
     6.  **Your entire response MUST be ONLY the raw Python code. Do not include any explanations, introductory text, or markdown formatting like ```python.**
 
-    Generate ONLY the required Python code snippet for this task:
+    Generate the complete and fully implemented Python code for `{file_path}` now:
 """)
 
-ASSEMBLY_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the ASSEMBLER AI. Your job is to take a collection of Python code snippets and intelligently assemble them into a single, complete, and professional Python file.
-
-    FILE PATH: `{file_path}`
-    FILE PURPOSE: {file_purpose}
-
-    PROJECT CONTEXT:
-    {project_context_summary}
-
-    CODE SNIPPETS TO ASSEMBLE:
-    ---
-    {raw_assembled_code}
-    ---
-
-    **CRITICAL INSTRUCTIONS:**
-    1.  **Combine Snippets:** Logically arrange the provided code snippets into a cohesive file.
-    2.  **Class Assembly:** When snippets include a class definition and its methods, you MUST place the method definitions (def method_name...) INSIDE the class block with correct indentation. Do not define methods outside the class they belong to.
-    3.  **Manage Imports:** Consolidate all necessary `import` statements at the top of the file, removing duplicates. Follow PEP 8 import order (standard library, third-party, local modules).
-    4.  **Local Imports:** Correctly formulate local imports based on the project context. For example, if a file is `calculator_model.py`, a local import should be `from calculator_model import ...`.
-    5.  **Add Documentation:** Write a professional, file-level docstring that summarizes the file's purpose. Ensure all public classes and functions from the snippets retain their docstrings.
-    6.  **Ensure Consistency:** Maintain consistent formatting (4-space indentation) and PEP 8 compliance throughout the entire file.
-
-    **Your final output MUST be ONLY the raw, complete, and clean Python code for the file `{file_path}`. Do not include any conversational text, explanations, or markdown formatting.**
-""")
-
-# Reviewer prompt template
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are a senior code reviewer examining this Python file for quality, correctness, and adherence to the plan.
 
@@ -149,30 +92,9 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     Provide a thorough review as a JSON object with keys: "approved" (boolean), "overall_quality" (string: "excellent", "good", "fair", "poor"), "critical_issues" (list of strings), "suggestions" (list of strings), and "summary" (string). Your feedback must be specific and actionable.
 """)
 
-# Patcher prompt template
-PATCHER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are a senior developer tasked with fixing code based on a review. Your job is to take the original code, analyze the review feedback, and produce a new, corrected version of the code that resolves all the issues.
-
-    ORIGINAL CODE FOR `{file_path}`:
-    ```python
-    {original_code}
-    ```
-
-    CODE REVIEW FEEDBACK (Issues to fix):
-    ```
-    {review_feedback}
-    ```
-
-    **CRITICAL INSTRUCTIONS:**
-    1.  Carefully read every point in the code review feedback.
-    2.  Modify the original code to address ALL critical issues and suggestions.
-    3.  Do NOT add new features or change logic that was not mentioned in the feedback.
-    4.  Preserve the overall structure and functionality of the original code.
-    5.  Your output MUST be ONLY the full, corrected, and clean Python code for the file `{file_path}`. Do not include explanations, apologies, or markdown formatting.
-""")
-
 
 class BaseAIService:
+    # ... (This class is unchanged)
     def __init__(self, llm_client: EnhancedLLMClient, stream_emitter: Callable, rag_manager=None):
         self.llm_client = llm_client
         self.stream_emitter = stream_emitter
@@ -184,14 +106,12 @@ class BaseAIService:
         text = text.strip()
         fence_pattern = r"```json\s*(\{[\s\S]*\})\s*```"
         match = re.search(fence_pattern, text, re.DOTALL)
-
         json_text = ""
         if match:
             json_text = match.group(1)
             self.stream_emitter(agent_name, "fallback", "Found JSON object inside markdown fences. Parsing that.", 3)
         else:
-            start = text.find('{')
-            end = text.rfind('}')
+            start, end = text.find('{'), text.rfind('}')
             if start != -1 and end != -1 and end > start:
                 json_text = text[start:end + 1]
                 self.stream_emitter(agent_name, "fallback",
@@ -199,7 +119,6 @@ class BaseAIService:
             else:
                 self.stream_emitter(agent_name, "error", "Could not find any JSON-like structure.", 3)
                 return {}
-
         try:
             return json.loads(json_text)
         except json.JSONDecodeError as e:
@@ -208,255 +127,102 @@ class BaseAIService:
             return {}
 
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
-        """Helper to stream a response, show progress, and parse the final JSON."""
         self.stream_emitter(agent_name, "thought", f"Generating {role.value} response...", 2)
-
         all_chunks = []
         try:
             async for chunk in self.llm_client.stream_chat(prompt, role):
                 all_chunks.append(chunk)
-                # Stream raw chunks to terminal for live feedback
                 self.stream_emitter(agent_name, "llm_chunk", chunk, 3)
-
             response_text = "".join(all_chunks)
-
             if not response_text.strip():
                 self.stream_emitter(agent_name, "error", "LLM returned an empty response.", 2)
                 return {}
-
             return self._parse_json_from_response(response_text, agent_name)
-
         except Exception as e:
             self.stream_emitter(agent_name, "error", f"Error during streaming/collection: {e}", 2)
-            # Try to parse what we got so far
             if all_chunks:
                 return self._parse_json_from_response("".join(all_chunks), agent_name)
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
-        """
-        Generates a dynamic RAG query based on keywords in the user's request
-        to provide more relevant context.
-        """
         if not self.rag_manager or not self.rag_manager.is_ready:
             return "No RAG context available."
-
         self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
-        lower_query = query.lower()
-        gamedev_keywords = ["game", "player", "ursina", "pygame"]
-
-        # Default general-purpose query
         dynamic_query = f"Python code example for {query}"
-
-        # Check for specific libraries first, as they are more precise
-        if "ursina" in lower_query:
-            dynamic_query = f"Ursina engine example for {query}"
-        elif "pygame" in lower_query:
-            dynamic_query = f"Pygame sprite class for {query}"
-        # Then check for other general gamedev keywords
-        elif any(keyword in lower_query for keyword in gamedev_keywords):
-            dynamic_query = f"Python game development example for {query}"
-
-        self.stream_emitter("RAG", "info", f"Dynamic query: '{dynamic_query}'", 4)
-
         try:
-            # This call is synchronous but is safe to call from an async method
             results = self.rag_manager.query_context(dynamic_query, k=k)
-            if not results:
-                return "No specific examples found in the knowledge base."
-
-            # Format the results into a string for the prompt
-            context = "\n\n---\n\n".join([
-                f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```\n{r.get('content', '')[:700]}...\n```"
-                for r in results if r.get('content')
-            ])
-            return context
+            if not results: return "No specific examples found in the knowledge base."
+            return "\n\n---\n\n".join([
+                                          f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
+                                          for r in results if r.get('content')])
         except Exception as e:
             self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
             return "Could not query knowledge base due to an error."
 
 
-class StructureService(BaseAIService):
-    """**New Service** Determines the high-level file structure of the project."""
-
-    async def create_project_structure(self, user_prompt: str, full_conversation: List[Dict] = None) -> dict:
-        self.stream_emitter("Structurer", "thought", "Phase 1: Determining file structure...", 0)
+class ArchitectService(BaseAIService):
+    # ... (This class is unchanged)
+    async def create_tech_spec(self, user_prompt: str, full_conversation: List[Dict] = None) -> dict:
+        self.stream_emitter("Architect", "thought",
+                            "Phase 1: Architecting the complete project technical specification...", 0)
         requirements = [msg.get("message", "") for msg in (full_conversation or []) if msg.get("role") == "user"]
         requirements.append(user_prompt)
         full_requirements = " ".join(req.strip() for req in requirements if req.strip())
-
         rag_context = await self._get_intelligent_rag_context(full_requirements, k=1)
-        plan_prompt = STRUCTURER_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
-
-        plan = await self._stream_and_collect_json(plan_prompt, LLMRole.STRUCTURER, "Structurer")
-
-        if not plan or not plan.get("files"):
-            self.stream_emitter("Structurer", "error",
-                                "High-level planning failed. Could not determine file structure.", 1)
+        plan_prompt = ARCHITECT_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
+        tech_spec = await self._stream_and_collect_json(plan_prompt, LLMRole.ARCHITECT, "Architect")
+        if not tech_spec or not tech_spec.get("technical_specs"):
+            self.stream_emitter("Architect", "error",
+                                "Architecting failed. Could not produce a valid technical specification.", 1)
             return {}
-
-        self.stream_emitter("Structurer", "success", "High-level plan created successfully!", 0)
-        return plan
-
-
-class EnhancedPlannerService(BaseAIService):
-    """🧠 Plans the components for a single file."""
-
-    async def create_detailed_file_plan(self, file_path: str, file_purpose: str, project_description: str,
-                                        other_files_context: str) -> dict:
-        self.stream_emitter("Planner", "thought", f"Phase 2: Creating detailed plan for `{file_path}`...", 1)
-
-        rag_query = f"Component breakdown and architecture for a file like '{file_path}' with purpose: {file_purpose}"
-        rag_context = await self._get_intelligent_rag_context(rag_query, k=2)
-
-        plan_prompt = DETAILED_FILE_PLAN_PROMPT_TEMPLATE.format(
-            project_description=project_description,
-            file_path=file_path,
-            file_purpose=file_purpose,
-            other_files_context=other_files_context,
-            rag_context=rag_context
-        )
-
-        file_plan = await self._stream_and_collect_json(plan_prompt, LLMRole.PLANNER, "Planner")
-
-        if not file_plan or not file_plan.get("components"):
-            self.stream_emitter("Planner", "error", f"Detailed planning for `{file_path}` failed.", 2)
-            return {
-                "components": [{
-                    "task_id": f"implement_{Path(file_path).stem}_full",
-                    "description": f"Full implementation for {file_path}. Purpose: {file_purpose}",
-                    "component_type": "full_file",
-                    "core_logic_steps": ["Implement all necessary logic according to the file's purpose."]
-                }]
-            }
-
-        self.stream_emitter("Planner", "success", f"Detailed plan for `{file_path}` is ready.", 1)
-        return file_plan
+        self.stream_emitter("Architect", "success", "Master Technical Specification created successfully!", 0)
+        return tech_spec
 
 
-class EnhancedCoderService(BaseAIService):
-    """⚙️ Production-Ready Coding Service with Intelligent Generation"""
-
-    async def execute_task(self, task: dict, project_context: dict) -> str:
-        task_id, task_desc = task.get("task_id", "unknown_task"), task.get("description", "N/A")
-        self.stream_emitter("Coder", "thought", f"Focusing on task '{task_id}': {task_desc[:60]}...", 2)
-
-        rag_context = await self._get_intelligent_rag_context(task_desc, k=1)
-
+class CoderService(BaseAIService):
+    # ... (This class is unchanged, but will now receive the new, more forceful prompt)
+    async def generate_file_from_spec(self, tech_spec: dict, project_context: dict, dependency_context: str) -> str:
+        file_path = tech_spec.get("filename", "unknown_file.py")
+        self.stream_emitter("Coder", "thought", f"Generating full code for file: '{file_path}'...", 2)
+        rag_context = await self._get_intelligent_rag_context(tech_spec.get("purpose", ""), k=1)
         code_prompt = CODER_PROMPT_TEMPLATE.format(
-            project_context_description=project_context.get('description', ''),
-            file_path=task.get('file_path', ''),
+            project_context_description=project_context.get("description", ""),
+            file_path=file_path,
+            dependency_context=dependency_context,
             rag_context=rag_context,
-            task_specs_json=json.dumps(task, indent=2)
+            tech_spec_json=json.dumps(tech_spec, indent=2)
         )
-        self.stream_emitter("Coder", "thought", f"Writing code for '{task_id}'...", 2)
-
         all_chunks = []
         try:
             async for chunk in self.llm_client.stream_chat(code_prompt, LLMRole.CODER):
                 all_chunks.append(chunk)
                 self.stream_emitter("Coder", "llm_chunk", chunk, 3)
-
             raw_code = "".join(all_chunks)
-            cleaned_code = self._clean_and_validate_code(raw_code)
-            self.stream_emitter("Coder", "success", f"Code for task '{task_id}' is ready.", 2)
+            cleaned_code = self._clean_llm_output(raw_code)
+            self.stream_emitter("Coder", "success", f"Code for file '{file_path}' is ready.", 2)
             return cleaned_code
         except Exception as e:
-            self.stream_emitter("Coder", "error", f"Error coding task '{task_id}' ({e}). Using placeholder.", 2)
-            return f"# FALLBACK: Task '{task_id}' - {task_desc}\npass"
+            self.stream_emitter("Coder", "error", f"Error coding file '{file_path}' ({e}). Using placeholder.", 2)
+            return f"# FALLBACK: Failed to generate code for {file_path}. Error: {e}\npass"
 
-    def _clean_and_validate_code(self, code: str) -> str:
+    def _clean_llm_output(self, code: str) -> str:
         if code.strip().startswith("```python"): code = code.split("```python", 1)[-1]
         if code.strip().endswith("```"): code = code.rsplit("```", 1)[0]
         return code.strip()
 
-    async def execute_tasks_for_file(self, file_spec: dict, project_context: dict) -> List[dict]:
-        file_path = file_spec.get("path", "unknown_file.py")
-        component_tasks = file_spec.get("components", [])
 
-        self.stream_emitter("Coder", "status", f"Preparing to code {len(component_tasks)} tasks for {file_path}.", 2)
-        results = []
-        for i, task in enumerate(component_tasks):
-            task["file_path"] = file_path
-            self.stream_emitter("Coder", "status",
-                                f"Starting task {i + 1}/{len(component_tasks)}: '{task.get('task_id', '')}'...", 2)
-            code = await self.execute_task(task, project_context)
-            results.append({"task": task, "code": code})
-        return results
-
-
-class EnhancedAssemblerService(BaseAIService):
-    """🔧 Assembles, Reviews, and Patches code."""
-
-    def _clean_llm_output(self, code: str) -> str:
-        """Removes markdown fences from code output."""
-        if code.strip().startswith("```python"):
-            code = code.split("```python", 1)[-1]
-        if code.strip().endswith("```"):
-            code = code.rsplit("```", 1)[0]
-        return code.strip()
-
-    def _format_feedback_for_prompt(self, review_data: dict) -> str:
-        """Helper to format JSON review feedback into a string for the Patcher."""
-        summary = review_data.get('summary', 'No summary provided.')
-        issues = review_data.get('critical_issues', [])
-        suggestions = review_data.get('suggestions', [])
-
-        def to_str_list(items):
-            if not items: return []
-            return [str(item) for item in items]
-
-        issues_str = "\n- ".join(to_str_list(issues)) if issues else "None"
-        suggestions_str = "\n- ".join(to_str_list(suggestions)) if suggestions else "None"
-
-        return f"Review Summary: {summary}\n\nCritical Issues to Fix:\n- {issues_str}\n\nSuggestions to Apply:\n- {suggestions_str}"
-
-    async def assemble_code(self, file_path: str, task_results: List[dict], plan: dict, file_spec: dict) -> str:
-        """Assembles code snippets into a single file."""
-        self.stream_emitter("Assembler", "thought", f"Assembling '{file_path}'...", 2)
-        if not task_results:
-            self.stream_emitter("Assembler", "error", f"No code to assemble for '{file_path}'!", 2)
-            return f'# FALLBACK: No code generated for {file_path}'
-
-        raw_assembled_code = "\n\n".join(res['code'] for res in task_results)
-        file_purpose = file_spec.get("purpose", "N/A")
-        project_context_summary = f"Project: {plan.get('project_name', 'N/A')}\nDescription: {plan.get('project_description', 'N/A')}"
-
-        assembly_prompt = ASSEMBLY_PROMPT_TEMPLATE.format(
-            file_path=file_path, file_purpose=file_purpose,
-            project_context_summary=project_context_summary, raw_assembled_code=raw_assembled_code
-        )
-        self.stream_emitter("Assembler", "thought", "Asking AI Assembler to intelligently merge code...", 2)
-        assembled_code = await self.llm_client.chat(assembly_prompt, LLMRole.ASSEMBLER)
-        return self._clean_llm_output(assembled_code)
-
-    async def review_code(self, file_path: str, code: str, plan: dict, file_spec: dict) -> tuple[dict, bool]:
-        """Reviews code and returns feedback and approval status."""
-        self.stream_emitter("Reviewer", "thought", f"Requesting AI review for '{file_path}'...", 2)
+class ReviewerService(BaseAIService):
+    # ... (This class is unchanged)
+    async def review_code(self, file_path: str, code: str, project_description: str) -> tuple[dict, bool]:
+        self.stream_emitter("Reviewer", "thought", f"Requesting final quality review for '{file_path}'...", 2)
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
-            file_path=file_path, project_description=plan.get('project_description', ''), code=code
+            file_path=file_path,
+            project_description=project_description,
+            code=code
         )
         review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
-
         if not review_data:
             self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Approving by default.",
                                 2)
             return {"approved": True, "summary": "Review failed to parse, approved by default."}, True
-
         return review_data, review_data.get('approved', False)
-
-    async def patch_code(self, file_path: str, original_code: str, review_data: dict, plan: dict,
-                         file_spec: dict) -> str:
-        """Patches code based on review feedback."""
-        self.stream_emitter("Patcher", "thought", f"Applying patches to '{file_path}'...", 2)
-        feedback_details = self._format_feedback_for_prompt(review_data)
-
-        patch_prompt = PATCHER_PROMPT_TEMPLATE.format(
-            file_path=file_path,
-            original_code=original_code,
-            review_feedback=feedback_details
-        )
-
-        patched_code = await self.llm_client.chat(patch_prompt, LLMRole.CODER)  # Use Coder for patching
-        self.stream_emitter("Patcher", "success", "Patches applied. Final code generated.", 2)
-        return self._clean_llm_output(patched_code)

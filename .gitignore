@@ -16,3 +16,6 @@ __pycache__/
 /workspace/
 !/launcher.spec
 !/main_app.spec
+/dist/AvA_Launcher_Distribution/
+/launcher.spec
+/main_app.spec

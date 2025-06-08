@@ -1,8 +1,7 @@
-# core/llm_client.py - FIXED ASYNC GENERATOR CLEANUP
+# core/llm_client.py - V4 with consolidated Architect Role
 
 import os
 from pathlib import Path
-
 import requests
 import json
 import asyncio
@@ -11,13 +10,11 @@ from enum import Enum
 
 
 class LLMRole(Enum):
-    """Different AI roles that require different models"""
-    STRUCTURER = "structurer"  # NEW: For high-level file structure
-    PLANNER = "planner"  # High-level planning, requires reasoning
-    CODER = "coder"  # Code generation, can use specialized models
-    ASSEMBLER = "assembler"  # Code assembly, similar to coder
-    REVIEWER = "reviewer"  # Code review, requires reasoning
-    CHAT = "chat"  # General chat, flexible model
+    """The core AI specialist roles for the V4 workflow."""
+    ARCHITECT = "architect"  # Merged role for Structurer and Planner
+    CODER = "coder"  # Generates code for a single file based on a spec
+    REVIEWER = "reviewer"  # Performs a final quality check
+    CHAT = "chat"  # Handles general user conversation
 
 
 class ModelConfig:
@@ -37,59 +34,55 @@ class ModelConfig:
 
 class EnhancedLLMClient:
     """
-    Enhanced LLM client supporting multiple models for different AI roles
-    Optimizes cost by using appropriate models for each task
-    Supports individual personalities for each AI role.
+    Enhanced LLM client supporting multiple models for different AI roles.
     """
 
     def __init__(self):
         self.models: Dict[str, ModelConfig] = {}
-        self.role_assignments: Dict[LLMRole, str] = {}  # Keys are LLMRole Enum members
-        self.personalities: Dict[LLMRole, str] = {}  # Keys are LLMRole Enum members
+        self.role_assignments: Dict[LLMRole, str] = {}
+        self.personalities: Dict[LLMRole, str] = {}
         self._initialize_models()
-        self._load_personalities_from_config()  # Load from JSON first
-        self._initialize_default_personalities()  # Then fill in missing with hardcoded
+        self._load_personalities_from_config()
+        self._initialize_default_personalities()
         self._assign_roles()
 
     def _load_personalities_from_config(self):
-        """Load personalities from personality_presets.json for initial setup."""
+        """Load personalities from personality_presets.json."""
         try:
             presets_file = Path("config") / "personality_presets.json"
             if presets_file.exists():
                 with open(presets_file, 'r', encoding='utf-8') as f:
                     all_presets_data = json.load(f)
-
                 for role_str, presets_list in all_presets_data.items():
                     try:
-                        role_enum = LLMRole(role_str)  # Convert string role to enum
-                        if presets_list:  # Take the first preset for this role as the default
-                            # Prioritize user-created, then built-in if multiple exist
+                        # Map old roles to new ones for compatibility
+                        if role_str in ["planner", "structurer", "architect"]:
+                            role_enum = LLMRole.ARCHITECT
+                        elif role_str in ["assembler", "coder"]:
+                            role_enum = LLMRole.CODER
+                        else:
+                            role_enum = LLMRole(role_str)
+
+                        if presets_list:
                             user_preset = next((p for p in presets_list if p.get("author", "User") == "User"), None)
                             preset_to_load = user_preset or presets_list[0]
-
                             self.personalities[role_enum] = preset_to_load["personality"]
-                            print(
-                                f"Loaded personality for {role_enum.value} from preset: {preset_to_load['name']}")
-
-                    except ValueError:
-                        print(f"Warning: Unknown role '{role_str}' in personality_presets.json")
+                    except (ValueError, KeyError):
+                        continue
         except Exception as e:
             print(f"Error loading personalities from config: {e}")
 
     def _initialize_default_personalities(self):
-        """Initialize default personalities if not loaded from config."""
+        """Initialize default personalities for the new role structure."""
         default_personalities_map = {
-            LLMRole.STRUCTURER: "You are the STRUCTURER AI. Your only job is to determine a project's file structure based on a user request and output it as a simple JSON object.",
-            LLMRole.PLANNER: "You are a senior software architect with 15+ years of experience. You think strategically, break down complex problems into clear steps, and always consider scalability and maintainability. You communicate clearly and provide detailed technical specifications.",
-            LLMRole.CODER: "You are a coding specialist who writes clean, efficient, and well-documented code. You follow best practices, use proper error handling, and write code that is both functional and elegant. You focus on getting things done with high quality.",
-            LLMRole.ASSEMBLER: "You are a meticulous code integrator who ensures all pieces work together seamlessly. You have an eye for detail, maintain consistent code style, and create professional, production-ready files with proper organization and documentation.",
-            LLMRole.REVIEWER: "You are a detail-oriented code reviewer. Your primary goal is to ensure code quality, adherence to best practices, security, and performance. Provide constructive feedback and clear justifications for any issues found.",
-            LLMRole.CHAT: "You are AvA, a friendly and helpful AI development assistant. Engage in natural conversation and guide users through their development tasks."
+            LLMRole.ARCHITECT: "You are the ARCHITECT AI, a master software architect. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.",
+            LLMRole.CODER: "You are an expert Python developer. Your task is to generate a single, complete, and production-ready Python file based on a strict Technical Specification and the full source code of its dependencies.",
+            LLMRole.REVIEWER: "You are a senior code reviewer. Your primary goal is to ensure the generated code is of high quality, correct, and adheres to the technical specification. Provide a final 'approved' status and a brief summary.",
+            LLMRole.CHAT: "You are AvA, a friendly and helpful AI development assistant."
         }
         for role_enum, personality_text in default_personalities_map.items():
-            if role_enum not in self.personalities:  # Only set if not already loaded from JSON
+            if role_enum not in self.personalities:
                 self.personalities[role_enum] = personality_text
-                print(f"Initialized hardcoded default personality for {role_enum.value}")
 
     def _initialize_models(self):
         """Initialize available models with their configurations"""
@@ -97,31 +90,30 @@ class EnhancedLLMClient:
             self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
                 provider="gemini", model="gemini-2.5-pro-preview-06-05", api_key=os.getenv("GEMINI_API_KEY"),
                 temperature=0.3, max_tokens=8000,
-                suitable_roles=[LLMRole.STRUCTURER, LLMRole.PLANNER, LLMRole.REVIEWER, LLMRole.CHAT]
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
                 provider="gemini", model="gemini-2.5-flash-preview-05-20", api_key=os.getenv("GEMINI_API_KEY"),
                 temperature=0.2, max_tokens=8000,
-                suitable_roles=[LLMRole.ASSEMBLER, LLMRole.CODER, LLMRole.CHAT]
+                suitable_roles=[LLMRole.CODER, LLMRole.CHAT]
             )
-        # ... (rest of model initialization is the same)
         if os.getenv("ANTHROPIC_API_KEY"):
             self.models["claude-3-5-sonnet-20240620"] = ModelConfig(
                 provider="anthropic", model="claude-3-5-sonnet-20240620", api_key=os.getenv("ANTHROPIC_API_KEY"),
                 temperature=0.3, max_tokens=4000,
-                suitable_roles=[LLMRole.STRUCTURER, LLMRole.PLANNER, LLMRole.REVIEWER, LLMRole.CHAT, LLMRole.CODER]
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER, LLMRole.CHAT, LLMRole.CODER]
             )
 
         if os.getenv("OPENAI_API_KEY"):
             self.models["gpt-4o"] = ModelConfig(
                 provider="openai", model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"),
                 temperature=0.3, max_tokens=4000,
-                suitable_roles=[LLMRole.STRUCTURER, LLMRole.PLANNER, LLMRole.REVIEWER, LLMRole.CHAT, LLMRole.CODER]
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER, LLMRole.CHAT, LLMRole.CODER]
             )
             self.models["gpt-4o-mini"] = ModelConfig(
                 provider="openai", model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"),
                 temperature=0.2, max_tokens=16000,
-                suitable_roles=[LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.CHAT]
+                suitable_roles=[LLMRole.CODER, LLMRole.CHAT]
             )
 
         try:
@@ -134,33 +126,28 @@ class EnhancedLLMClient:
                     ollama_key = f"ollama-{model_name}"
                     current_suitable_roles = [LLMRole.CHAT]
                     temp = 0.3
-                    if "coder" in model_name.lower() or "starcoder" in model_name.lower() or "codellama" in model_name.lower():
-                        current_suitable_roles.extend([LLMRole.CODER, LLMRole.ASSEMBLER])
+                    if any(kw in model_name.lower() for kw in ["coder", "starcoder", "codellama"]):
+                        current_suitable_roles.append(LLMRole.CODER)
                         temp = 0.1
-                    elif any(kw in model_name.lower() for kw in ["qwen", "llama", "mistral", "mixtral"]):
-                        current_suitable_roles.extend(
-                            [LLMRole.STRUCTURER, LLMRole.PLANNER, LLMRole.REVIEWER, LLMRole.CODER, LLMRole.ASSEMBLER])
+                    if any(kw in model_name.lower() for kw in ["qwen", "llama", "mistral", "mixtral"]):
+                        current_suitable_roles.extend([LLMRole.ARCHITECT, LLMRole.REVIEWER])
                     self.models[ollama_key] = ModelConfig(
                         provider="ollama", model=model_name, base_url=ollama_base_url,
                         temperature=temp, max_tokens=4000,
                         suitable_roles=list(set(current_suitable_roles))
                     )
         except requests.exceptions.RequestException:
-            pass  # Silently fail if ollama is not running
+            pass
         except Exception as e:
             print(f"Error during Ollama model discovery: {e}")
 
     def _assign_roles(self):
-        """
-        Assigns a fixed, hardcoded set of models to each role for consistent testing.
-        """
-        print("Assigning hardcoded models for consistent testing...")
+        """Assigns default models to the new, consolidated roles."""
+        print("Assigning default models for consolidated roles...")
 
-        fixed_assignments = {
-            LLMRole.STRUCTURER: "gemini-2.5-pro-preview-06-05",  # Structuring is important, use the best model.
-            LLMRole.PLANNER: "gemini-2.5-pro-preview-06-05",
-            LLMRole.CODER: "ollama-codellama:13b",  # As requested, for specialized coding
-            LLMRole.ASSEMBLER: "gemini-2.5-flash-preview-05-20",
+        default_assignments = {
+            LLMRole.ARCHITECT: "gemini-2.5-pro-preview-06-05",
+            LLMRole.CODER: "ollama-codellama:13b",
             LLMRole.REVIEWER: "gemini-2.5-pro-preview-06-05",
             LLMRole.CHAT: "gemini-2.5-flash-preview-05-20"
         }
@@ -168,31 +155,18 @@ class EnhancedLLMClient:
         self.role_assignments = {}
         available_model_keys = list(self.models.keys())
 
-        for role, primary_model_key in fixed_assignments.items():
+        for role, primary_model_key in default_assignments.items():
             if primary_model_key in self.models:
                 self.role_assignments[role] = primary_model_key
-                print(f"✅ Assigned {primary_model_key} to role {role.value}")
             else:
-                # Fallback logic
-                fallback_found = False
-                # Try to find any other suitable model
-                for model_key in available_model_keys:
-                    if role in self.models[model_key].suitable_roles:
-                        self.role_assignments[role] = model_key
-                        print(
-                            f"⚠️ Model '{primary_model_key}' not found. Falling back to suitable model {model_key} for role {role.value}.")
-                        fallback_found = True
-                        break
-
-                if not fallback_found:
-                    # If still no suitable model, assign first available model as last resort
-                    if available_model_keys:
-                        self.role_assignments[role] = available_model_keys[0]
-                        print(
-                            f"⚠️ Models '{primary_model_key}' and other suitable models not found. Falling back to first available model {available_model_keys[0]} for role {role.value}.")
-                    else:
-                        self.role_assignments[role] = None
-                        print(f"❌ FATAL: No models available. Role {role.value} is unassigned.")
+                fallback_found = next((key for key in available_model_keys if role in self.models[key].suitable_roles),
+                                      None)
+                if fallback_found:
+                    self.role_assignments[role] = fallback_found
+                elif available_model_keys:
+                    self.role_assignments[role] = available_model_keys[0]
+                else:
+                    self.role_assignments[role] = None
 
         self._apply_temperatures_from_presets()
 
@@ -207,121 +181,85 @@ class EnhancedLLMClient:
             for role_str, presets_list in all_presets_data.items():
                 try:
                     role_enum = LLMRole(role_str)
-                    # Find the active preset for the role (User-created takes precedence)
                     user_preset = next((p for p in presets_list if p.get("author", "User") == "User"), None)
                     preset_to_load = user_preset or (presets_list[0] if presets_list else None)
 
                     if preset_to_load and "temperature" in preset_to_load:
-                        # Apply temperature to the model currently assigned to this role
                         assigned_model_key = self.role_assignments.get(role_enum)
                         if assigned_model_key and assigned_model_key in self.models:
                             self.models[assigned_model_key].temperature = float(preset_to_load["temperature"])
-
                 except (ValueError, KeyError):
                     continue
         except Exception as e:
             print(f"Note: Could not apply initial temperatures from presets: {e}")
 
-    # The rest of the file (get_role_model, chat, stream_chat, etc.) remains unchanged
-    # ... (paste the rest of the existing llm_client.py content here)
     def get_role_model(self, role: LLMRole) -> Optional[ModelConfig]:
-        """Get the assigned model for a specific role (role is LLMRole enum member)"""
+        """Get the assigned model for a specific role."""
         model_name = self.role_assignments.get(role)
         if model_name:
             return self.models.get(model_name)
         print(f"Warning: No model assigned for role {role.value}")
+        # Fallback to chat model if the requested role is unassigned but chat is
+        if role != LLMRole.CHAT:
+            return self.get_role_model(LLMRole.CHAT)
         return None
 
     def get_role_assignments(self) -> Dict[str, str]:
-        """Get current role assignments for display (keys are role strings)"""
+        """Get current role assignments for display."""
         return {role_enum.value: model_name for role_enum, model_name in self.role_assignments.items()}
 
     async def chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> str:
-        model_config = self.get_role_model(role)  # role is LLMRole enum
-        personality = self.personalities.get(role, "")  # role is LLMRole enum
+        model_config = self.get_role_model(role)
+        personality = self.personalities.get(role, "")
 
         if not model_config:
-            print(f"Error: No model configured for role {role.value}. Using fallback response.")
             return self._fallback_response(prompt, role)
 
-        # print(
-        #     f"Role: {role.value} using Model: {model_config.provider}/{model_config.model} (Temp: {model_config.temperature}) with Personality: '{personality[:30]}...'")
         try:
-            if model_config.provider == "gemini":
-                return await self._call_gemini(prompt, model_config, personality)
-            elif model_config.provider == "openai":
-                return await self._call_openai(prompt, model_config, personality)
-            elif model_config.provider == "anthropic":
-                return await self._call_anthropic(prompt, model_config, personality)
-            elif model_config.provider == "ollama":
-                return await self._call_ollama(prompt, model_config, personality)
-            elif model_config.provider == "deepseek":
-                return await self._call_deepseek(prompt, model_config, personality)
+            provider_map = {
+                "gemini": self._call_gemini, "openai": self._call_openai,
+                "anthropic": self._call_anthropic, "ollama": self._call_ollama,
+                "deepseek": self._call_deepseek
+            }
+            if model_config.provider in provider_map:
+                return await provider_map[model_config.provider](prompt, model_config, personality)
             else:
-                print(
-                    f"Error: Unknown provider {model_config.provider} for role {role.value}")
-                return self._fallback_response(
-                    prompt, role)
+                return self._fallback_response(prompt, role)
         except Exception as e:
-            print(f"API call with {model_config.provider}/{model_config.model} for role {role.value} failed: {e}")
-            if role != LLMRole.CHAT:  # Try fallback
-                chat_model_config = self.get_role_model(LLMRole.CHAT)
-                if chat_model_config and chat_model_config.model != model_config.model:
-                    try:
-                        return await self.chat(prompt, LLMRole.CHAT)  # Recurse with CHAT role
-                    except Exception as e_chat:
-                        print(f"Fallback to CHAT model failed: {e_chat}")
+            print(f"API call with {model_config.provider} for role {role.value} failed: {e}")
             return self._fallback_response(prompt, role)
 
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
-        model_config = self.get_role_model(role)  # role is LLMRole enum
-        personality = self.personalities.get(role, "")  # role is LLMRole enum
+        model_config = self.get_role_model(role)
+        personality = self.personalities.get(role, "")
 
         if not model_config:
-            print(f"Error: No model for role {role.value} for streaming. Fallback.")
             yield self._fallback_response(prompt, role)
             return
 
-        # print(
-        #     f"Streaming - Role: {role.value} Model: {model_config.provider}/{model_config.model} (Temp: {model_config.temperature}) Pers: '{personality[:30]}...'")
-
         stream_generator = None
         try:
-            if model_config.provider == "gemini":
-                stream_generator = self._stream_gemini(prompt, model_config, personality)
-            elif model_config.provider == "openai":
-                stream_generator = self._stream_openai(prompt, model_config, personality)
-            elif model_config.provider == "anthropic":
-                stream_generator = self._stream_anthropic(prompt, model_config, personality)
-            elif model_config.provider == "ollama":
-                stream_generator = self._stream_ollama(prompt, model_config, personality)
-            elif model_config.provider == "deepseek":
-                stream_generator = self._stream_deepseek(prompt, model_config, personality)
+            provider_map = {
+                "gemini": self._stream_gemini, "openai": self._stream_openai,
+                "anthropic": self._stream_anthropic, "ollama": self._stream_ollama,
+                "deepseek": self._stream_deepseek
+            }
+            if model_config.provider in provider_map:
+                stream_generator = provider_map[model_config.provider](prompt, model_config, personality)
+                async for chunk in stream_generator:
+                    yield chunk
             else:
-                print(f"Error: Unknown provider {model_config.provider} for streaming.")
                 yield self._fallback_response(prompt, role)
-                return
-
-            async for chunk in stream_generator:
-                yield chunk
-
-        except GeneratorExit:
-            if stream_generator and hasattr(stream_generator, 'aclose'):
-                try:
-                    await stream_generator.aclose()
-                except Exception:
-                    pass
-            raise
         except Exception as e:
             print(f"Streaming API call for role {role.value} failed: {e}")
             yield self._fallback_response(prompt, role)
         finally:
             if stream_generator and hasattr(stream_generator, 'aclose'):
-                try:
-                    await stream_generator.aclose()
-                except Exception:
-                    pass
+                await stream_generator.aclose()
 
+    # --- Private API Call Methods ---
+    # These methods remain unchanged, just collapse them for readability if you like.
+    # _call_gemini, _stream_gemini, _call_openai, _stream_openai, etc.
     async def _call_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         import aiohttp
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
@@ -523,12 +461,10 @@ class EnhancedLLMClient:
                 await session.close()
 
     async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        # This implementation is a placeholder, assuming DeepSeek has a similar API to OpenAI
         return await self._call_openai(prompt, config, personality)
 
     async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
         str, None]:
-        # This implementation is a placeholder, assuming DeepSeek has a similar API to OpenAI
         async for chunk in self._stream_openai(prompt, config, personality):
             yield chunk
 
@@ -536,7 +472,7 @@ class EnhancedLLMClient:
         return f"# AvA Error: No {role.value} LLM available or API call failed.\n# Request: {prompt[:100]}...\n# Check config and API keys."
 
     def get_available_models(self) -> list:
-        """Get list of available models and their roles (keys are LLMRole enums)"""
+        """Get list of available models and their roles."""
         available = []
         if not self.role_assignments: return ["No models assigned to roles yet."]
         for role_enum, model_name_key in self.role_assignments.items():
