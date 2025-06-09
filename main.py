@@ -1,10 +1,10 @@
 # main.py
 import sys
 import asyncio
+import logging
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QCoreApplication  # For aboutToQuit
-import qasync  # Make sure qasync is imported
+import qasync
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -18,28 +18,27 @@ app_quit_future = None  # Global future to signal application quit
 def handle_about_to_quit():
     """Slot to be called when QApplication is about to quit."""
     global app_quit_future
-    print("main.py: QApplication.aboutToQuit signal received.")
+    logging.info("main.py: QApplication.aboutToQuit signal received.")
     if app_quit_future and not app_quit_future.done():
-        print("main.py: Setting result for app_quit_future.")
+        logging.info("main.py: Setting result for app_quit_future.")
         app_quit_future.set_result(True)
     else:
-        print("main.py: app_quit_future is None or already done.")
+        logging.info("main.py: app_quit_future is None or already done.")
 
 
 async def main_async_logic():
     """The main async part of the application startup."""
-    print("main_async_logic: Coroutine started.")
+    logging.info("main_async_logic: Coroutine started.")
     global ava_app_instance_container, app_quit_future
 
-    # Ensure QApplication instance exists before trying to connect to its signals
     app = QApplication.instance()
     if not app:
-        print("main_async_logic: QApplication instance not found. This is unexpected.")
+        logging.error("main_async_logic: QApplication instance not found. This is unexpected.")
         return
 
     app_quit_future = asyncio.Future()
     app.aboutToQuit.connect(handle_about_to_quit)
-    print("main_async_logic: Connected aboutToQuit signal.")
+    logging.info("main_async_logic: Connected aboutToQuit signal.")
 
     ava_app = AvAApplication()
     ava_app_instance_container.append(ava_app)
@@ -54,78 +53,53 @@ async def main_async_logic():
                 rag_status_info = status.get('rag', {})
                 print(f"Status Check (on_fully_initialized) - RAG Info: {rag_status_info}")
             except Exception as e:
-                print(f"Error getting status in on_fully_initialized: {e}", exc_info=True)
+                # Use the logger for exceptions, which is safer
+                logging.error("Error getting status in on_fully_initialized", exc_info=True)
 
     ava_app.fully_initialized_signal.connect(on_fully_initialized)
 
     try:
-        print("main_async_logic: About to call and await ava_app.initialize().")
+        logging.info("main_async_logic: About to call and await ava_app.initialize().")
         await ava_app.initialize()
-        print("main_async_logic: ava_app.initialize() completed.")
+        logging.info("main_async_logic: ava_app.initialize() completed.")
 
-        # Now, wait for the application to quit
-        print("main_async_logic: Application initialized. Waiting for quit signal...")
+        logging.info("main_async_logic: Application initialized. Waiting for quit signal...")
         await app_quit_future
-        print("main_async_logic: app_quit_future completed. Application is quitting.")
+        logging.info("main_async_logic: app_quit_future completed. Application is quitting.")
 
     except Exception as e:
-        print(f"main_async_logic: Error during application lifecycle: {e}")
-        import traceback
-        traceback.print_exc()
+        logging.critical(f"main_async_logic: Error during application lifecycle: {e}", exc_info=True)
         if app_quit_future and not app_quit_future.done():
-            app_quit_future.set_exception(e)  # Signal error to the future if it's still pending
+            app_quit_future.set_exception(e)
         if QApplication.instance():
-            QApplication.instance().quit()  # Attempt to quit if an error occurs during init
-        # Do not re-raise here if qasync.run is expected to handle process exit
+            QApplication.instance().quit()
     finally:
-        print("main_async_logic: Exiting.")
+        logging.info("main_async_logic: Exiting.")
 
 
 if __name__ == "__main__":
-    # QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling) # Optional: for High DPI displays
+    # It's important to have logging configured before the app starts for startup issues.
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     app = QApplication(sys.argv)
     app.setApplicationName("AvA")
-    app.setApplicationDisplayName("AvA - AI Development Assistant")
-    app.setApplicationVersion("2.0")
-
-    # It's crucial that the QApplication instance exists before qasync.run,
-    # so that main_async_logic can connect to its signals.
+    app.setApplicationVersion("2.1")
 
     exit_code = 0
     try:
-        print("main.py: About to call qasync.run(main_async_logic()).")
+        logging.info("main.py: About to call qasync.run(main_async_logic()).")
         qasync.run(main_async_logic())
-        print("main.py: qasync.run() has completed.")
-        # qasync.run() blocks until the asyncio loop it manages is stopped.
-        # This happens when main_async_logic completes (due to app_quit_future).
-        # The QApplication might still be running its own event processing briefly.
-        # We usually let Qt handle the final exit code.
-        # If app.exec_() was called inside qasync or if qasync manages exit, this might be redundant.
+        logging.info("main.py: qasync.run() has completed.")
 
-    except SystemExit as e:
-        print(f"main.py: SystemExit caught with code {e.code}")
-        exit_code = e.code if isinstance(e.code, int) else 1
-    except RuntimeError as e:
-        print(f"main.py: Critical RuntimeError: {e}")
-        import traceback
-
-        traceback.print_exc()
-        exit_code = 1  # Indicate an error
     except Exception as e:
-        print(f"main.py: Unhandled top-level exception: {e}")
-        import traceback
-
-        traceback.print_exc()
-        exit_code = 1  # Indicate an error
+        logging.critical(f"main.py: Unhandled top-level exception: {e}", exc_info=True)
+        exit_code = 1
     finally:
-        print("main.py: Main finally block.")
+        logging.info("main.py: Main finally block.")
         if ava_app_instance_container:
             ava_app_instance = ava_app_instance_container[0]
             if hasattr(ava_app_instance, 'shutdown'):
-                print("main.py: Calling AvAApplication.shutdown().")
+                logging.info("main.py: Calling AvAApplication.shutdown().")
                 ava_app_instance.shutdown()
 
-        print(f"main.py: Script is ending. Intended exit code: {exit_code}")
-        # sys.exit(exit_code) # Let the script end naturally or Qt manage the exit.
-        # Explicit sys.exit here might interfere with Qt's cleanup
-        # if qasync.run() doesn't already cause a process exit.
+        logging.info(f"main.py: Script is ending. Intended exit code: {exit_code}")
