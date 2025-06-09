@@ -1,45 +1,48 @@
-# gui/interactive_terminal.py - A Beautiful, Interactive Command Console
+# gui/interactive_terminal.py - A Beautiful, Snappy, and Responsive Console using QProcess
 
-import asyncio
 import sys
 from pathlib import Path
-import subprocess
-from PySide6.QtCore import Qt, Signal, QProcess
-from PySide6.QtGui import QFont, QTextCursor, QColor
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtCore import Qt, Signal, QProcess, QByteArray
+from PySide6.QtGui import QFont, QTextCursor, QColor, QTextCharFormat
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxLayout, QLabel
 
 from gui.components import Colors, Typography, ModernButton
 
 
 class InteractiveTerminal(QWidget):
     """
-    A beautiful and functional interactive terminal for running commands within AvA.
+    A beautiful and functional interactive terminal that runs commands
+    asynchronously using QProcess to keep the UI responsive.
     """
-    command_completed = Signal(int)
+    command_completed = Signal(int)  # Emits the exit code when a command finishes
     force_run_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_process = None
         self.working_directory = Path.cwd()
+
+        # --- NEW: Use QProcess for non-blocking execution ---
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self._handle_output)
+        self.process.finished.connect(self._on_command_finished)
+        # ---
 
         self._init_ui()
         self._apply_style()
 
     def _init_ui(self):
         """Initialize the UI components."""
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(0)
 
-        # Output Display Area
         self.output_area = QTextEdit()
         self.output_area.setReadOnly(True)
         self.output_area.setFont(Typography.code())
         self.output_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.output_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Input Area (with new Run button)
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 8, 0, 0)
         input_layout.setSpacing(8)
@@ -50,9 +53,8 @@ class InteractiveTerminal(QWidget):
         self.input_line = QLineEdit()
         self.input_line.setFont(Typography.code())
         self.input_line.setFrame(False)
-        self.input_line.returnPressed.connect(self.run_command)
+        self.input_line.returnPressed.connect(self.run_manual_command)
 
-        # Use ModernButton for consistent styling, then customize it
         self.run_project_btn = ModernButton("▶️ Run Project", button_type="primary")
         self.run_project_btn.setMinimumHeight(32)
         self.run_project_btn.setMaximumWidth(140)
@@ -65,85 +67,31 @@ class InteractiveTerminal(QWidget):
 
         main_layout.addWidget(self.output_area, 1)
         main_layout.addLayout(input_layout)
-        self.setLayout(main_layout)
 
     def _apply_style(self):
-        """Apply the modern, integrated styling."""
-        self.setStyleSheet(f"""
-            InteractiveTerminal {{
-                background: {Colors.PRIMARY_BG};
-                border: 1px solid {Colors.BORDER_DEFAULT};
-                border-radius: 8px;
-            }}
-        """)
-
+        self.setStyleSheet(
+            f"background: {Colors.PRIMARY_BG}; border: 1px solid {Colors.BORDER_DEFAULT}; border-radius: 8px;")
         self.output_area.setStyleSheet(f"""
-            QTextEdit {{
-                background: {Colors.PRIMARY_BG};
-                color: {Colors.TEXT_PRIMARY};
-                border: none;
-                padding: 8px;
-            }}
-            QScrollBar:vertical {{
-                background: {Colors.PRIMARY_BG};
-                width: 8px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {Colors.BORDER_DEFAULT};
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {Colors.ACCENT_BLUE};
-            }}
+            QTextEdit {{ background: {Colors.PRIMARY_BG}; color: {Colors.TEXT_PRIMARY}; border: none; padding: 8px; }}
+            QScrollBar:vertical {{ background: {Colors.PRIMARY_BG}; width: 8px; border-radius: 4px; }}
+            QScrollBar::handle:vertical {{ background: {Colors.BORDER_DEFAULT}; border-radius: 4px; }}
+            QScrollBar::handle:vertical:hover {{ background: {Colors.ACCENT_BLUE}; }}
         """)
-
-        self.prompt_label.setStyleSheet(f"""
-            background: transparent;
-            color: {Colors.ACCENT_BLUE};
-            font-weight: bold;
-            padding-top: 2px;
-        """)
-
-        self.input_line.setStyleSheet(f"""
-            QLineEdit {{
-                background: transparent;
-                color: {Colors.TEXT_PRIMARY};
-                border: none;
-                padding: 4px 0px;
-            }}
-        """)
-
-        # Apply the green 'Run' button styling
+        self.prompt_label.setStyleSheet(
+            f"background: transparent; color: {Colors.ACCENT_BLUE}; font-weight: bold; padding-top: 2px;")
+        self.input_line.setStyleSheet(
+            f"background: transparent; color: {Colors.TEXT_PRIMARY}; border: none; padding: 4px 0px;")
         self.run_project_btn.setStyleSheet(f"""
             QPushButton {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                          stop: 0 {Colors.ACCENT_GREEN}, 
-                                          stop: 1 #2d863a);
-                color: white;
-                border: 2px solid #2d863a;
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-weight: bold;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {Colors.ACCENT_GREEN}, stop:1 #2d863a);
+                color: white; border: 2px solid #2d863a; border-radius: 6px; padding: 6px 12px; font-weight: bold;
             }}
-            QPushButton:hover {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                          stop: 0 #4dce5d, 
-                                          stop: 1 #3fb950);
-                border-color: #3fb950;
-            }}
-            QPushButton:pressed {{
-                background: #2d863a;
-            }}
-            QPushButton:disabled {{
-                background: {Colors.BORDER_DEFAULT};
-                color: {Colors.TEXT_MUTED};
-                border-color: {Colors.BORDER_MUTED};
-            }}
+            QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4dce5d, stop:1 #3fb950); border-color: #3fb950; }}
+            QPushButton:pressed {{ background: #2d863a; }}
+            QPushButton:disabled {{ background: {Colors.BORDER_DEFAULT}; color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER_MUTED}; }}
         """)
 
     def set_working_directory(self, path: str):
-        """Sets the current working directory for commands."""
         self.working_directory = Path(path).resolve()
         if not self.working_directory.exists() or not self.working_directory.is_dir():
             self.append_error(f"Directory not found, reverting to default: {path}")
@@ -152,119 +100,75 @@ class InteractiveTerminal(QWidget):
         self.append_system_message(f"Working directory set to: {self.working_directory}")
 
     def _update_prompt_label(self):
-        """Updates the visual command prompt label."""
-        prompt_path = str(self.working_directory)
-        if len(prompt_path) > 30:
-            prompt_path = f"...{prompt_path[-27:]}"
+        prompt_path = str(self.working_directory.name)
         self.prompt_label.setText(f"{prompt_path} >")
 
-    def run_command(self):
-        """Executes the command from the input line."""
-        command = self.input_line.text().strip()
-        if not command:
-            return
-
-        if self.current_process and self.current_process.state() == QProcess.ProcessState.Running:
+    # --- NEW: Public method for the application to call ---
+    def execute_command(self, program: str, arguments: list):
+        """Executes a command using QProcess. Called by the application."""
+        if self.process.state() == QProcess.ProcessState.Running:
             self.append_error("A command is already running.")
             return
 
+        self.process.setWorkingDirectory(str(self.working_directory))
+        self.append_command(f"{program} {' '.join(arguments)}")
+        self.process.start(program, arguments)
+
+    def run_manual_command(self):
+        """Executes a command manually entered by the user."""
+        command_text = self.input_line.text().strip()
+        if not command_text: return
         self.input_line.clear()
-        self.append_command(command)
 
-        self.current_process = QProcess()
-        self.current_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.current_process.setWorkingDirectory(str(self.working_directory))
+        # Simple parsing for program and args
+        parts = command_text.split()
+        program = parts[0]
+        args = parts[1:]
+        self.execute_command(program, args)
 
-        self.current_process.readyReadStandardOutput.connect(self._handle_stdout)
-        self.current_process.readyReadStandardError.connect(self._handle_stderr)
-        self.current_process.finished.connect(self._on_command_finished)
-
-        if "win" in str(sys.platform).lower():
-            self.current_process.start("cmd.exe", ["/C", command])
-        else:
-            self.current_process.start("/bin/sh", ["-c", command])
-
-    def _handle_stdout(self):
-        """Handle standard output from the running process."""
-        data = self.current_process.readAllStandardOutput()
+    # --- NEW: Slots for QProcess signals ---
+    def _handle_output(self):
+        """Handle new data available on stdout/stderr."""
+        data = self.process.readAll()
         self.append_output(data.data().decode(errors='ignore'))
-
-    def _handle_stderr(self):
-        """Handle standard error from the running process."""
-        data = self.current_process.readAllStandardError()
-        self.append_error(data.data().decode(errors='ignore'))
 
     def _on_command_finished(self, exit_code, exit_status):
         """Handle the completion of a command."""
-        self.append_system_message(f"Process finished with exit code {exit_code}\n")
+        status_text = "successfully" if exit_code == 0 else f"with error code {exit_code}"
+        self.append_system_message(f"Process finished {status_text}.\n")
         self.input_line.setFocus()
-        self.command_completed.emit(exit_code)
-        self.current_process = None
-
-    def set_force_run_enabled(self, enabled: bool):
-        """Enable/disable the run button."""
-        self.run_project_btn.setEnabled(enabled)
+        self.command_completed.emit(exit_code)  # Notify the application
 
     # --- Public methods for appending text ---
-
     def clear_terminal(self):
-        """Clears the output area."""
         self.output_area.clear()
 
     def append_output(self, text: str):
-        """Appends standard output text."""
         cursor = self.output_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text)
         self.output_area.ensureCursorVisible()
 
     def append_error(self, text: str):
-        """Appends error text in a distinct color."""
-        cursor = self.output_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        char_format = cursor.charFormat()
-        char_format.setForeground(QColor(Colors.ACCENT_RED))
-        cursor.setCharFormat(char_format)
-        cursor.insertText(text)
-
-        char_format.setForeground(QColor(Colors.TEXT_PRIMARY))
-        cursor.setCharFormat(char_format)
-        self.output_area.ensureCursorVisible()
+        self._append_formatted_text(text, Colors.ACCENT_RED)
 
     def append_system_message(self, text: str):
-        """Appends a system message in a muted color."""
-        cursor = self.output_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        char_format = cursor.charFormat()
-        char_format.setForeground(QColor(Colors.TEXT_MUTED))
-        char_format.setFontItalic(True)
-        cursor.setCharFormat(char_format)
-        cursor.insertText(text + "\n")
-
-        char_format.setForeground(QColor(Colors.TEXT_PRIMARY))
-        char_format.setFontItalic(False)
-        cursor.setCharFormat(char_format)
-        self.output_area.ensureCursorVisible()
+        self._append_formatted_text(f"{text}\n", Colors.TEXT_MUTED, italic=True)
 
     def append_command(self, command: str):
-        """Appends the command that was just run."""
+        self.append_output("\n")
+        self._append_formatted_text(f"{self.prompt_label.text()} ", Colors.ACCENT_BLUE, bold=True)
+        self._append_formatted_text(f"{command}\n", Colors.TEXT_PRIMARY)
+
+    def _append_formatted_text(self, text: str, color: str, bold=False, italic=False):
         cursor = self.output_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        prompt_format = cursor.charFormat()
-        prompt_format.setForeground(QColor(Colors.ACCENT_BLUE))
-        prompt_format.setFontWeight(QFont.Weight.Bold)
-
-        command_format = cursor.charFormat()
-        command_format.setForeground(QColor(Colors.TEXT_PRIMARY))
-        command_format.setFontWeight(QFont.Weight.Normal)
-
-        cursor.setCharFormat(prompt_format)
-        cursor.insertText(self.prompt_label.text() + " ")
-
-        cursor.setCharFormat(command_format)
-        cursor.insertText(command + "\n")
-
+        char_format = QTextCharFormat()
+        char_format.setForeground(QColor(color))
+        char_format.setFontWeight(QFont.Weight.Bold if bold else QFont.Weight.Normal)
+        char_format.setFontItalic(italic)
+        cursor.mergeCharFormat(char_format)
+        cursor.insertText(text)
+        # Reset format for next output
+        self.output_area.setCurrentCharFormat(QTextCharFormat())
         self.output_area.ensureCursorVisible()
