@@ -1,11 +1,11 @@
-# core/enhanced_workflow_engine.py - V5.3 with GDD Management
+# core/enhanced_workflow_engine.py - V5.4 with Robust GDD Creation
 
 import asyncio
 import json
 import logging
-import re
 import traceback
 import shutil
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -18,7 +18,7 @@ from core.project_state_manager import ProjectStateManager
 
 class EnhancedWorkflowEngine(QObject):
     """
-    🚀 V5.3 Workflow Engine: Now with GDD management to maintain project context.
+    🚀 V5.4 Workflow Engine: Now with robust GDD management for both new and loaded projects.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -52,7 +52,7 @@ class EnhancedWorkflowEngine(QObject):
         self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
 
         self._connect_terminal_signals()
-        self.logger.info("✅ V5.3 'GDD-Aware' Workflow Engine initialized.")
+        self.logger.info("✅ V5.4 'Robust GDD' Workflow Engine initialized.")
 
     def _connect_terminal_signals(self):
         if self.streaming_terminal and hasattr(self.streaming_terminal, 'stream_log_rich'):
@@ -103,7 +103,9 @@ _(This section will be populated as you build out the project.)_
         if not gdd_file_path.exists():
             self.logger.error(f"Could not find GDD file to update at {gdd_file_path}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"GDD file not found for update.", "1")
-            return
+            # If GDD is missing, create it with the log entry.
+            vision = f"Project '{project_name}' was loaded. The original vision was not recorded."
+            self._create_initial_gdd(project_path, project_name, vision)
 
         self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Updating GDD log: {gdd_file_path.name}", "1")
         files_created = ", ".join(results.get("files_created", []))
@@ -153,6 +155,13 @@ _(This section will be populated as you build out the project.)_
             self.current_tech_spec = tech_spec
             self.is_existing_project_loaded = True
             self.original_project_path = project_path
+
+            # --- NEW: Check for and create GDD on load ---
+            project_name = tech_spec.get("project_name", project_path.name)
+            project_description = tech_spec.get("project_description", "An existing project loaded into AvA.")
+            self._create_initial_gdd(project_path, project_name, project_description)
+            # --- END NEW ---
+
             self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
                                          "0")
 
@@ -165,7 +174,7 @@ _(This section will be populated as you build out the project.)_
             self.project_loaded.emit(project_path_str)
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        self.logger.info(f"🚀 Starting V5.3 workflow: {user_prompt[:100]}...")
+        self.logger.info(f"🚀 Starting V5.4 workflow: {user_prompt[:100]}...")
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
         gdd_context = ""
@@ -175,20 +184,17 @@ _(This section will be populated as you build out the project.)_
             self.detailed_log_event.emit("WorkflowEngine", "stage_start",
                                          f"🚀 Initializing MODIFICATION workflow for '{self.original_project_path.name}'...",
                                          "0")
-            gdd_context = self._read_gdd_context(self.original_project_path, self.original_project_path.name)
+            project_name = self.current_tech_spec.get("project_name", self.original_project_path.name)
+            gdd_context = self._read_gdd_context(self.original_project_path, project_name)
+
         else:
             self.workflow_started.emit("New Project", user_prompt[:60] + '...')
             self.detailed_log_event.emit("WorkflowEngine", "stage_start", "🚀 Initializing NEW PROJECT workflow...", "0")
 
         try:
+            full_user_prompt = f"{user_prompt}\n\n--- GDD CONTEXT ---\n{gdd_context}"
             self.workflow_progress.emit("planning", "Architecting project...")
-
-            if self.is_existing_project_loaded and self.current_tech_spec:
-                self.detailed_log_event.emit("Architect", "thought", "Re-architecting based on new request...", 1)
-                tech_spec = await self.architect_service.create_tech_spec(user_prompt, conversation_context)
-            else:
-                self.detailed_log_event.emit("Architect", "thought", "Creating new architecture from scratch...", 1)
-                tech_spec = await self.architect_service.create_tech_spec(user_prompt, conversation_context)
+            tech_spec = await self.architect_service.create_tech_spec(full_user_prompt, conversation_context)
 
             if not tech_spec or 'technical_specs' not in tech_spec:
                 raise Exception("Architecture failed. Could not produce a valid Technical Specification Sheet.")
@@ -202,7 +208,7 @@ _(This section will be populated as you build out the project.)_
                                              f"Copying original project to '{project_dir}'...", "1")
                 try:
                     shutil.copytree(self.original_project_path, project_dir, dirs_exist_ok=True,
-                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git'))
+                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git', '*_GDD.md'))
                 except Exception as copy_error:
                     raise Exception(f"Failed to create a copy of the existing project: {copy_error}")
                 self.detailed_log_event.emit("WorkflowEngine", "success", "Project copy complete.", "1")
@@ -303,7 +309,7 @@ _(This section will be populated as you build out the project.)_
             "files_created": results.get("files_created", []),
             "failed_files": results.get("failed_files", []),
             "elapsed_time": elapsed_time,
-            "strategy": "V5.3 GDD-Aware"
+            "strategy": "V5.4 Robust GDD"
         }
 
         if project_dir_str:
@@ -317,10 +323,9 @@ _(This section will be populated as you build out the project.)_
                 base_project_name = raw_project_name.split("_MOD_")[0]
             else:
                 try:
-                    # Attempt to remove a timestamp like _20240101_123456
                     base_project_name = re.sub(r'_\d{8}_\d{6}$', '', raw_project_name)
                 except Exception:
-                    pass  # Keep original name if regex fails
+                    pass
 
             if final_result["success"]:
                 self._update_gdd_log(project_path, base_project_name, self.original_user_prompt, results)
