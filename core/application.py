@@ -1,4 +1,4 @@
-# core/application.py - V2.3 with Non-Blocking QProcess Execution
+# core/application.py - V2.4 with venv and GDD creation
 
 import asyncio
 import json
@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, QProcess
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
 
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
@@ -141,7 +141,6 @@ class AvAApplication(QObject):
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
 
-        # --- NEW: Connect to the command_completed signal from the terminal ---
         if self.code_viewer:
             self.code_viewer.run_project_requested.connect(self.run_current_project)
             self.code_viewer.terminal.command_completed.connect(self._on_command_completed)
@@ -149,10 +148,8 @@ class AvAApplication(QObject):
         self.error_occurred.connect(self._on_error_occurred)
         self.logger.info("✅ Components connected.")
 
-    # --- MODIFIED: This section is now a non-blocking state machine ---
     @Slot()
     def run_current_project(self):
-        """Kicks off the project execution sequence."""
         if not self.current_project_path or self.current_project == "Default Project":
             self._terminal_log("error", "No project loaded to run.")
             return
@@ -161,42 +158,32 @@ class AvAApplication(QObject):
         terminal.clear_terminal()
         self._terminal_log("info", f"▶️ Starting execution for project: {self.current_project_path.name}")
 
-        # Set up the queue of methods to run in order
         self._execution_queue = [
             self._ensure_venv,
             self._install_requirements,
             self._execute_main_file
         ]
-
-        # Start the first step
         self._execute_next_step_in_queue()
 
     @Slot(int)
     def _on_command_completed(self, exit_code: int):
-        """Slot that is called when the terminal finishes a command."""
         if exit_code == 0:
-            # Success, run the next command in the queue
             self._execute_next_step_in_queue()
         else:
-            # A step failed, stop the sequence
             self._terminal_log("error", "Execution sequence halted due to an error.")
-            self._execution_queue.clear()  # Clear queue to stop further steps
+            self._execution_queue.clear()
 
     def _execute_next_step_in_queue(self):
-        """Executes the next function in the queue."""
         if self._execution_queue:
-            # Get the next function from the queue and run it
             next_step = self._execution_queue.pop(0)
             next_step()
         else:
             self._terminal_log("info", "Execution sequence finished.")
 
     def _ensure_venv(self):
-        """Step 1: Checks for a venv and tells the terminal to create it if needed."""
         venv_path = self.current_project_path / 'venv'
         if venv_path.exists() and (venv_path / 'pyvenv.cfg').exists():
             self._terminal_log("info", "Virtual environment found.")
-            # This step is successful, so we immediately proceed.
             self._on_command_completed(0)
             return
 
@@ -206,11 +193,10 @@ class AvAApplication(QObject):
         self.code_viewer.terminal.execute_command(program, args)
 
     def _install_requirements(self):
-        """Step 2: Tells the terminal to install dependencies."""
         req_file = self.current_project_path / 'requirements.txt'
         if not req_file.exists():
             self._terminal_log("info", "No requirements.txt found. Skipping dependency installation.")
-            self._on_command_completed(0)  # Success, proceed
+            self._on_command_completed(0)
             return
 
         self._terminal_log("info", "requirements.txt found. Installing dependencies...")
@@ -221,7 +207,6 @@ class AvAApplication(QObject):
         self.code_viewer.terminal.execute_command(pip_executable, args)
 
     def _execute_main_file(self):
-        """Step 3: Tells the terminal to run the main project file."""
         main_file = self.current_project_path / 'main.py'
         if not main_file.exists():
             for py_file in self.current_project_path.rglob("*.py"):
@@ -232,7 +217,7 @@ class AvAApplication(QObject):
         if not main_file.exists():
             self._terminal_log("error",
                                "Could not find a main entry point (main.py or file with __name__ == '__main__').")
-            self._on_command_completed(1)  # Fail the sequence
+            self._on_command_completed(1)
             return
 
         self._terminal_log("info", f"Executing entry point: {main_file.name}...")
@@ -242,7 +227,6 @@ class AvAApplication(QObject):
         args = [str(main_file)]
         self.code_viewer.terminal.execute_command(python_executable, args)
 
-    # --- Other Methods (Mostly Unchanged) ---
     def _terminal_log(self, log_type: str, message: str):
         # ... (implementation unchanged) ...
         if self.code_viewer and self.code_viewer.terminal:
@@ -357,15 +341,22 @@ class AvAApplication(QObject):
         except Exception as e:
             QMessageBox.critical(self.main_window, "Error", f"Failed to load session: {e}")
 
+    ### MODIFIED ###
     def create_new_project_dialog(self):
-        # ... (implementation unchanged) ...
+        """Creates a new project with a directory, main.py, GDD, and venv."""
         if not self.main_window: return
-        project_name, ok = QInputDialog.getText(self.main_window, 'New Project', 'Enter project name:',
-                                                text='my-ava-project')
-        if not (ok and project_name.strip()): return
-        project_name = project_name.strip()
+
+        project_name_raw, ok = QInputDialog.getText(self.main_window, 'New Project', 'Enter project name:',
+                                                    text='my-ava-project')
+        if not (ok and project_name_raw.strip()): return
+
+        # Sanitize project name for use in filenames and paths
+        project_name = "".join(c for c in project_name_raw.strip() if c.isalnum() or c in ('_', '-')).rstrip()
+        if not project_name: project_name = "ava_project"
+
         base_dir_str = QFileDialog.getExistingDirectory(self.main_window, 'Select Directory', str(self.workspace_dir))
         if not base_dir_str: return
+
         project_path = Path(base_dir_str) / project_name
         if project_path.exists():
             reply = QMessageBox.question(self.main_window, 'Directory Exists',
@@ -374,10 +365,58 @@ class AvAApplication(QObject):
             if reply == QMessageBox.StandardButton.No: return
         else:
             project_path.mkdir(parents=True, exist_ok=True)
-        (project_path / "main.py").write_text(f'if __name__ == "__main__":\n    print("Hello from {project_name}!")\n')
+
+        # --- NEW: Create venv and GDD automatically ---
+        try:
+            # Create a placeholder main.py
+            (project_path / "main.py").write_text(
+                f'if __name__ == "__main__":\n    print("Hello from {project_name}!")\n')
+
+            # Create the initial GDD file
+            gdd_file_path = project_path / f"{project_name}_GDD.md"
+            gdd_template = f"""
+# Game Design Document: {project_name_raw}
+
+## Project Vision
+> Initial idea: {project_name_raw}
+
+## Implemented Systems
+_(This section will be populated as you build out the project.)_
+
+---
+
+## Development Log
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized.
+"""
+            gdd_file_path.write_text(gdd_template.strip(), encoding='utf-8')
+
+            # Create the virtual environment using a blocking QProcess
+            self._terminal_log("info", f"Creating virtual environment for '{project_name}'...")
+            QMessageBox.information(self.main_window, "Project Setup",
+                                    "Creating virtual environment... This may take a moment.")
+
+            # Use QProcess.execute() for a simple, blocking call suitable for a quick operation
+            # This is safer than subprocess.run() in a GUI event handler.
+            process = QProcess()
+            process.setWorkingDirectory(str(project_path))
+            process.start(sys.executable, ['-m', 'venv', 'venv'])
+            if not process.waitForFinished(30000):  # 30-second timeout
+                raise Exception("Virtual environment creation timed out.")
+            if process.exitCode() != 0:
+                raise Exception(f"Failed to create virtual environment. Exit code: {process.exitCode()}")
+
+            self._terminal_log("success", "Virtual environment created successfully.")
+
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Project Setup Error", f"Failed to set up project files: {e}")
+            self.logger.error(f"Failed during project creation for '{project_name}': {e}", exc_info=True)
+            return
+
+        # --- End of new logic ---
+
         self._on_project_loaded(str(project_path))
         self.main_window.chat_interface.add_assistant_response(
-            f"Project '{project_name}' created at {project_path}. What should we build in it?")
+            f"✅ Project '{project_name}' created at {project_path}.\n\nA virtual environment and a GDD file have been set up. What should we build first?")
 
     def load_existing_project_dialog(self):
         # ... (implementation unchanged) ...

@@ -1,8 +1,9 @@
-# core/enhanced_workflow_engine.py - V5.2 with Robust Logging & THE FIX!
+# core/enhanced_workflow_engine.py - V5.3 with GDD Management
 
 import asyncio
 import json
 import logging
+import re
 import traceback
 import shutil
 from datetime import datetime
@@ -17,8 +18,7 @@ from core.project_state_manager import ProjectStateManager
 
 class EnhancedWorkflowEngine(QObject):
     """
-    🚀 V5.2 Workflow Engine: Now with robust logging to handle different
-    terminal types and ensure stability.
+    🚀 V5.3 Workflow Engine: Now with GDD management to maintain project context.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -33,7 +33,6 @@ class EnhancedWorkflowEngine(QObject):
     def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
         super().__init__()
         self.llm_client = llm_client
-        # This can be the StreamingTerminal or None
         self.streaming_terminal = terminal_window
         self.code_viewer = code_viewer
         self.rag_manager = rag_manager
@@ -43,6 +42,7 @@ class EnhancedWorkflowEngine(QObject):
         self.current_tech_spec: dict = None
         self.is_existing_project_loaded = False
         self.original_project_path: Optional[Path] = None
+        self.original_user_prompt: str = ""
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
             self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
@@ -52,10 +52,9 @@ class EnhancedWorkflowEngine(QObject):
         self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
 
         self._connect_terminal_signals()
-        self.logger.info("✅ V5.2 'Robust Logging' Workflow Engine initialized.")
+        self.logger.info("✅ V5.3 'GDD-Aware' Workflow Engine initialized.")
 
     def _connect_terminal_signals(self):
-        # --- MODIFIED: Check if the passed terminal has the correct method ---
         if self.streaming_terminal and hasattr(self.streaming_terminal, 'stream_log_rich'):
             try:
                 self.detailed_log_event.connect(self.streaming_terminal.stream_log_rich)
@@ -63,12 +62,75 @@ class EnhancedWorkflowEngine(QObject):
             except Exception as e:
                 self.logger.error(f"❌ Failed to connect terminal signals: {e}")
         else:
-            # If the right terminal isn't passed, just log to the console to avoid crashing.
             self.logger.warning("No streaming terminal connected. AI logs will print to console.")
             self.detailed_log_event.connect(
                 lambda agent, type_key, content, indent:
                 self.logger.info(f"[{agent}:{type_key}] {'  ' * int(indent)}{content}")
             )
+
+    def _create_initial_gdd(self, project_path: Path, project_name: str, initial_prompt: str):
+        """Creates the initial Game Design Document for a new project."""
+        gdd_file_path = project_path / f"{project_name}_GDD.md"
+        if gdd_file_path.exists():
+            self.logger.warning(f"GDD file already exists at {gdd_file_path}. Skipping creation.")
+            return
+
+        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Creating initial GDD: {gdd_file_path.name}", "1")
+        gdd_template = f"""
+# Game Design Document: {project_name}
+
+## Project Vision
+> {initial_prompt}
+
+## Implemented Systems
+_(This section will be populated as you build out the project.)_
+
+---
+
+## Development Log
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized.
+"""
+        try:
+            gdd_file_path.write_text(gdd_template.strip(), encoding='utf-8')
+            self.file_generated.emit(str(gdd_file_path))
+        except Exception as e:
+            self.logger.error(f"❌ Failed to create initial GDD file: {e}")
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create GDD: {e}", "1")
+
+    def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: dict):
+        """Appends a new entry to the GDD's development log."""
+        gdd_file_path = project_path / f"{project_name}_GDD.md"
+        if not gdd_file_path.exists():
+            self.logger.error(f"Could not find GDD file to update at {gdd_file_path}")
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"GDD file not found for update.", "1")
+            return
+
+        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Updating GDD log: {gdd_file_path.name}", "1")
+        files_created = ", ".join(results.get("files_created", []))
+        log_entry = f"""
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**:
+  - **Request**: "{user_prompt}"
+  - **Result**: Successfully implemented changes.
+  - **Files Modified/Created**: {files_created if files_created else "None specified."}
+"""
+        try:
+            with gdd_file_path.open("a", encoding="utf-8") as f:
+                f.write(log_entry)
+        except Exception as e:
+            self.logger.error(f"❌ Failed to update GDD log: {e}")
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to update GDD: {e}", "1")
+
+    def _read_gdd_context(self, project_path: Path, project_name: str) -> str:
+        """Reads the GDD file content if it exists."""
+        gdd_file_path = project_path / f"{project_name}_GDD.md"
+        if gdd_file_path.exists():
+            self.detailed_log_event.emit("WorkflowEngine", "info", "Found existing GDD, providing to Architect.", "1")
+            try:
+                return gdd_file_path.read_text(encoding='utf-8')
+            except Exception as e:
+                self.logger.error(f"Could not read GDD file: {e}")
+                return f"Error reading GDD: {e}"
+        return ""
 
     async def execute_analysis_workflow(self, project_path_str: str):
         self.logger.info(f"🚀 Starting Analysis workflow for: {project_path_str}...")
@@ -103,14 +165,17 @@ class EnhancedWorkflowEngine(QObject):
             self.project_loaded.emit(project_path_str)
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        self.logger.info(f"🚀 Starting V5.2 workflow: {user_prompt[:100]}...")
+        self.logger.info(f"🚀 Starting V5.3 workflow: {user_prompt[:100]}...")
         workflow_start_time = datetime.now()
+        self.original_user_prompt = user_prompt
+        gdd_context = ""
 
         if self.is_existing_project_loaded:
             self.workflow_started.emit("Project Modification", user_prompt[:60] + '...')
             self.detailed_log_event.emit("WorkflowEngine", "stage_start",
                                          f"🚀 Initializing MODIFICATION workflow for '{self.original_project_path.name}'...",
                                          "0")
+            gdd_context = self._read_gdd_context(self.original_project_path, self.original_project_path.name)
         else:
             self.workflow_started.emit("New Project", user_prompt[:60] + '...')
             self.detailed_log_event.emit("WorkflowEngine", "stage_start", "🚀 Initializing NEW PROJECT workflow...", "0")
@@ -147,6 +212,7 @@ class EnhancedWorkflowEngine(QObject):
                 project_dir.mkdir(parents=True, exist_ok=True)
                 self.detailed_log_event.emit("WorkflowEngine", "file_op",
                                              f"New project directory created: {project_dir}", "1")
+                self._create_initial_gdd(project_dir, project_name, user_prompt)
 
             self.project_loaded.emit(str(project_dir))
 
@@ -164,8 +230,6 @@ class EnhancedWorkflowEngine(QObject):
             for i, filename in enumerate(build_order):
                 self.detailed_log_event.emit("WorkflowEngine", "stage_start",
                                              f"Processing file {i + 1}/{len(build_order)}: {filename}", "1")
-
-                # --- BUGFIX: Make the lookup robust to missing .py extensions ---
                 file_spec = tech_spec["technical_specs"].get(filename) or tech_spec["technical_specs"].get(
                     f"{filename}.py")
 
@@ -177,22 +241,16 @@ class EnhancedWorkflowEngine(QObject):
                 dependency_files = file_spec.get("dependencies", [])
                 dependency_context = self._build_dependency_context(dependency_files, knowledge_packets)
                 project_context = {"description": tech_spec.get("project_description", "")}
-
-                # --- THE FIX IS APPLIED ABOVE, a full filename is required below ---
                 full_filename = filename if filename.endswith('.py') else f"{filename}.py"
-
                 generated_code = await self.coder_service.generate_file_from_spec(full_filename, file_spec,
                                                                                   project_context,
                                                                                   dependency_context)
-
                 review_data, review_passed = await self.reviewer_service.review_code(full_filename, generated_code,
                                                                                      project_context['description'])
-
                 self.detailed_log_event.emit("WorkflowEngine", "info",
                                              f"Review for {full_filename} {'passed' if review_passed else 'failed'}. Writing file to disk.",
                                              "2")
                 self._write_file(project_dir, full_filename, generated_code)
-
                 knowledge_packets[full_filename] = {"spec": file_spec, "source_code": generated_code}
                 results["files_created"].append(full_filename)
 
@@ -216,7 +274,6 @@ class EnhancedWorkflowEngine(QObject):
         if not dependency_files: return "This file has no dependencies."
         context_str = ""
         for dep_file in dependency_files:
-            # Handle both with and without extension for robustness
             lookup_key = dep_file if dep_file.endswith('.py') else f"{dep_file}.py"
 
             if lookup_key in knowledge_packets:
@@ -237,17 +294,36 @@ class EnhancedWorkflowEngine(QObject):
         self.file_generated.emit(str(file_path_obj))
 
     async def _finalize_project(self, results: Dict[str, Any], elapsed_time: float) -> Dict[str, Any]:
-        project_dir = results.get("project_dir")
-        if project_dir: self.project_loaded.emit(project_dir)
+        project_dir_str = results.get("project_dir")
         final_result = {
             "success": len(results.get("failed_files", [])) == 0,
-            "project_name": Path(project_dir).name if project_dir else "Unknown",
-            "project_dir": project_dir,
+            "project_name": "Unknown",
+            "project_dir": project_dir_str,
             "num_files": len(results.get("files_created", [])),
             "files_created": results.get("files_created", []),
             "failed_files": results.get("failed_files", []),
             "elapsed_time": elapsed_time,
-            "strategy": "V5.2 Rolling Context"
+            "strategy": "V5.3 GDD-Aware"
         }
+
+        if project_dir_str:
+            self.project_loaded.emit(project_dir_str)
+            project_path = Path(project_dir_str)
+            raw_project_name = project_path.name
+            final_result["project_name"] = raw_project_name
+
+            base_project_name = raw_project_name
+            if "_MOD_" in raw_project_name:
+                base_project_name = raw_project_name.split("_MOD_")[0]
+            else:
+                try:
+                    # Attempt to remove a timestamp like _20240101_123456
+                    base_project_name = re.sub(r'_\d{8}_\d{6}$', '', raw_project_name)
+                except Exception:
+                    pass  # Keep original name if regex fails
+
+            if final_result["success"]:
+                self._update_gdd_log(project_path, base_project_name, self.original_user_prompt, results)
+
         self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
         return final_result

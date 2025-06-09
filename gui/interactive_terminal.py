@@ -1,8 +1,9 @@
-# gui/interactive_terminal.py - A Beautiful, Snappy, and Responsive Console using QProcess
+# gui/interactive_terminal.py - A Beautiful, Snappy, and Venv-Aware Console
 
 import sys
+import os
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QProcess, QByteArray
+from PySide6.QtCore import Qt, Signal, QProcess, QProcessEnvironment
 from PySide6.QtGui import QFont, QTextCursor, QColor, QTextCharFormat
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxLayout, QLabel
 
@@ -12,7 +13,7 @@ from gui.components import Colors, Typography, ModernButton
 class InteractiveTerminal(QWidget):
     """
     A beautiful and functional interactive terminal that runs commands
-    asynchronously using QProcess to keep the UI responsive.
+    asynchronously using QProcess and is aware of project virtual environments.
     """
     command_completed = Signal(int)  # Emits the exit code when a command finishes
     force_run_requested = Signal()
@@ -21,12 +22,10 @@ class InteractiveTerminal(QWidget):
         super().__init__(parent)
         self.working_directory = Path.cwd()
 
-        # --- NEW: Use QProcess for non-blocking execution ---
         self.process = QProcess(self)
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.process.readyReadStandardOutput.connect(self._handle_output)
         self.process.finished.connect(self._on_command_finished)
-        # ---
 
         self._init_ui()
         self._apply_style()
@@ -59,7 +58,8 @@ class InteractiveTerminal(QWidget):
         self.run_project_btn.setMinimumHeight(32)
         self.run_project_btn.setMaximumWidth(140)
         self.run_project_btn.clicked.connect(self.force_run_requested.emit)
-        self.run_project_btn.setToolTip("Run the current project and capture output/errors for Ava.")
+        self.run_project_btn.setToolTip(
+            "Run the current project's main file after ensuring venv and dependencies are set up.")
 
         input_layout.addWidget(self.prompt_label)
         input_layout.addWidget(self.input_line, 1)
@@ -101,18 +101,52 @@ class InteractiveTerminal(QWidget):
 
     def _update_prompt_label(self):
         prompt_path = str(self.working_directory.name)
-        self.prompt_label.setText(f"{prompt_path} >")
+        venv_path = self.working_directory / 'venv'
+        if venv_path.exists():
+            self.prompt_label.setText(f"({prompt_path}) >")
+        else:
+            self.prompt_label.setText(f"{prompt_path} >")
 
-    # --- NEW: Public method for the application to call ---
+    def _get_venv_environment(self) -> QProcessEnvironment:
+        """Creates a QProcessEnvironment with the venv's PATH prepended."""
+        venv_path = self.working_directory / 'venv'
+        if not venv_path.exists():
+            return QProcessEnvironment.systemEnvironment()
+
+        env = QProcessEnvironment.systemEnvironment()
+        original_path = env.value("PATH")
+
+        # Determine script path based on OS
+        if sys.platform == "win32":
+            scripts_path = str(venv_path / "Scripts")
+        else:
+            scripts_path = str(venv_path / "bin")
+
+        # Prepend the venv path to the system PATH
+        new_path = f"{scripts_path}{os.pathsep}{original_path}"
+        env.insert("PATH", new_path)
+
+        # Unset PYTHONHOME if it's set, as it can interfere with venvs
+        env.remove("PYTHONHOME")
+
+        self.append_system_message(f"Activated virtual environment: {venv_path.name}")
+        return env
+
     def execute_command(self, program: str, arguments: list):
-        """Executes a command using QProcess. Called by the application."""
+        """Executes a command using QProcess, activating venv if available."""
         if self.process.state() == QProcess.ProcessState.Running:
             self.append_error("A command is already running.")
             return
 
         self.process.setWorkingDirectory(str(self.working_directory))
+
+        # Set the venv-aware environment for the process
+        self.process.setProcessEnvironment(self._get_venv_environment())
+
         self.append_command(f"{program} {' '.join(arguments)}")
         self.process.start(program, arguments)
+        if not self.process.waitForStarted(2000):  # Wait 2s for process to start
+            self.append_error(f"Error starting process: {self.process.errorString()}")
 
     def run_manual_command(self):
         """Executes a command manually entered by the user."""
@@ -126,7 +160,6 @@ class InteractiveTerminal(QWidget):
         args = parts[1:]
         self.execute_command(program, args)
 
-    # --- NEW: Slots for QProcess signals ---
     def _handle_output(self):
         """Handle new data available on stdout/stderr."""
         data = self.process.readAll()
@@ -137,9 +170,8 @@ class InteractiveTerminal(QWidget):
         status_text = "successfully" if exit_code == 0 else f"with error code {exit_code}"
         self.append_system_message(f"Process finished {status_text}.\n")
         self.input_line.setFocus()
-        self.command_completed.emit(exit_code)  # Notify the application
+        self.command_completed.emit(exit_code)
 
-    # --- Public methods for appending text ---
     def clear_terminal(self):
         self.output_area.clear()
 
@@ -157,7 +189,9 @@ class InteractiveTerminal(QWidget):
 
     def append_command(self, command: str):
         self.append_output("\n")
-        self._append_formatted_text(f"{self.prompt_label.text()} ", Colors.ACCENT_BLUE, bold=True)
+        # Update prompt label to include venv indicator if present
+        current_prompt_text = self.prompt_label.text()
+        self._append_formatted_text(f"{current_prompt_text} ", Colors.ACCENT_BLUE, bold=True)
         self._append_formatted_text(f"{command}\n", Colors.TEXT_PRIMARY)
 
     def _append_formatted_text(self, text: str, color: str, bold=False, italic=False):
@@ -169,6 +203,5 @@ class InteractiveTerminal(QWidget):
         char_format.setFontItalic(italic)
         cursor.mergeCharFormat(char_format)
         cursor.insertText(text)
-        # Reset format for next output
         self.output_area.setCurrentCharFormat(QTextCharFormat())
         self.output_area.ensureCursorVisible()
