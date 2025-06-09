@@ -1,4 +1,4 @@
-# core/application.py - Now with project execution superpowers!
+# core/application.py - V2.2 with full implementations
 
 import asyncio
 import logging
@@ -14,12 +14,12 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDial
 
 from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
-from core.project_state_manager import ProjectStateManager  # We might need this later
+from core.project_state_manager import ProjectStateManager
 
 # Import our UI components
 from gui.main_window import AvAMainWindow
 from gui.code_viewer import CodeViewerWindow
-# The terminal is now inside the code viewer, but we still manage it from here
+from gui.terminals import StreamingTerminal
 from gui.interactive_terminal import InteractiveTerminal
 
 try:
@@ -49,9 +49,10 @@ class AvAApplication(QObject):
 
         self.llm_client = None
         self.main_window = None
-        self.code_viewer = None  # We still manage its lifecycle
+        self.code_viewer = None
         self.workflow_engine = None
         self.rag_manager = None
+        self.streaming_terminal = None
 
         self.workspace_dir = Path("./workspace")
         self.workspace_dir.mkdir(exist_ok=True)
@@ -65,48 +66,35 @@ class AvAApplication(QObject):
         }
 
     def _setup_logging(self):
-        """Setup streamlined logging with UTF-8 support."""
         log_dir = Path("./logs")
         log_dir.mkdir(exist_ok=True)
 
-        # Define a formatter that can handle emojis safely for non-UTF-8 consoles
         class SafeFormatter(logging.Formatter):
             def format(self, record):
-                # First, format the message as usual
                 msg = super().format(record)
-                # Then, replace emojis with text equivalents for safety
-                # This ensures the log file still gets the emoji, but the console doesn't crash
                 emoji_replacements = {
                     '🚀': '[START]', '✅': '[OK]', '❌': '[ERROR]', '⚠️': '[WARN]',
                     '🧠': '[AI]', '▶️': '[RUN]', '📂': '[FILE]', '📄': '[DOC]'
                 }
-                # Create a simple version for consoles that can't handle unicode
                 safe_msg = msg
                 for emoji, replacement in emoji_replacements.items():
                     safe_msg = safe_msg.replace(emoji, replacement)
                 return safe_msg
 
         formatter = SafeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-        # File handler should always write in UTF-8
         file_handler = logging.FileHandler(log_dir / "ava.log", encoding='utf-8')
-        # File gets original emojis, so it uses the standard Formatter
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-
-        # Console handler uses the safe formatter
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
-
-        # Configure the root logger
         logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 
     async def initialize(self):
         self.logger.info("🚀 Initializing AvA Application...")
         self.main_window = AvAMainWindow(ava_app=self)
-        self.code_viewer = CodeViewerWindow()  # It's created but not shown
+        self.code_viewer = CodeViewerWindow()
+        self.streaming_terminal = StreamingTerminal()
         self._initialize_core_services()
         self.main_window.show()
-        # self.code_viewer.show() # REMOVED: Don't show on launch
         await asyncio.sleep(0.01)
         await self.async_initialize_components()
 
@@ -131,29 +119,21 @@ class AvAApplication(QObject):
             try:
                 self.rag_manager = RAGManager()
                 await self.rag_manager.async_initialize()
-                # Connect the signal from the RAG manager to the app's signal
                 self.rag_manager.status_changed.connect(self.rag_status_changed.emit)
             except Exception as e:
                 self.logger.error(f"RAG manager initialization failed: {e}", exc_info=True)
                 self.rag_manager = None
 
     def _initialize_workflow_engine(self):
-        # The terminal instance now lives inside the code viewer
-        terminal_instance = self.code_viewer.terminal if self.code_viewer else None
-
         self.workflow_engine = EnhancedWorkflowEngine(
-            self.llm_client,
-            terminal_instance,  # Pass the correct terminal instance
-            self.code_viewer,
-            self.rag_manager
+            self.llm_client, self.streaming_terminal,
+            self.code_viewer, self.rag_manager
         )
 
     def _connect_components(self):
         self.logger.info("Connecting components...")
         if self.main_window:
-            self.main_window.workflow_requested_with_context.connect(
-                self._handle_enhanced_workflow_request
-            )
+            self.main_window.workflow_requested_with_context.connect(self._handle_enhanced_workflow_request)
             self.main_window.new_project_requested.connect(self.create_new_project_dialog)
             self.main_window.load_project_requested.connect(self.load_existing_project_dialog)
             self.main_window.sidebar.action_triggered.connect(self._handle_sidebar_action)
@@ -165,7 +145,6 @@ class AvAApplication(QObject):
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
 
-        # Connect the run request from the code viewer to our new execution logic
         if self.code_viewer:
             self.code_viewer.run_project_requested.connect(self.run_current_project)
 
@@ -174,85 +153,62 @@ class AvAApplication(QObject):
 
     @Slot()
     def run_current_project(self):
-        """Orchestrates the running of the currently loaded project."""
         if not self.current_project_path or self.current_project == "Default Project":
             self._terminal_log("error", "No project loaded to run.")
             return
-
-        # Run the entire sequence in an async task to keep the UI responsive
         asyncio.create_task(self._run_project_sequence())
 
     async def _run_project_sequence(self):
-        """The async sequence for setting up and running a project."""
         project_path = self.current_project_path
         terminal = self.code_viewer.terminal
-
         terminal.clear_terminal()
         self._terminal_log("info", f"▶️ Starting execution for project: {project_path.name}")
-
         try:
             venv_path = project_path / 'venv'
-            if not await self._ensure_venv(venv_path):
-                return
-
+            if not await self._ensure_venv(venv_path): return
             requirements_file = project_path / 'requirements.txt'
             if not await self._install_requirements(requirements_file, venv_path):
                 self._terminal_log("warning", "Continuing despite requirement installation issues.")
-
             if not await self._execute_main_file(project_path, venv_path):
                 self._terminal_log("error", "Could not find or execute a main entry point.")
-
         except Exception as e:
             self._terminal_log("error", f"An unexpected error occurred during project execution: {e}")
             self.logger.error("Project execution sequence failed", exc_info=True)
 
     async def _run_command_in_terminal(self, command: List[str], cwd: Path) -> bool:
-        """Helper to run a command and stream its output to the terminal."""
         self._terminal_log("command", f"$ {' '.join(command)}")
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        process = await asyncio.create_subprocess_exec(*command, cwd=cwd, stdout=subprocess.PIPE,
+                                                       stderr=subprocess.PIPE)
 
         async def read_stream(stream, log_func):
             while True:
                 line = await stream.readline()
-                if not line:
-                    break
+                if not line: break
                 log_func(line.decode(errors='ignore').strip())
 
         await asyncio.gather(
             read_stream(process.stdout, lambda line: self._terminal_log("stdout", line)),
             read_stream(process.stderr, lambda line: self._terminal_log("stderr", line))
         )
-
         await process.wait()
-
         if process.returncode != 0:
             self._terminal_log("error", f"Command failed with exit code {process.returncode}")
             return False
-
         self._terminal_log("success", "Command completed successfully.")
         return True
 
     async def _ensure_venv(self, venv_path: Path) -> bool:
-        """Checks for a venv and creates one if it doesn't exist."""
         if venv_path.exists() and (venv_path / 'pyvenv.cfg').exists():
             self._terminal_log("info", "Virtual environment found.")
             return True
-
         self._terminal_log("info", "Virtual environment not found. Creating...")
         command = [sys.executable, '-m', 'venv', str(venv_path)]
         return await self._run_command_in_terminal(command, venv_path.parent)
 
     async def _install_requirements(self, req_file: Path, venv_path: Path) -> bool:
-        """Installs dependencies from requirements.txt if it exists."""
         if not req_file.exists():
             self._terminal_log("info", "No requirements.txt found. Skipping dependency installation.")
             return True
-
         self._terminal_log("info", "requirements.txt found. Installing dependencies...")
         pip_executable = str(venv_path / 'Scripts' / 'pip') if sys.platform == 'win32' else str(
             venv_path / 'bin' / 'pip')
@@ -260,17 +216,13 @@ class AvAApplication(QObject):
         return await self._run_command_in_terminal(command, req_file.parent)
 
     async def _execute_main_file(self, project_path: Path, venv_path: Path) -> bool:
-        """Finds the main entry point of the project and executes it."""
         main_file = project_path / 'main.py'
         if not main_file.exists():
             for py_file in project_path.rglob("*.py"):
                 if 'if __name__ == "__main__":' in py_file.read_text():
                     main_file = py_file
                     break
-
-        if not main_file.exists():
-            return False
-
+        if not main_file.exists(): return False
         self._terminal_log("info", f"Executing entry point: {main_file.name}...")
         python_executable = str(venv_path / 'Scripts' / 'python') if sys.platform == 'win32' else str(
             venv_path / 'bin' / 'python')
@@ -278,82 +230,70 @@ class AvAApplication(QObject):
         return await self._run_command_in_terminal(command, project_path)
 
     def _terminal_log(self, log_type: str, message: str):
-        """Convenience method to log to the integrated terminal."""
         if self.code_viewer and self.code_viewer.terminal:
             terminal = self.code_viewer.terminal
             log_methods = {
-                "info": terminal.append_system_message,
-                "error": terminal.append_error,
-                "warning": terminal.append_system_message,
-                "success": terminal.append_system_message,
-                "command": terminal.append_command,
-                "stdout": terminal.append_output,
-                "stderr": terminal.append_error
+                "info": terminal.append_system_message, "error": terminal.append_error,
+                "warning": terminal.append_system_message, "success": terminal.append_system_message,
+                "command": terminal.append_command, "stdout": terminal.append_output, "stderr": terminal.append_error
             }
-
             prefix_map = {
                 "info": "ℹ️ ", "error": "❌ ERROR: ", "warning": "⚠️ WARN: ", "success": "✅ SUCCESS: ",
                 "stdout": "", "stderr": "", "command": ""
             }
-
             log_method = log_methods.get(log_type, terminal.append_output)
             prefix = prefix_map.get(log_type, "")
-
-            if log_type == "stdout" or log_type == "stderr":
+            if log_type in ["stdout", "stderr"]:
                 log_method(message + "\n")
             else:
                 log_method(prefix + message)
 
     def get_status(self) -> Dict[str, Any]:
-        """Gets the current status of the application."""
         llm_models_list = self.llm_client.get_available_models() if self.llm_client else ["LLM Client not init"]
-
         rag_info = {"ready": False, "status_text": "RAG: Not Initialized", "available": RAG_MANAGER_AVAILABLE}
         if RAG_MANAGER_AVAILABLE and self.rag_manager:
             rag_info["ready"] = self.rag_manager.is_ready
             rag_info["status_text"] = self.rag_manager.current_status
-
         return {
-            "ready": self.workflow_engine is not None,
-            "llm_models": llm_models_list,
-            "workspace": str(self.workspace_dir),
-            "current_project": self.current_project,
-            "current_session": self.current_session,
-            "rag": rag_info,
+            "ready": self.workflow_engine is not None, "llm_models": llm_models_list,
+            "workspace": str(self.workspace_dir), "current_project": self.current_project,
+            "current_session": self.current_session, "rag": rag_info,
             "windows": {
                 "main": self.main_window.isVisible() if self.main_window else False,
                 "code_viewer": self.code_viewer.isVisible() if self.code_viewer else False,
+                "streaming_terminal": self.streaming_terminal.isVisible() if self.streaming_terminal else False,
             }
         }
 
     @Slot(str)
     def _on_file_generated(self, file_path: str):
         self.logger.info(f"File generated: {file_path}")
-        if self.code_viewer:
-            self.code_viewer.auto_open_file(file_path)
+        if self.code_viewer: self.code_viewer.auto_open_file(file_path)
 
     @Slot(str)
     def _on_project_loaded(self, project_path: str):
         self.logger.info(f"Project loaded: {project_path}")
         self.current_project_path = Path(project_path)
         self.current_project = self.current_project_path.name
-        if self.main_window:
-            self.main_window.update_project_display(self.current_project)
+        if self.main_window: self.main_window.update_project_display(self.current_project)
         if self.code_viewer:
             self.code_viewer.load_project(project_path)
-            # Show the code viewer when a project is loaded
-            self.code_viewer.show()
-            self.code_viewer.raise_()
+            self.code_viewer.show();
+            self.code_viewer.raise_();
             self.code_viewer.activateWindow()
 
     def _handle_sidebar_action(self, action: str):
         self.logger.info(f"Sidebar action: {action}")
-        if action == "open_code_viewer":
+        if action == "view_log":
+            if self.streaming_terminal:
+                self.streaming_terminal.show()
+                self.streaming_terminal.raise_()
+                self.streaming_terminal.activateWindow()
+        elif action == "open_code_viewer":
             if self.code_viewer:
                 self.code_viewer.show()
                 self.code_viewer.raise_()
                 self.code_viewer.activateWindow()
-        # Delegate other actions as needed
         elif action == "save_session":
             self.save_session()
         elif action == "load_session":
@@ -365,7 +305,7 @@ class AvAApplication(QObject):
         if self.main_window:
             self.main_window.chat_interface.clear_chat()
             self.main_window.chat_interface._add_welcome_message()
-            self.current_project = "Default Project"
+            self.current_project = "Default Project";
             self.current_project_path = self.workspace_dir
             self.main_window.update_project_display(self.current_project)
         self.logger.info("New session started.")
@@ -380,13 +320,21 @@ class AvAApplication(QObject):
             "project_path": str(self.current_project_path),
             "conversation_history": history
         }
-        save_path, _ = QFileDialog.getSaveFileName(self.main_window, "Save Session", str(self.workspace_dir),
-                                                   "JSON Files (*.json)")
-        if not save_path: return
+        if self.current_project != "Default Project" and self.current_project_path.exists():
+            session_dir = self.current_project_path / ".sessions"
+            session_dir.mkdir(exist_ok=True)
+            file_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            save_path = session_dir / file_name
+        else:
+            save_path, _ = QFileDialog.getSaveFileName(self.main_window, "Save Session", str(self.workspace_dir),
+                                                       "JSON Files (*.json)")
+            if not save_path: return
+            save_path = Path(save_path)
         try:
             with open(save_path, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f, indent=2)
             QMessageBox.information(self.main_window, "Session Saved", f"Session saved to:\n{save_path}")
+            self.logger.info(f"Session saved to {save_path}")
         except Exception as e:
             QMessageBox.critical(self.main_window, "Error", f"Failed to save session: {e}")
 
@@ -411,11 +359,18 @@ class AvAApplication(QObject):
         project_name, ok = QInputDialog.getText(self.main_window, 'New Project', 'Enter project name:',
                                                 text='my-ava-project')
         if not (ok and project_name.strip()): return
+        project_name = project_name.strip()
         base_dir_str = QFileDialog.getExistingDirectory(self.main_window, 'Select Directory', str(self.workspace_dir))
         if not base_dir_str: return
-        project_path = Path(base_dir_str) / project_name.strip()
-        project_path.mkdir(parents=True, exist_ok=True)
-        (project_path / "main.py").touch()
+        project_path = Path(base_dir_str) / project_name
+        if project_path.exists():
+            reply = QMessageBox.question(self.main_window, 'Directory Exists',
+                                         f'Directory "{project_name}" exists. Use it anyway?',
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.No: return
+        else:
+            project_path.mkdir(parents=True, exist_ok=True)
+        (project_path / "main.py").write_text(f'if __name__ == "__main__":\n    print("Hello from {project_name}!")\n')
         self._on_project_loaded(str(project_path))
         self.main_window.chat_interface.add_assistant_response(
             f"Project '{project_name}' created at {project_path}. What should we build in it?")
@@ -428,24 +383,24 @@ class AvAApplication(QObject):
         if self.workflow_engine:
             self.main_window.chat_interface.add_workflow_status(
                 f"🧠 Analyzing project '{Path(folder_path_str).name}'...")
+            if self.streaming_terminal: self.streaming_terminal.show()
             asyncio.create_task(self.workflow_engine.execute_analysis_workflow(folder_path_str))
 
     def _on_error_occurred(self, component: str, error_message: str):
         self.logger.error(f"[ERROR] App Error in {component}: {error_message}")
-        if self.main_window:
-            self.main_window.on_app_error_occurred(component, error_message)
+        if self.main_window: self.main_window.on_app_error_occurred(component, error_message)
 
     def _handle_enhanced_workflow_request(self, user_prompt: str, conversation_history: List[Dict]):
         self.logger.info(f"Enhanced workflow request: {user_prompt[:100]}...")
         if not self.workflow_engine:
             self.error_occurred.emit("workflow_engine", "Workflow engine not initialized.")
             return
-        asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(
-            user_prompt, conversation_context=conversation_history
-        ))
+        if self.streaming_terminal: self.streaming_terminal.show()
+        asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history))
 
     def shutdown(self):
         self.logger.info("Shutting down AvA Application...")
         if self.main_window: self.main_window.close()
         if self.code_viewer: self.code_viewer.close()
+        if self.streaming_terminal: self.streaming_terminal.close()
         self.logger.info("Shutdown complete.")
