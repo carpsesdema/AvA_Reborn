@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V5.2 with Robust Logging
+# core/enhanced_workflow_engine.py - V5.2 with Robust Logging & THE FIX!
 
 import asyncio
 import json
@@ -164,26 +164,37 @@ class EnhancedWorkflowEngine(QObject):
             for i, filename in enumerate(build_order):
                 self.detailed_log_event.emit("WorkflowEngine", "stage_start",
                                              f"Processing file {i + 1}/{len(build_order)}: {filename}", "1")
-                file_spec = tech_spec["technical_specs"].get(filename)
-                if not file_spec: continue
+
+                # --- BUGFIX: Make the lookup robust to missing .py extensions ---
+                file_spec = tech_spec["technical_specs"].get(filename) or tech_spec["technical_specs"].get(
+                    f"{filename}.py")
+
+                if not file_spec:
+                    self.detailed_log_event.emit("WorkflowEngine", "error",
+                                                 f"Could not find spec for '{filename}'. Skipping.", 1)
+                    continue
 
                 dependency_files = file_spec.get("dependencies", [])
                 dependency_context = self._build_dependency_context(dependency_files, knowledge_packets)
                 project_context = {"description": tech_spec.get("project_description", "")}
 
-                generated_code = await self.coder_service.generate_file_from_spec(filename, file_spec, project_context,
+                # --- THE FIX IS APPLIED ABOVE, a full filename is required below ---
+                full_filename = filename if filename.endswith('.py') else f"{filename}.py"
+
+                generated_code = await self.coder_service.generate_file_from_spec(full_filename, file_spec,
+                                                                                  project_context,
                                                                                   dependency_context)
 
-                review_data, review_passed = await self.reviewer_service.review_code(filename, generated_code,
+                review_data, review_passed = await self.reviewer_service.review_code(full_filename, generated_code,
                                                                                      project_context['description'])
 
                 self.detailed_log_event.emit("WorkflowEngine", "info",
-                                             f"Review for {filename} {'passed' if review_passed else 'failed'}. Writing file to disk.",
+                                             f"Review for {full_filename} {'passed' if review_passed else 'failed'}. Writing file to disk.",
                                              "2")
-                self._write_file(project_dir, filename, generated_code)
+                self._write_file(project_dir, full_filename, generated_code)
 
-                knowledge_packets[filename] = {"spec": file_spec, "source_code": generated_code}
-                results["files_created"].append(filename)
+                knowledge_packets[full_filename] = {"spec": file_spec, "source_code": generated_code}
+                results["files_created"].append(full_filename)
 
             self.workflow_progress.emit("finalization", "Finalizing project...")
             elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
@@ -205,14 +216,17 @@ class EnhancedWorkflowEngine(QObject):
         if not dependency_files: return "This file has no dependencies."
         context_str = ""
         for dep_file in dependency_files:
-            if dep_file in knowledge_packets:
-                packet = knowledge_packets[dep_file]
-                context_str += f"\n\n--- CONTEXT FOR DEPENDENCY: {dep_file} ---\n"
+            # Handle both with and without extension for robustness
+            lookup_key = dep_file if dep_file.endswith('.py') else f"{dep_file}.py"
+
+            if lookup_key in knowledge_packets:
+                packet = knowledge_packets[lookup_key]
+                context_str += f"\n\n--- CONTEXT FOR DEPENDENCY: {lookup_key} ---\n"
                 context_str += f"SPECIFICATION:\n```json\n{json.dumps(packet['spec'], indent=2)}\n```\n"
                 context_str += f"FULL SOURCE CODE:\n```python\n{packet['source_code']}\n```\n"
             else:
-                self.logger.warning(f"Dependency '{dep_file}' not found. Context incomplete.")
-                context_str += f"\n\n--- NOTE: Context for '{dep_file}' was not available. ---\n"
+                self.logger.warning(f"Dependency '{lookup_key}' not found. Context incomplete.")
+                context_str += f"\n\n--- NOTE: Context for '{lookup_key}' was not available. ---\n"
         return context_str
 
     def _write_file(self, project_dir: Path, filename: str, content: str):

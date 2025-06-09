@@ -1,4 +1,4 @@
-# core/config.py - Professional Configuration Management
+# core/config.py - Professional Configuration Management (with DeepSeek support)
 
 import os
 import json
@@ -76,12 +76,17 @@ class ConfigManager:
                 "code_models": ["gpt-4o", "gpt-4-turbo"]
             },
             "anthropic": {
-                "chat_models": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-                "code_models": ["claude-3-5-sonnet-20241022"]
+                "chat_models": ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229"],
+                "code_models": ["claude-3-5-sonnet-20240620"]
             },
             "google": {
                 "chat_models": [ "gemini-2.5-pro-preview-06-05"],
                 "code_models": ["gemini-2.5-pro-preview-06-05"]
+            },
+            # --- ADDED DEEPSEEK SECTION ---
+            "deepseek": {
+                "chat_models": ["deepseek-chat"],
+                "code_models": ["deepseek-reasoner"]
             },
             "ollama": {
                 "chat_models": ["llama3.2", "qwen2.5"],
@@ -105,7 +110,7 @@ class ConfigManager:
                             model=model,
                             api_key=api_key or "",
                             api_base=self._get_api_base(provider),
-                            temperature=0.7 if model_type == "chat" else 0.1,
+                            temperature=0.7 if model_type == "chat_models" else 0.1,
                             max_tokens=4000,
                             timeout=60
                         )
@@ -117,6 +122,8 @@ class ConfigManager:
             "openai": os.getenv("OPENAI_API_BASE"),
             "anthropic": os.getenv("ANTHROPIC_API_BASE"),
             "google": os.getenv("GOOGLE_API_BASE"),
+            # --- ADDED DEEPSEEK BASE URL ---
+            "deepseek": os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com"),
             "ollama": os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
         }
 
