@@ -1,35 +1,35 @@
-# gui/code_viewer.py - Professional Code Viewer with Integrated Terminal
+# gui/code_viewer.py - Professional Code Viewer with Integrated Terminal & Modern UI
 
-import os
+import re
 from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal, Slot, QFileSystemWatcher, QPoint
+from PySide6.QtGui import QFont, QAction, QIcon, QSyntaxHighlighter, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTreeWidget, QTreeWidgetItem, QTextEdit, QPushButton, QLabel,
-    QFileDialog, QMessageBox, QTabWidget, QFrame, QToolBar, QMenuBar,
-    QMenu, QApplication, QHeaderView
+    QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
+    QFileDialog, QMessageBox, QTabWidget, QFrame, QMenu, QHeaderView
 )
-from PySide6.QtCore import Qt, Signal, Slot, QFileSystemWatcher
-from PySide6.QtGui import QFont, QAction, QIcon, QSyntaxHighlighter, QTextCharFormat, QColor
-import re
 
-# New Import for our Interactive Terminal!
+from gui.components import Colors, Typography
+# Import our UI components
 from gui.interactive_terminal import InteractiveTerminal
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
-    """Professional Python syntax highlighter"""
+    """Professional Python syntax highlighter with multiline support."""
 
-    # ... (This class is unchanged) ...
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlighting_rules = []
 
-        # Define colors for dark theme
-        keyword_color = QColor("#569cd6")  # Blue
-        string_color = QColor("#ce9178")  # Orange
-        comment_color = QColor("#6a9955")  # Green
-        function_color = QColor("#dcdcaa")  # Yellow
+        # Define colors from our design system
+        keyword_color = QColor(Colors.ACCENT_BLUE)
+        string_color = QColor(Colors.ACCENT_ORANGE)
+        comment_color = QColor(Colors.ACCENT_GREEN)
+        function_color = QColor("#DCDCAA")  # A nice yellow for functions
         self_color = QColor("#9CDCFE")  # Light blue for 'self'
+        class_color = QColor("#4EC9B0")  # Teal for class names
 
         # Keywords
         keyword_format = QTextCharFormat()
@@ -37,121 +37,113 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         keyword_format.setFontWeight(QFont.Weight.Bold)
         keywords = [
             'and', 'as', 'assert', 'break', 'class', 'continue', 'def',
-            'del', 'elif', 'else', 'except', 'exec', 'finally', 'for',
+            'del', 'elif', 'else', 'except', 'finally', 'for',
             'from', 'global', 'if', 'import', 'in', 'is', 'lambda',
-            'not', 'or', 'pass', 'print', 'raise', 'return', 'try',
-            'while', 'with', 'yield', 'None', 'True', 'False'
+            'not', 'or', 'pass', 'raise', 'return', 'try',
+            'while', 'with', 'yield', 'None', 'True', 'False', 'async', 'await'
         ]
-        for word in keywords:
-            pattern = r'\b' + word + r'\b'
-            self.highlighting_rules.append((re.compile(pattern), keyword_format))
+        self.highlighting_rules.extend([(r'\b' + word + r'\b', keyword_format) for word in keywords])
 
         # 'self' keyword
         self_format = QTextCharFormat()
         self_format.setForeground(self_color)
-        self.highlighting_rules.append((re.compile(r'\bself\b'), self_format))
+        self.highlighting_rules.append((r'\bself\b', self_format))
 
         # Strings
         string_format = QTextCharFormat()
         string_format.setForeground(string_color)
-        self.highlighting_rules.append((re.compile(r'".*?"'), string_format))
-        self.highlighting_rules.append((re.compile(r"'.*?'"), string_format))
-
-        # Multi-line strings
-        self.multiLineStringFormat = QTextCharFormat()
-        self.multiLineStringFormat.setForeground(string_color)
-        self.tri_single = (re.compile(r"'''"), 1, self.multiLineStringFormat)
-        self.tri_double = (re.compile(r'"""'), 2, self.multiLineStringFormat)
+        self.highlighting_rules.append((r'".*?"', string_format))
+        self.highlighting_rules.append((r"'.*?'", string_format))
 
         # Comments
         comment_format = QTextCharFormat()
         comment_format.setForeground(comment_color)
-        self.highlighting_rules.append((re.compile(r'#.*'), comment_format))
+        comment_format.setFontItalic(True)
+        self.highlighting_rules.append((r'#.*', comment_format))
 
-        # Functions
+        # Function names
         function_format = QTextCharFormat()
         function_format.setForeground(function_color)
-        self.highlighting_rules.append((re.compile(r'\bdef\s+(\w+)'), function_format))
+        self.highlighting_rules.append((r'\bdef\s+([_a-zA-Z][_a-zA-Z0-9]+)', function_format))
 
-        # Classes
+        # Class names
         class_format = QTextCharFormat()
-        class_format.setForeground(keyword_color)
-        self.highlighting_rules.append((re.compile(r'\bclass\s+(\w+)'), class_format))
+        class_format.setForeground(class_color)
+        class_format.setFontWeight(QFont.Weight.Bold)
+        self.highlighting_rules.append((r'\bclass\s+([_a-zA-Z][_a-zA-Z0-9]+)', class_format))
+
+        # Decorators
+        decorator_format = QTextCharFormat()
+        decorator_format.setForeground(QColor("#C586C0"))  # Purple
+        self.highlighting_rules.append((r'@[a-zA-Z0-9_.]+', decorator_format))
+
+        # Multi-line strings
+        self.tri_single = (re.compile(r"'''"), 1)
+        self.tri_double = (re.compile(r'"""'), 2)
+        self.multiLineStringFormat = QTextCharFormat()
+        self.multiLineStringFormat.setForeground(string_color)
 
     def highlightBlock(self, text):
-        for pattern, format in self.highlighting_rules:
-            for match in pattern.finditer(text):
-                self.setFormat(match.start(), match.end() - match.start(), format)
+        for pattern, fmt in self.highlighting_rules:
+            for match in re.finditer(pattern, text):
+                start, end = match.span(1 if '(' in pattern else 0)
+                self.setFormat(start, end - start, fmt)
 
         self.setCurrentBlockState(0)
 
-        # Handle multi-line strings
-        start_index = 0
-        if self.previousBlockState() != 1:
-            start_index = text.find("'''")
-        if self.previousBlockState() != 2:
-            start_index = text.find('"""')
-
-        while start_index >= 0:
-            end_index = text.find("'''" if self.previousBlockState() != 2 else '"""', start_index + 3)
-            if end_index == -1:
-                self.setCurrentBlockState(1 if self.previousBlockState() != 2 else 2)
-                self.setFormat(start_index, len(text) - start_index, self.multiLineStringFormat)
-                break
-            else:
-                length = end_index - start_index + 3
-                self.setFormat(start_index, length, self.multiLineStringFormat)
-                start_index = text.find("'''" if self.previousBlockState() != 2 else '"""', start_index + length)
+        in_multiline = self.previousBlockState()
+        if not in_multiline in [self.tri_single[1], self.tri_double[1]]:
+            # If not in a multiline string, check for the start of one
+            for pattern, state in [self.tri_double, self.tri_single]:
+                for match in pattern.finditer(text):
+                    start = match.start()
+                    end = pattern.search(text, start + 3)
+                    if end:
+                        length = (end.start() - start) + 3
+                        self.setFormat(start, length, self.multiLineStringFormat)
+                    else:
+                        self.setCurrentBlockState(state)
+                        self.setFormat(start, len(text) - start, self.multiLineStringFormat)
+                        return  # Block is fully consumed
 
 
 class CodeEditor(QTextEdit):
-    """Professional code editor with syntax highlighting"""
-    # ... (This class is unchanged) ...
-    file_modified = Signal(str)  # file_path
+    file_modified = Signal(str)
 
     def __init__(self):
         super().__init__()
         self.file_path = None
         self.is_modified = False
-
-        # Setup editor
-        self.setFont(QFont("JetBrains Mono", 12))
-        self.setStyleSheet("""
-            QTextEdit {
-                background: #1e1e1e;
-                color: #d4d4d4;
-                border: 1px solid #3e3e42;
-                border-radius: 4px;
+        self.setFont(Typography.code())
+        self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.setStyleSheet(f"""
+            QTextEdit {{
+                background: {Colors.PRIMARY_BG};
+                color: {Colors.TEXT_PRIMARY};
+                border: none;
                 padding: 8px;
-                selection-background-color: #264f78;
-            }
+                selection-background-color: {Colors.ACCENT_BLUE};
+                selection-color: {Colors.PRIMARY_BG};
+            }}
         """)
-
-        # Add syntax highlighting
         self.highlighter = PythonSyntaxHighlighter(self.document())
-
-        # Track modifications
         self.textChanged.connect(self._on_text_changed)
 
     def load_file(self, file_path: str):
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            content = Path(file_path).read_text(encoding='utf-8')
             self.setPlainText(content)
             self.file_path = file_path
             self.document().setModified(False)
             self.is_modified = False
-            cursor = self.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            self.setTextCursor(cursor)
+            self.moveCursor(QTextCursor.MoveOperation.Start)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load file: {e}")
 
     def save_file(self) -> bool:
         if not self.file_path: return False
         try:
-            with open(self.file_path, 'w', encoding='utf-8') as f:
-                f.write(self.toPlainText())
+            Path(self.file_path).write_text(self.toPlainText(), encoding='utf-f8')
             self.document().setModified(False)
             self.is_modified = False
             return True
@@ -160,15 +152,13 @@ class CodeEditor(QTextEdit):
             return False
 
     def _on_text_changed(self):
-        if self.file_path and not self.is_modified:
+        if not self.is_modified:
             self.is_modified = True
             self.document().setModified(True)
             self.file_modified.emit(self.file_path)
 
 
 class FileTree(QTreeWidget):
-    """Professional file tree with project navigation"""
-    # ... (This class is unchanged) ...
     file_selected = Signal(str)
     folder_selected = Signal(str)
 
@@ -176,16 +166,19 @@ class FileTree(QTreeWidget):
         super().__init__()
         self.setHeaderHidden(True)
         self.header().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.setStyleSheet("""
-            QTreeWidget {
-                background: #1e1e1e;
-                color: #cccccc;
+        self.setStyleSheet(f"""
+            QTreeWidget {{
+                background: {Colors.PRIMARY_BG};
+                color: {Colors.TEXT_PRIMARY};
                 border: none;
                 outline: none;
-            }
-            QTreeWidget::item { padding: 6px; border-radius: 4px; }
-            QTreeWidget::item:hover { background: #2d2d30; }
-            QTreeWidget::item:selected { background: #0078d4; color: white; }
+            }}
+            QTreeView::branch {{
+                background: transparent;
+            }}
+            QTreeWidget::item {{ padding: 6px 4px; border-radius: 4px; }}
+            QTreeWidget::item:hover {{ background: {Colors.HOVER_BG}; }}
+            QTreeWidget::item:selected {{ background: {Colors.ACCENT_BLUE}; color: white; }}
         """)
         self.itemClicked.connect(self._on_item_clicked)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -201,7 +194,6 @@ class FileTree(QTreeWidget):
         self.watcher.addPath(str(self.project_root))
         self.clear()
         self._build_tree_recursive(self.project_root, self.invisibleRootItem())
-        self.expandAll()
 
     def _build_tree_recursive(self, path: Path, parent_item: QTreeWidgetItem):
         try:
@@ -211,19 +203,22 @@ class FileTree(QTreeWidget):
                 item = QTreeWidgetItem(parent_item, [item_path.name])
                 item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
                 if item_path.is_dir():
-                    item.setIcon(0, QIcon.fromTheme("folder",
-                                                    self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon)))
+                    item.setIcon(0, QIcon.fromTheme("folder-open", self.style().standardIcon(
+                        self.style().StandardPixmap.SP_DirOpenIcon)))
                     self.watcher.addPath(str(item_path))
                     self._build_tree_recursive(item_path, item)
                 else:
-                    item.setIcon(0, QIcon.fromTheme("text-x-generic",
-                                                    self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon)))
+                    icon = QIcon.fromTheme("text-x-python" if item_path.suffix == '.py' else "text-x-generic",
+                                           self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
+                    item.setIcon(0, icon)
         except PermissionError:
             pass
 
+    @Slot()
     def refresh_tree(self, path=""):
         if self.project_root: self.load_project(str(self.project_root))
 
+    @Slot(QTreeWidgetItem, int)
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
         file_path = item.data(0, Qt.ItemDataRole.UserRole)
         if Path(file_path).is_file():
@@ -231,9 +226,8 @@ class FileTree(QTreeWidget):
         else:
             self.folder_selected.emit(file_path)
 
+    @Slot(QPoint)
     def _show_context_menu(self, position):
-        item = self.itemAt(position)
-        if not item: return
         menu = QMenu(self)
         refresh_action = QAction("Refresh Tree", self)
         refresh_action.triggered.connect(self.refresh_tree)
@@ -242,19 +236,13 @@ class FileTree(QTreeWidget):
 
 
 class CodeViewerWindow(QMainWindow):
-    """
-    Professional Code Viewer/IDE Window for AvA workflow
-    SINGLE RESPONSIBILITY: Display and edit generated code files
-    """
-
-    file_changed = Signal(str, str)  # file_path, content
-    # NEW SIGNAL to tell the application to run the project
+    file_changed = Signal(str, str)
     run_project_requested = Signal()
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AvA - Code Viewer & IDE")
-        self.setGeometry(200, 100, 1200, 800)
+        self.setGeometry(200, 100, 1400, 900)
         self.open_files = {}
         self.current_project = None
         self._init_ui()
@@ -268,91 +256,96 @@ class CodeViewerWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Main splitter for file tree and editor/terminal area
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setStyleSheet(f"""
+            QSplitter::handle {{ background-color: {Colors.BORDER_DEFAULT}; }}
+            QSplitter::handle:horizontal {{ width: 2px; }}
+            QSplitter::handle:vertical {{ height: 2px; }}
+            QSplitter::handle:hover {{ background-color: {Colors.ACCENT_BLUE}; }}
+        """)
 
-        # Left Panel: File Tree
         left_panel = self._create_left_panel()
-
-        # Right Panel: A vertical splitter for Editor and Terminal
         right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_splitter.setStyleSheet(main_splitter.styleSheet())  # Inherit style
 
         editor_panel = self._create_editor_panel()
-
-        # Instantiate the terminal but don't add a frame around it directly
         self.terminal = InteractiveTerminal()
-        # Set an object name to style the container if needed
-        self.terminal.setObjectName("integratedTerminal")
 
         right_splitter.addWidget(editor_panel)
         right_splitter.addWidget(self.terminal)
-        right_splitter.setSizes([600, 200])  # Initial size split
+        right_splitter.setSizes([600, 250])
 
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([280, 920])
+        main_splitter.setSizes([300, 1100])
 
         main_layout.addWidget(main_splitter)
         self.setCentralWidget(central_widget)
 
     def _create_left_panel(self) -> QWidget:
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(8, 8, 8, 8)
-        left_layout.setSpacing(8)
+        panel = QFrame()
+        panel.setStyleSheet(
+            f"background-color: {Colors.SECONDARY_BG}; border-right: 1px solid {Colors.BORDER_DEFAULT};")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(8)
 
-        tree_header = QLabel("📁 Project Explorer")
-        tree_header.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        tree_header.setStyleSheet("color: #0078d4; margin-bottom: 4px;")
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(12, 0, 12, 0)
+        header = QLabel("Project Explorer")
+        header.setFont(Typography.heading_small())
+        header.setStyleSheet("color: #cccccc; border: none; background: transparent;")
+        header_layout.addWidget(header)
+        header_layout.addStretch()
 
         self.file_tree = FileTree()
 
-        left_layout.addWidget(tree_header)
-        left_layout.addWidget(self.file_tree)
-        return left_panel
+        layout.addLayout(header_layout)
+        layout.addWidget(self.file_tree)
+        return panel
 
     def _create_editor_panel(self) -> QWidget:
-        editor_panel = QWidget()
-        editor_layout = QVBoxLayout(editor_panel)
-        editor_layout.setContentsMargins(0, 8, 0, 0)
-        editor_layout.setSpacing(8)
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Tab widget for multiple files
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setMovable(True)
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane { border: none; }
-            QTabBar::tab {
-                background: #2d2d30; color: #cccccc; padding: 8px 16px;
-                margin-right: 1px; border-top-left-radius: 6px; border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected, QTabBar::tab:hover { background: #3e3e42; }
-            QTabBar::tab:selected { color: white; background: #0078d4; }
-            QTabBar::close-button { image: url(none); } /* Optional: Hide default close */
+        self.tab_widget.setStyleSheet(f"""
+            QTabWidget::pane {{ border-top: 1px solid {Colors.BORDER_DEFAULT}; }}
+            QTabBar::tab {{
+                background: {Colors.SECONDARY_BG}; color: {Colors.TEXT_SECONDARY}; 
+                padding: 8px 16px; border: 1px solid transparent;
+                border-bottom: none;
+            }}
+            QTabBar::tab:hover {{ background: {Colors.HOVER_BG}; color: {Colors.TEXT_PRIMARY}; }}
+            QTabBar::tab:selected {{ 
+                background: {Colors.PRIMARY_BG}; color: {Colors.TEXT_PRIMARY}; 
+                border-color: {Colors.BORDER_DEFAULT};
+            }}
+            QTabBar::close-button {{ /* Style if needed */ }}
         """)
 
-        # Welcome message
         welcome_widget = QLabel("Welcome to the AvA Code Viewer!\n\nLoad a project or let AvA generate one.")
         welcome_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_widget.setFont(QFont("Segoe UI", 14))
-        welcome_widget.setStyleSheet("color: #888;")
+        welcome_widget.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
         self.tab_widget.addTab(welcome_widget, "Welcome")
 
-        editor_layout.addWidget(self.tab_widget)
-        return editor_panel
+        layout.addWidget(self.tab_widget)
+        return panel
 
     def _apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background-color: #1e1e1e; color: #cccccc; }
-        """)
+        self.setStyleSheet(
+            f"QMainWindow, QWidget {{ background-color: {Colors.SECONDARY_BG}; color: {Colors.TEXT_PRIMARY}; }}")
 
     def _create_menus(self):
-        # ... (This method is unchanged) ...
         menubar = self.menuBar()
+        menubar.setStyleSheet(f"background-color: {Colors.SECONDARY_BG};")
         file_menu = menubar.addMenu("File")
         open_action = QAction("Open Project...", self)
-        open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._open_project_dialog)
         file_menu.addAction(open_action)
         save_action = QAction("Save", self)
@@ -368,7 +361,6 @@ class CodeViewerWindow(QMainWindow):
     def _connect_signals(self):
         self.file_tree.file_selected.connect(self._open_file_in_new_tab)
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
-        # Connect the terminal's button to the window's signal
         self.terminal.force_run_requested.connect(self.run_project_requested.emit)
 
     @Slot(str)
@@ -379,11 +371,7 @@ class CodeViewerWindow(QMainWindow):
         self.terminal.set_force_run_enabled(True)
         self.terminal.clear_terminal()
         self.terminal.append_system_message(f"Project '{Path(project_path).name}' loaded.")
-
-        # Remove welcome tab if it's still there
-        if self.tab_widget.tabText(0) == "Welcome":
-            self.tab_widget.removeTab(0)
-
+        if self.tab_widget.tabText(0) == "Welcome": self.tab_widget.removeTab(0)
         self.setWindowTitle(f"AvA - Code Viewer [{Path(project_path).name}]")
 
     @Slot()
@@ -393,26 +381,21 @@ class CodeViewerWindow(QMainWindow):
 
     @Slot(str)
     def _open_file_in_new_tab(self, file_path: str):
-        file_path = str(Path(file_path))
+        file_path_str = str(Path(file_path))
         for i in range(self.tab_widget.count()):
             widget = self.tab_widget.widget(i)
-            if isinstance(widget, CodeEditor) and widget.file_path == file_path:
+            if isinstance(widget, CodeEditor) and widget.file_path == file_path_str:
                 self.tab_widget.setCurrentIndex(i)
                 return
-
-        # Close welcome tab if it's the only one open
-        if self.tab_widget.count() == 1 and not isinstance(self.tab_widget.widget(0), CodeEditor):
-            self.tab_widget.removeTab(0)
-
+        if self.tab_widget.count() == 1 and not isinstance(self.tab_widget.widget(0),
+                                                           CodeEditor): self.tab_widget.removeTab(0)
         editor = CodeEditor()
-        editor.load_file(file_path)
+        editor.load_file(file_path_str)
         editor.file_modified.connect(self._on_file_modified)
-
-        file_name = Path(file_path).name
-        tab_index = self.tab_widget.addTab(editor, file_name)
-        self.tab_widget.setTabToolTip(tab_index, file_path)
+        tab_index = self.tab_widget.addTab(editor, Path(file_path_str).name)
+        self.tab_widget.setTabToolTip(tab_index, file_path_str)
         self.tab_widget.setCurrentIndex(tab_index)
-        self.open_files[file_path] = editor
+        self.open_files[file_path_str] = editor
 
     @Slot(int)
     def _close_tab(self, index: int):
@@ -420,7 +403,7 @@ class CodeViewerWindow(QMainWindow):
         widget = self.tab_widget.widget(index)
         if isinstance(widget, CodeEditor):
             if widget.document().isModified():
-                reply = QMessageBox.question(self, "Unsaved Changes", f"Save changes to {Path(widget.file_path).name}?",
+                reply = QMessageBox.question(self, "Unsaved Changes", f"Save changes?",
                                              QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
                 if reply == QMessageBox.StandardButton.Save:
                     widget.save_file()
@@ -431,25 +414,19 @@ class CodeViewerWindow(QMainWindow):
 
     @Slot()
     def _save_current_file(self):
-        current_widget = self.tab_widget.currentWidget()
-        if isinstance(current_widget, CodeEditor):
-            if current_widget.save_file():
-                current_index = self.tab_widget.currentIndex()
-                file_name = Path(current_widget.file_path).name
-                self.tab_widget.setTabText(current_index, file_name)
+        widget = self.tab_widget.currentWidget()
+        if isinstance(widget, CodeEditor) and widget.save_file():
+            self.tab_widget.setTabText(self.tab_widget.currentIndex(), Path(widget.file_path).name)
 
     @Slot(str)
     def _on_file_modified(self, file_path: str):
         for i in range(self.tab_widget.count()):
             widget = self.tab_widget.widget(i)
             if isinstance(widget, CodeEditor) and widget.file_path == file_path:
-                file_name = Path(file_path).name
-                self.tab_widget.setTabText(i, f"{file_name} *")
+                self.tab_widget.setTabText(i, f"{Path(file_path).name} *")
                 break
-        if file_path in self.open_files:
-            self.file_changed.emit(file_path, self.open_files[file_path].toPlainText())
+        if file_path in self.open_files: self.file_changed.emit(file_path, self.open_files[file_path].toPlainText())
 
     @Slot(str)
     def auto_open_file(self, file_path: str):
-        if Path(file_path).exists():
-            self._open_file_in_new_tab(file_path)
+        if Path(file_path).exists(): self._open_file_in_new_tab(file_path)

@@ -1,4 +1,4 @@
-# gui/main_window.py - Final Version with all connections
+# gui/main_window.py - Final Version with RAG status connection
 
 from PySide6.QtCore import Signal, Slot, QTimer
 from PySide6.QtWidgets import (
@@ -15,12 +15,9 @@ class AvAMainWindow(QMainWindow):
     """
     The main window of the AvA application, coordinating the UI components.
     """
-    # Signals for the application core to handle
     new_project_requested = Signal()
     load_project_requested = Signal()
     workflow_requested_with_context = Signal(str, list)
-
-    # Kept for simple backward compatibility if needed, but new logic uses the one above
     workflow_requested = Signal(str)
 
     def __init__(self, ava_app=None):
@@ -37,7 +34,6 @@ class AvAMainWindow(QMainWindow):
 
         if self.ava_app:
             self._connect_ava_signals()
-            # Defer initial UI update slightly to ensure all components are ready
             QTimer.singleShot(100, self.update_all_status_displays)
 
     def _apply_theme(self):
@@ -57,37 +53,29 @@ class AvAMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _connect_signals(self):
-        """Connect signals within the main window's own components."""
         self.chat_interface.message_sent.connect(self.handle_user_message)
         self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
         self.sidebar.load_project_requested.connect(self.load_project_requested.emit)
         self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
-
-        # Connect sidebar actions to the application core via a signal handler
         self.sidebar.action_triggered.connect(self._handle_sidebar_action)
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_request)
 
     def _connect_ava_signals(self):
-        """Connect to signals from the main AvAApplication core."""
         if not self.ava_app: return
 
-        # Connect to the source of truth for workflow events: the engine itself
         if self.ava_app.workflow_engine:
             self.ava_app.workflow_engine.workflow_started.connect(self.on_workflow_started)
             self.ava_app.workflow_engine.workflow_progress.connect(self.on_workflow_progress)
             self.ava_app.workflow_engine.workflow_completed.connect(self.on_workflow_completed)
 
-        # Connect to general application events
         self.ava_app.error_occurred.connect(self.on_app_error_occurred)
         self.ava_app.project_loaded.connect(self.update_project_display)
-        if self.ava_app.rag_manager:
-            self.ava_app.rag_manager.status_changed.connect(self.update_rag_status_display)
+
+        # --- MODIFIED: Connect directly to the application's RAG status signal ---
+        self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
 
     @Slot(str)
     def handle_user_message(self, message: str):
-        """Sends user message to the application core for processing."""
-        # The new ChatInterface adds the user bubble itself. We just forward the request.
-        # This will trigger the workflow via the application core
         self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history)
 
     @Slot()
@@ -108,15 +96,11 @@ class AvAMainWindow(QMainWindow):
 
     @Slot(str)
     def _handle_sidebar_action(self, action: str):
-        """Passes sidebar actions to the main application."""
         if self.ava_app:
             self.ava_app._handle_sidebar_action(action)
 
-    # --- STATUS UPDATE SLOTS ---
-
     @Slot()
     def update_all_status_displays(self):
-        """Update all status displays based on current app state."""
         self._update_model_config_display()
         if self.ava_app and self.ava_app.rag_manager:
             self.update_rag_status_display(self.ava_app.rag_manager.current_status,
@@ -124,15 +108,11 @@ class AvAMainWindow(QMainWindow):
 
     @Slot(dict)
     def _on_model_configuration_applied(self, config_summary: dict):
-        """Updates UI after model configuration changes."""
         self._update_model_config_display()
         self.chat_interface.add_assistant_response("✅ Model configuration has been updated!")
 
     def _update_model_config_display(self):
-        """Fetches config from LLM client and updates the sidebar."""
-        if not (self.ava_app and self.ava_app.llm_client):
-            return
-
+        if not (self.ava_app and self.ava_app.llm_client): return
         assignments = self.ava_app.llm_client.get_role_assignments()
         display_summary = {}
         for role_key, model_key in assignments.items():
@@ -141,7 +121,6 @@ class AvAMainWindow(QMainWindow):
                 display_summary[role_key] = f"{model_config.provider}/{model_config.model}"
             else:
                 display_summary[role_key] = "Not Set"
-
         self.sidebar.update_model_status_display(display_summary)
 
     @Slot(str)
@@ -152,8 +131,6 @@ class AvAMainWindow(QMainWindow):
     def update_rag_status_display(self, status_text: str, status_color_key: str):
         """Updates the RAG status display in the sidebar."""
         self.sidebar.update_rag_status_display(status_text)
-
-    # --- WORKFLOW FEEDBACK SLOTS ---
 
     @Slot(str, str)
     def on_workflow_started(self, workflow_type: str, description: str = ""):
@@ -173,6 +150,5 @@ class AvAMainWindow(QMainWindow):
 
     @Slot(str, str)
     def on_app_error_occurred(self, component: str, error_message: str):
-        """Displays application errors in the chat."""
         error_text = f"❌ **Error in {component}**\n\n{error_message}"
         self.chat_interface.add_assistant_response(error_text)
