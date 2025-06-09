@@ -44,6 +44,7 @@ class AvALeftSidebar(QWidget):
         # Knowledge Base Panel
         self.knowledge_panel = KnowledgeBasePanel()
         self.knowledge_panel.scan_directory_requested.connect(self.scan_directory_requested.emit)
+        self.knowledge_panel.add_files_btn.clicked.connect(lambda: self.action_triggered.emit("add_project_files")) # Connect the add files button
         layout.addWidget(self.knowledge_panel)
 
         # Chat Actions Panel

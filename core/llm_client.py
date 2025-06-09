@@ -147,7 +147,7 @@ class EnhancedLLMClient:
 
         default_assignments = {
             LLMRole.ARCHITECT: "gemini-2.5-pro-preview-06-05",
-            LLMRole.CODER: "ollama-codellama:13b",
+            LLMRole.CODER: "gemini-2.5-pro-preview-06-05",
             LLMRole.REVIEWER: "gemini-2.5-pro-preview-06-05",
             LLMRole.CHAT: "gemini-2.5-flash-preview-05-20"
         }
