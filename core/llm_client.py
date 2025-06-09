@@ -1,4 +1,4 @@
-# core/llm_client.py - V4.5 with the user-confirmed CORRECT 'deepseek-reasoner' model
+# core/llm_client.py - V4.7 FINAL - Complete file with user-defined defaults
 
 import json
 import os
@@ -85,67 +85,44 @@ class EnhancedLLMClient:
     def _initialize_models(self):
         """Initialize available models with their configurations"""
         if os.getenv("GEMINI_API_KEY"):
+            self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
+                provider="gemini", model="gemini-2.5-flash-preview-05-20", api_key=os.getenv("GEMINI_API_KEY"),
+                temperature=0.7, max_tokens=8000,
+                suitable_roles=[LLMRole.CHAT]
+            )
             self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
                 provider="gemini", model="gemini-2.5-pro-preview-06-05", api_key=os.getenv("GEMINI_API_KEY"),
                 temperature=0.3, max_tokens=8000,
-                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER, LLMRole.CHAT]
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
-
-        if os.getenv("ANTHROPIC_API_KEY"):
-            self.models["claude-3-5-sonnet-20240620"] = ModelConfig(
-                provider="anthropic", model="claude-3-5-sonnet-20240620", api_key=os.getenv("ANTHROPIC_API_KEY"),
-                temperature=0.3, max_tokens=4000,
-                suitable_roles=[LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
-            )
+            print("✅ Gemini models loaded successfully (including Flash)")
 
         if os.getenv("DEEPSEEK_API_KEY"):
             deepseek_base_url = "https://api.deepseek.com"
             deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-
             self.models["deepseek-reasoner"] = ModelConfig(
                 provider="deepseek", model="deepseek-reasoner", api_key=deepseek_api_key,
                 base_url=deepseek_base_url, temperature=0.1, max_tokens=32000,
-                suitable_roles=[LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER]
-            )
-
-            self.models["deepseek-chat"] = ModelConfig(
-                provider="deepseek", model="deepseek-chat", api_key=deepseek_api_key,
-                base_url=deepseek_base_url, temperature=0.7, max_tokens=8000,
-                suitable_roles=[LLMRole.CHAT]
-            )
-            print("✅ DeepSeek models loaded successfully (including 'deepseek-reasoner')")
-
-        if os.getenv("OLLAMA_API_BASE") or Path("~/.ollama").expanduser().exists():
-            ollama_base_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
-            self.models["qwen2.5-coder"] = ModelConfig(
-                provider="ollama", model="qwen2.5-coder", api_key="",
-                base_url=ollama_base_url, temperature=0.1, max_tokens=8000,
                 suitable_roles=[LLMRole.CODER]
             )
-            print("✅ Ollama models configured (if running locally)")
+            print("✅ DeepSeek models loaded successfully")
 
     def _assign_roles(self):
-        """Assign models to roles intelligently, preferring the new reasoner."""
-        role_preferences = {
-            LLMRole.ARCHITECT: ["deepseek-reasoner", "gemini-2.5-pro-preview-06-05", "claude-3-5-sonnet-20240620"],
-            LLMRole.CODER: ["deepseek-reasoner", "claude-3-5-sonnet-20240620", "qwen2.5-coder"],
-            LLMRole.REVIEWER: ["deepseek-reasoner", "gemini-2.5-pro-preview-06-05"],
-            LLMRole.CHAT: ["deepseek-chat", "claude-3-5-sonnet-20240620"]
+        """Assign models to roles based on user's desired defaults."""
+        self.role_assignments = {
+            LLMRole.ARCHITECT: "gemini-2.5-pro-preview-06-05",
+            LLMRole.CODER: "deepseek-reasoner",
+            LLMRole.REVIEWER: "gemini-2.5-pro-preview-06-05",
+            LLMRole.CHAT: "gemini-2.5-flash-preview-05-20"
         }
 
-        for role, preferred_models in role_preferences.items():
-            for model_name in preferred_models:
-                if model_name in self.models and role in self.models[model_name].suitable_roles:
-                    self.role_assignments[role] = model_name
-                    break
-
-        print("🎯 Final Role Assignments:")
+        print("🎯 Final Role Assignments (User Defaults):")
         for role, model_name in self.role_assignments.items():
             if model_name in self.models:
                 provider = self.models[model_name].provider
                 print(f"  {role.value.title()}: {provider}/{model_name}")
             else:
-                print(f"  {role.value.title()}: Not assigned")
+                print(f"  {role.value.title()}: ❌ WARNING: Model '{model_name}' not found!")
 
     def assign_role(self, role: LLMRole, model_name: str):
         """Manually assign a model to a specific role."""
@@ -158,12 +135,10 @@ class EnhancedLLMClient:
     def get_role_model(self, role: LLMRole) -> Optional[ModelConfig]:
         """Get the model configuration assigned to a role."""
         model_name = self.role_assignments.get(role)
-        if model_name:
-            return self.models.get(model_name)
-        print(f"Warning: No model assigned for role {role.value}")
-        if role != LLMRole.CHAT:
-            return self.get_role_model(LLMRole.CHAT)
-        return None
+        if not model_name or model_name not in self.models:
+            print(f"Warning: Model for role {role.value} ('{model_name}') not available. Check API keys.")
+            return None
+        return self.models.get(model_name)
 
     def get_role_assignments(self) -> Dict[str, str]:
         """Get current role assignments for display."""
@@ -175,18 +150,15 @@ class EnhancedLLMClient:
 
         if not model_config:
             return self._fallback_response(prompt, role)
-
         try:
             provider_map = {
                 "gemini": self._call_gemini,
                 "anthropic": self._call_anthropic,
-                "ollama": self._call_ollama,
                 "deepseek": self._call_deepseek
             }
             if model_config.provider in provider_map:
                 return await provider_map[model_config.provider](prompt, model_config, personality)
-            else:
-                return self._fallback_response(prompt, role)
+            return self._fallback_response(prompt, role)
         except Exception as e:
             print(f"API call with {model_config.provider} for role {role.value} failed: {e}")
             return self._fallback_response(prompt, role, e)
@@ -194,17 +166,14 @@ class EnhancedLLMClient:
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
         model_config = self.get_role_model(role)
         personality = self.personalities.get(role, "")
-
         if not model_config:
             yield self._fallback_response(prompt, role)
             return
-
         stream_generator = None
         try:
             provider_map = {
                 "gemini": self._stream_gemini,
                 "anthropic": self._stream_anthropic,
-                "ollama": self._stream_ollama,
                 "deepseek": self._stream_deepseek
             }
             if model_config.provider in provider_map:
@@ -219,8 +188,6 @@ class EnhancedLLMClient:
         finally:
             if stream_generator and hasattr(stream_generator, 'aclose'):
                 await stream_generator.aclose()
-
-    # --- Private API Call Methods ---
 
     async def _call_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
@@ -246,9 +213,12 @@ class EnhancedLLMClient:
                     raise Exception(f"Gemini stream API error: {await response.text()}")
                 async for line in response.content:
                     if line.startswith(b'data: '):
-                        data = json.loads(line[6:])
-                        if data.get("candidates"):
-                            yield data["candidates"][0]["content"]["parts"][0]["text"]
+                        try:
+                            data = json.loads(line[6:])
+                            if data.get("candidates"):
+                                yield data["candidates"][0]["content"]["parts"][0]["text"]
+                        except json.JSONDecodeError:
+                            print(f"Warning: Gemini stream JSON decode error: {line.decode('utf-8', 'ignore')}")
 
     async def _call_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         url = config.base_url or "https://api.anthropic.com/v1/messages"
@@ -283,37 +253,6 @@ class EnhancedLLMClient:
                         except json.JSONDecodeError:
                             continue
 
-    async def _call_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
-        url = f"{config.base_url}/api/generate"
-        payload = {"model": config.model, "prompt": final_prompt, "stream": False,
-                   "options": {"temperature": config.temperature, "num_predict": config.max_tokens}}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                resp_json = await response.json()
-                if response.status == 200: return resp_json["response"]
-                raise Exception(f"Ollama API error {response.status}: {resp_json}")
-
-    async def _stream_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
-        final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
-        url = f"{config.base_url}/api/generate"
-        payload = {"model": config.model, "prompt": final_prompt, "stream": True,
-                   "options": {"temperature": config.temperature}}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                if response.status != 200:
-                    raise Exception(f"Ollama stream API error: {await response.text()}")
-                async for line in response.content:
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            yield data.get("response", "")
-                            if data.get("done"):
-                                break
-                        except json.JSONDecodeError:
-                            continue
-
     async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
@@ -327,8 +266,6 @@ class EnhancedLLMClient:
                 resp_json = await response.json()
                 if response.status == 200 and "choices" in resp_json:
                     message = resp_json["choices"][0]["message"]
-                    if 'reasoning_content' in message and message['reasoning_content']:
-                        return f"## 🧠 Reasoning:\n{message['reasoning_content']}\n\n## 💡 Final Answer:\n{message['content']}"
                     return message.get('content', '')
                 raise Exception(f"DeepSeek API error {response.status}: {resp_json}")
 
@@ -353,9 +290,7 @@ class EnhancedLLMClient:
                         try:
                             chunk = json.loads(data_content)
                             delta = chunk["choices"][0].get("delta", {})
-                            if delta.get("reasoning_content"):
-                                yield delta["reasoning_content"]
-                            elif delta.get("content"):
+                            if delta.get("content"):
                                 yield delta["content"]
                         except json.JSONDecodeError:
                             print(f"Warning: DeepSeek stream JSON decode error: {line_str}")
