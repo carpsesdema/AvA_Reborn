@@ -116,6 +116,26 @@ class EnhancedLLMClient:
                 suitable_roles=[LLMRole.CODER, LLMRole.CHAT]
             )
 
+        # --- MODIFIED: Add DeepSeek models ---
+        if os.getenv("DEEPSEEK_API_KEY"):
+            deepseek_base_url = "https://api.deepseek.com/v1"
+            self.models["deepseek-chat"] = ModelConfig(
+                provider="deepseek", model="deepseek-chat", api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url=deepseek_base_url, temperature=0.7, max_tokens=8000,
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.REVIEWER, LLMRole.CHAT]
+            )
+            self.models["deepseek-coder"] = ModelConfig(
+                provider="deepseek", model="deepseek-coder", api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url=deepseek_base_url, temperature=0.1, max_tokens=16000,
+                suitable_roles=[LLMRole.CODER]
+            )
+            # --- NEW: Add the new reasoning model ---
+            self.models["deepseek-v2"] = ModelConfig(
+                provider="deepseek", model="deepseek-v2", api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url=deepseek_base_url, temperature=0.2, max_tokens=8000,
+                suitable_roles=[LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
+            )
+
         try:
             ollama_base_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
             response = requests.get(f"{ollama_base_url}/api/tags", timeout=2)
@@ -314,7 +334,11 @@ class EnhancedLLMClient:
         import aiohttp
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
-        url = config.base_url or "https://api.openai.com/v1/chat/completions"
+        # --- CORRECTED LOGIC ---
+        # Use the config's base_url if it exists, otherwise default to OpenAI's public API
+        base_url = config.base_url or "https://api.openai.com/v1"
+        url = f"{base_url}/chat/completions"
+        # --- END CORRECTION ---
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
                    "max_tokens": config.max_tokens}
@@ -329,7 +353,10 @@ class EnhancedLLMClient:
         import aiohttp
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
-        url = config.base_url or "https://api.openai.com/v1/chat/completions"
+        # --- CORRECTED LOGIC ---
+        base_url = config.base_url or "https://api.openai.com/v1"
+        url = f"{base_url}/chat/completions"
+        # --- END CORRECTION ---
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
                    "max_tokens": config.max_tokens, "stream": True}
@@ -461,10 +488,12 @@ class EnhancedLLMClient:
                 await session.close()
 
     async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
+        # DeepSeek API is OpenAI compatible
         return await self._call_openai(prompt, config, personality)
 
     async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
         str, None]:
+        # DeepSeek API is OpenAI compatible
         async for chunk in self._stream_openai(prompt, config, personality):
             yield chunk
 

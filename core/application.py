@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
 
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
-from core.llm_client import EnhancedLLMClient
+from core.llm_client import EnhancedLLMClient, LLMRole
 from gui.code_viewer import CodeViewerWindow
 # Import our UI components
 from gui.main_window import AvAMainWindow
@@ -391,19 +391,83 @@ class AvAApplication(QObject):
             if self.streaming_terminal: self.streaming_terminal.show()
             asyncio.create_task(self.workflow_engine.execute_analysis_workflow(folder_path_str))
 
+    @Slot(str, str)
     def _on_error_occurred(self, component: str, error_message: str):
-        # ... (implementation unchanged) ...
         self.logger.error(f"[ERROR] App Error in {component}: {error_message}")
         if self.main_window: self.main_window.on_app_error_occurred(component, error_message)
 
+    @Slot(str, list)
     def _handle_enhanced_workflow_request(self, user_prompt: str, conversation_history: List[Dict]):
-        # ... (implementation unchanged) ...
-        self.logger.info(f"Enhanced workflow request: {user_prompt[:100]}...")
-        if not self.workflow_engine:
-            self.error_occurred.emit("workflow_engine", "Workflow engine not initialized.")
-            return
-        if self.streaming_terminal: self.streaming_terminal.show()
-        asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history))
+        """
+        Slot to receive the user request signal. It schedules the async processing
+        of the request without blocking the UI thread.
+        """
+        asyncio.create_task(self._process_user_request_async(user_prompt, conversation_history))
+
+    async def _process_user_request_async(self, user_prompt: str, conversation_history: List[Dict]):
+        """
+        Handles a user request by first triaging it as a 'chat' or 'workflow'
+        and then routing it to the appropriate handler.
+        """
+        self.logger.info(f"Handling user request: {user_prompt[:100]}...")
+
+        # --- Triage Step ---
+        triage_prompt = f"""
+        Analyze the user's prompt. Is it a simple conversational message (like a greeting, a question about you, a casual remark) or is it a request to create, build, modify, or analyze a software project?
+
+        Respond with only a single word: "chat" or "workflow".
+
+        User Prompt: "{user_prompt}"
+        """
+        try:
+            # Use a fast model for this simple task
+            triage_response = await self.llm_client.chat(triage_prompt, role=LLMRole.CHAT)
+            decision = triage_response.strip().lower()
+            self.logger.info(f"Triage decision: '{decision}' for prompt: '{user_prompt}'")
+        except Exception as e:
+            self.logger.error(f"Triage failed: {e}. Defaulting to workflow.", exc_info=True)
+            decision = "workflow"  # Fail-safe to old behavior
+
+        # --- Route based on decision ---
+        if "workflow" in decision:
+            self.logger.info("Routing to Enhanced Workflow Engine.")
+            if not self.workflow_engine:
+                self.error_occurred.emit("workflow_engine", "Workflow engine not initialized.")
+                return
+            if self.streaming_terminal:
+                self.streaming_terminal.show()
+            # This is already an async method, so we can await the task
+            await self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history)
+        else:  # "chat" or any other response
+            self.logger.info("Routing to Simple Chat Handler.")
+            await self._handle_simple_chat(user_prompt, conversation_history)
+
+    async def _handle_simple_chat(self, user_prompt: str, conversation_history: List[Dict]):
+        """
+        Handles a simple conversational message by generating a direct chat response.
+        """
+        try:
+            # Use the last 5 messages for context to keep it brief
+            history_for_prompt = conversation_history[-5:]
+            # Build a simple prompt with history for the chat model
+            history_str = "\n".join(
+                [f"{msg['role']}: {msg['message']}" for msg in history_for_prompt if msg.get('message')])
+
+            chat_prompt = f"""
+            You are AvA, a friendly and helpful AI development assistant. Continue the conversation naturally based on the recent history.
+
+            Recent Conversation History:
+            {history_str}
+
+            Current User Prompt:
+            user: {user_prompt}
+            assistant: """
+
+            response = await self.llm_client.chat(chat_prompt, role=LLMRole.CHAT)
+            self.main_window.chat_interface.add_assistant_response(response)
+        except Exception as e:
+            self.logger.error(f"Simple chat handler failed: {e}", exc_info=True)
+            self.error_occurred.emit("simple_chat", str(e))
 
     def shutdown(self):
         # ... (implementation unchanged) ...
