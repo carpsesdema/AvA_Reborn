@@ -1,26 +1,23 @@
-# core/application.py - V2.2 with full implementations
+# core/application.py - V2.2 with a custom workspace path
 
 import asyncio
-import logging
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 
-from PySide6.QtCore import QObject, Signal, QTimer, Slot
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog
+from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
 
-from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
-from core.project_state_manager import ProjectStateManager
-
+from core.llm_client import EnhancedLLMClient
+from gui.code_viewer import CodeViewerWindow
 # Import our UI components
 from gui.main_window import AvAMainWindow
-from gui.code_viewer import CodeViewerWindow
 from gui.terminals import StreamingTerminal
-from gui.interactive_terminal import InteractiveTerminal
 
 try:
     from core.rag_manager import RAGManager
@@ -54,8 +51,12 @@ class AvAApplication(QObject):
         self.rag_manager = None
         self.streaming_terminal = None
 
-        self.workspace_dir = Path("./workspace")
+        # --- THIS IS THE MODIFIED LINE ---
+        # We use forward slashes as they work on all systems (Windows, Mac, Linux)
+        self.workspace_dir = Path("C:/Projects/AvA_Reborn/workspace")
         self.workspace_dir.mkdir(exist_ok=True)
+        # --- END OF MODIFICATION ---
+
         self.current_project = "Default Project"
         self.current_project_path = self.workspace_dir
         self.current_session = "Main Chat"
@@ -278,8 +279,8 @@ class AvAApplication(QObject):
         if self.main_window: self.main_window.update_project_display(self.current_project)
         if self.code_viewer:
             self.code_viewer.load_project(project_path)
-            self.code_viewer.show();
-            self.code_viewer.raise_();
+            self.code_viewer.show()
+            self.code_viewer.raise_()
             self.code_viewer.activateWindow()
 
     def _handle_sidebar_action(self, action: str):
@@ -305,7 +306,7 @@ class AvAApplication(QObject):
         if self.main_window:
             self.main_window.chat_interface.clear_chat()
             self.main_window.chat_interface._add_welcome_message()
-            self.current_project = "Default Project";
+            self.current_project = "Default Project"
             self.current_project_path = self.workspace_dir
             self.main_window.update_project_display(self.current_project)
         self.logger.info("New session started.")
@@ -360,6 +361,7 @@ class AvAApplication(QObject):
                                                 text='my-ava-project')
         if not (ok and project_name.strip()): return
         project_name = project_name.strip()
+        # The base directory for the dialog is now our configured workspace_dir
         base_dir_str = QFileDialog.getExistingDirectory(self.main_window, 'Select Directory', str(self.workspace_dir))
         if not base_dir_str: return
         project_path = Path(base_dir_str) / project_name
@@ -377,7 +379,9 @@ class AvAApplication(QObject):
 
     def load_existing_project_dialog(self):
         if not self.main_window: return
-        folder_path_str = QFileDialog.getExistingDirectory(self.main_window, "Load Existing Project")
+        # The base directory for the dialog is now our configured workspace_dir
+        folder_path_str = QFileDialog.getExistingDirectory(self.main_window, "Load Existing Project",
+                                                           str(self.workspace_dir))
         if not folder_path_str: return
         self.logger.info(f"User selected existing project to load: {folder_path_str}")
         if self.workflow_engine:
