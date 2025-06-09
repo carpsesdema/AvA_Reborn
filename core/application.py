@@ -1,28 +1,21 @@
-# core/application.py - Enhanced Error-Aware Terminal Integration
-
+# core/application.py
 import asyncio
-import logging
-import json
-import sys
-import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
-from functools import partial
+from typing import Dict, Any
 
-# Import the necessary Qt components
-from PySide6.QtCore import QObject, Signal, QTimer, Qt, Q_ARG, QMetaObject
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog, QWidget
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, Qt, QMetaObject, Q_ARG
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from core.llm_client import EnhancedLLMClient
 from core.enhanced_workflow_engine import EnhancedWorkflowEngine
-from core.execution_engine import ExecutionEngine
-
-from gui.main_window import AvAMainWindow
 from gui.code_viewer import CodeViewerWindow
+from gui.main_window import AvAMainWindow
 from gui.terminals import TerminalWindow
+from utils.logger import get_logger
 
+# Import RAGManager with error handling
 try:
     from core.rag_manager import RAGManager
 
@@ -30,6 +23,8 @@ try:
 except ImportError as e:
     RAG_MANAGER_AVAILABLE = False
     print(f"RAG Manager not available: {e}")
+
+logger = get_logger(__name__)
 
 
 class ErrorContext:
@@ -53,189 +48,141 @@ class ErrorContext:
         self.working_directory = cwd
         self.timestamp = datetime.now()
 
-        # Capture file states for context
-        if Path(cwd).exists():
-            try:
-                self.file_states = {
-                    str(f.relative_to(cwd)): f.stat().st_mtime
-                    for f in Path(cwd).rglob("*.py")
-                    if f.is_file()
-                }
-            except Exception:
-                self.file_states = {}
-
-    def has_error(self) -> bool:
-        """Check if this execution had errors"""
-        return self.exit_code != 0 or "error" in self.stderr.lower() or "traceback" in self.stderr.lower()
+        # Capture file states
+        try:
+            for file_path in Path(cwd).rglob("*.py"):
+                self.file_states[str(file_path.relative_to(cwd))] = file_path.stat().st_mtime
+        except Exception:
+            pass
 
     def get_error_summary(self) -> str:
-        """Get a concise error summary for Ava"""
-        if not self.has_error():
-            return "No errors detected"
-
+        """Get a summary of the error for Ava"""
         summary = f"Command: {self.last_command}\n"
         summary += f"Exit Code: {self.exit_code}\n"
-        summary += f"Working Dir: {self.working_directory}\n"
+        summary += f"Working Directory: {self.working_directory}\n"
 
         if self.stderr:
-            # Extract key error information
-            lines = self.stderr.split('\n')
-            important_lines = []
-            for line in lines:
-                line = line.strip()
-                if any(keyword in line.lower() for keyword in
-                       ['error', 'exception', 'traceback', 'failed', 'not found']):
-                    important_lines.append(line)
+            summary += f"\nError Output:\n{self.stderr}\n"
 
-            if important_lines:
-                summary += f"Key Errors:\n" + "\n".join(important_lines[:5])
-            else:
-                summary += f"Stderr:\n{self.stderr[:500]}"
-
-        if self.stdout and "error" in self.stdout.lower():
-            summary += f"\nStdout (contains errors):\n{self.stdout[:300]}"
+        if self.stdout:
+            summary += f"\nStandard Output:\n{self.stdout}\n"
 
         return summary
 
 
 class AvAApplication(QObject):
+    """Main application controller for AvA"""
+
+    # Signals
     fully_initialized_signal = Signal()
+    status_changed = Signal(dict)
+    project_loaded = Signal(str)
     workflow_started = Signal(str)
     workflow_completed = Signal(dict)
-    error_occurred = Signal(str, str)
-    rag_status_changed = Signal(str, str)
-    project_loaded = Signal(str)
+    file_generated = Signal(str)
+    error_occurred = Signal(str)
+    chat_message_received = Signal(str)
 
-    # --- Enhanced terminal signals ---
+    # Terminal signals for error awareness
     terminal_command_to_run = Signal(str)
     terminal_output = Signal(str)
     terminal_error = Signal(str)
     terminal_system_message = Signal(str)
     terminal_focus_requested = Signal()
-    chat_message_received = Signal(str)
-
-    # --- New error signals for Ava awareness ---
-    execution_error_detected = Signal(object)  # ErrorContext object
-    error_analysis_requested = Signal(str)  # Error summary for Ava
+    execution_error_detected = Signal(dict)
+    error_analysis_requested = Signal(str, str)  # error_message, file_path
 
     def __init__(self):
         super().__init__()
-        self._setup_logging()
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
+        self.logger.info("Initializing AvA Application...")
 
         # Core components
-        self.llm_client = None
         self.main_window = None
-        self.terminal_window = None
         self.code_viewer = None
+        self.terminal_window = None
         self.workflow_engine = None
         self.rag_manager = None
-        self.execution_engine = None
 
-        # Project state
-        self.workspace_dir = Path("./workspace")
-        self.workspace_dir.mkdir(exist_ok=True)
+        # State
         self.current_project = "Default Project"
-        self.current_project_path = self.workspace_dir
-        self.current_session = "Main Chat"
-        self.active_workflows = {}
+        self.current_project_path = None
+        self.workspace_dir = Path.home() / "AvA_Projects"
+        self.workspace_dir.mkdir(exist_ok=True)
 
-        # Error tracking for Ava
+        # Error tracking
         self.last_error_context = None
-        self.error_history = []  # Keep last 5 errors for pattern analysis
+        self.error_history = []
 
-        self.current_config = {
-            "chat_model": "gemini-2.5-pro-preview-06-05",
-            "code_model": "qwen2.5-coder:14b",
-            "temperature": 0.7
-        }
-
-        self.performance_timer = QTimer()
-        self.performance_timer.timeout.connect(self._update_performance_stats)
-        self.performance_timer.start(5000)
-
-    def _setup_logging(self):
-        log_dir = Path("./logs")
-        log_dir.mkdir(exist_ok=True)
-
-        class SafeFormatter(logging.Formatter):
-            def format(self, record):
-                msg = super().format(record)
-                emoji_replacements = {
-                    '🚀': '[START]', '✅': '[OK]', '❌': '[ERROR]',
-                    '⚠️': '[WARN]', '🧠': '[AI]', '📊': '[STATS]',
-                    '🔧': '[TOOL]', '📄': '[FILE]'
-                }
-                for emoji, replacement in emoji_replacements.items():
-                    msg = msg.replace(emoji, replacement)
-                return msg
-
-        formatter = SafeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler = logging.FileHandler(log_dir / "ava.log", encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+        # Performance monitoring
+        self.performance_timer = None
+        self._last_memory_usage = 0
 
     async def initialize(self):
-        self.logger.info("[START] Initializing Error-Aware AvA Application...")
-        self.main_window = AvAMainWindow(ava_app=self)
-        self.logger.info("[OK] Main window initialized")
-        self.terminal_window = TerminalWindow()
-        self.logger.info("[OK] Terminal window initialized")
+        """Async initialization of components"""
+        try:
+            # Initialize UI components (sync)
+            self._initialize_ui()
+
+            # Initialize async components
+            await self._initialize_async_components()
+
+            # Connect all components
+            self._connect_components()
+
+            # Start performance monitoring
+            self._start_performance_monitoring()
+
+            # Show main window
+            if self.main_window:
+                self.main_window.show()
+
+            # Emit initialization complete
+            self.fully_initialized_signal.emit()
+            self.logger.info("AvA Application fully initialized")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize application: {e}")
+            raise
+
+    def _initialize_ui(self):
+        """Initialize UI components"""
+        self.logger.info("Initializing UI components...")
+
+        # Create main window
+        self.main_window = AvAMainWindow()
+        self.main_window.setWindowTitle("AvA - AI Development Assistant")
+
+        # Create code viewer
         self.code_viewer = CodeViewerWindow()
-        self.logger.info("[OK] Code viewer initialized")
-        self._initialize_core_services()
 
-        if self.main_window and not self.main_window.isVisible():
-            self.main_window.show()
-            self.logger.info("Main window shown.")
+        # Create terminal window
+        self.terminal_window = TerminalWindow()
 
-        asyncio.create_task(self._initialize_async_components())
-        return True
-
-    def _initialize_core_services(self):
-        self.logger.info("Initializing core services...")
-        self.llm_client = EnhancedLLMClient()
-        self.logger.info(f"Available LLM models: {self.llm_client.get_available_models()}")
-        self.execution_engine = ExecutionEngine(project_state_manager=None, terminal=self.terminal_window)
-        self.logger.info("[OK] Core services initialized.")
+        self.logger.info("UI components initialized")
 
     async def _initialize_async_components(self):
-        self.logger.info("Starting async component initialization...")
-        await self._initialize_rag_manager()
-        self._initialize_workflow_engine()
-        self._initialize_execution_engine()
-        self._connect_components()
-        self._setup_window_behaviors()
-        self.logger.info("Async component initialization completed.")
-        self.fully_initialized_signal.emit()
-        self.logger.info("[OK] Error-Aware AvA Application initialized successfully.")
+        """Initialize async components"""
+        self.logger.info("Initializing async components...")
 
-    async def _initialize_rag_manager(self):
+        # Initialize RAG manager
         if RAG_MANAGER_AVAILABLE:
             try:
                 self.rag_manager = RAGManager()
+                # FIX: Call async_initialize instead of initialize
                 await self.rag_manager.async_initialize()
-                self._on_rag_status_changed("RAG: Ready", "green")
-                self.logger.info("[OK] RAG Manager initialized")
+                self.logger.info("RAG manager initialized successfully")
             except Exception as e:
-                self.logger.error(f"RAG Manager initialization failed: {e}", exc_info=True)
+                self.logger.warning(f"RAG manager initialization failed: {e}")
                 self.rag_manager = None
-                self._on_rag_status_changed("RAG: Failed", "red")
         else:
+            self.logger.warning("RAG manager not available - some features may be limited")
             self.rag_manager = None
-            self._on_rag_status_changed("RAG: Not Available", "grey")
 
-    def _initialize_workflow_engine(self):
-        self.logger.info("Initializing workflow engine...")
-        self.workflow_engine = EnhancedWorkflowEngine(
-            self.llm_client,
-            self.terminal_window,
-            self.code_viewer,
-            self.rag_manager
-        )
-        self.logger.info("[OK] Workflow engine initialized.")
+        # Initialize workflow engine
+        self.workflow_engine = EnhancedWorkflowEngine(rag_service=self.rag_manager)
+
+        self.logger.info("Async components initialized")
 
     def _connect_components(self):
         self.logger.info("Connecting components...")
@@ -276,275 +223,124 @@ class AvAApplication(QObject):
 
         # Standard workflow signals
         self.workflow_started.connect(self._on_workflow_started)
-        # This signal is now only connected from the engine, not to itself
         self.error_occurred.connect(self._on_error_occurred)
 
         if self.workflow_engine:
             self.workflow_engine.file_generated.connect(self._on_file_generated)
-            self.workflow_engine.project_loaded.connect(self.project_loaded.emit)
+            # FIX: Don't forward the signal, just connect directly to the handler
+            self.workflow_engine.project_loaded.connect(self._on_project_loaded)
 
-        self.project_loaded.connect(self._on_project_loaded)
+        # FIX: Remove the duplicate connection
+        # self.project_loaded.connect(self._on_project_loaded)
+
         self.logger.info("[OK] Components connected with error awareness.")
 
-    def _setup_window_behaviors(self):
-        if self.main_window:
-            self.main_window.setWindowTitle("AvA - Error-Aware AI Development")
-        if self.terminal_window:
-            self.terminal_window.setWindowTitle("AvA - Execution Terminal")
-        if self.code_viewer:
-            self.code_viewer.setWindowTitle("AvA - Code Viewer & IDE")
-        self._position_windows()
-        self.logger.info("[OK] Window behaviors set up.")
+    def _start_performance_monitoring(self):
+        """Start monitoring performance metrics"""
+        self.performance_timer = QTimer()
+        self.performance_timer.timeout.connect(self._update_performance_metrics)
+        self.performance_timer.start(5000)  # Update every 5 seconds
 
-    def _position_windows(self):
-        screen_geo = QApplication.primaryScreen().geometry()
-        if self.main_window:
-            self.main_window.setGeometry(100, 50, 1400, 900)
-        if self.terminal_window:
-            self.terminal_window.setGeometry(
-                screen_geo.width() - 920, screen_geo.height() - 450, 900, 400
-            )
-        if self.code_viewer:
-            self.code_viewer.setGeometry(screen_geo.width() - 1000, 50, 950, 700)
+    def _update_performance_metrics(self):
+        """Update performance metrics"""
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            cpu_percent = process.cpu_percent()
 
-    def run_project_in_terminal(self, project_path_str: Optional[str] = None) -> bool:
-        """
-        Enhanced manual execution with comprehensive error capture for Ava
-        Returns True if successful, False if errors occurred
-        """
-        path_to_run = Path(project_path_str) if project_path_str else self.current_project_path
-        path_to_run = path_to_run.resolve()
+            metrics = {
+                'memory_mb': memory_mb,
+                'cpu_percent': cpu_percent,
+                'timestamp': datetime.now().isoformat()
+            }
 
-        self.chat_message_received.emit(f"🚀 Running project: {path_to_run.name}")
-        self.terminal_focus_requested.emit()
+            # Emit status update
+            self.status_changed.emit({
+                'type': 'performance',
+                'metrics': metrics
+            })
 
-        def run_command_and_capture(command_parts: List[str], timeout_override: int = None) -> Tuple[
-            bool, subprocess.CompletedProcess]:
-            """Run command with full error capture"""
-            command_str = ' '.join(f'"{part}"' if ' ' in part else part for part in command_parts)
-            self.terminal_command_to_run.emit(command_str)
+        except Exception as e:
+            self.logger.error(f"Error updating performance metrics: {e}")
 
-            try:
-                result = subprocess.run(
-                    command_parts,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(path_to_run),
-                    timeout=timeout_override or 300,
-                    check=False,
-                    encoding='utf-8',
-                    errors='ignore'
-                )
-
-                # Always emit output to terminal
-                if result.stdout:
-                    self.terminal_output.emit(result.stdout)
-                if result.stderr:
-                    self.terminal_error.emit(result.stderr)
-
-                # Create error context for Ava
-                error_context = ErrorContext()
-                error_context.capture_execution(command_str, result, str(path_to_run))
-
-                # Check for errors and notify Ava if needed
-                if error_context.has_error():
-                    self.last_error_context = error_context
-                    self.error_history.append(error_context)
-                    if len(self.error_history) > 5:  # Keep only last 5 errors
-                        self.error_history.pop(0)
-
-                    self.execution_error_detected.emit(error_context)
-                    self.terminal_system_message.emit(
-                        f"❌ Process finished with exit code {result.returncode} - Error captured for Ava analysis"
-                    )
-                    return False, result
-                else:
-                    self.terminal_system_message.emit(
-                        f"✅ Process finished successfully with exit code {result.returncode}"
-                    )
-                    return True, result
-
-            except subprocess.TimeoutExpired:
-                msg = f"Command '{command_str[:50]}...' timed out!"
-                self.terminal_error.emit(msg)
-                self.terminal_system_message.emit("❌ Execution timed out")
-
-                # Create timeout error context
-                error_context = ErrorContext()
-                error_context.last_command = command_str
-                error_context.stderr = msg
-                error_context.exit_code = -1
-                error_context.working_directory = str(path_to_run)
-                error_context.timestamp = datetime.now()
-
-                self.last_error_context = error_context
-                self.execution_error_detected.emit(error_context)
-                return False, None
-            except Exception as e:
-                error_msg = f"Unexpected error running command: {e}"
-                self.terminal_error.emit(error_msg)
-                self.terminal_system_message.emit("❌ Execution failed unexpectedly")
-
-                # Create exception error context
-                error_context = ErrorContext()
-                error_context.last_command = command_str
-                error_context.stderr = error_msg
-                error_context.exit_code = -2
-                error_context.working_directory = str(path_to_run)
-                error_context.timestamp = datetime.now()
-
-                self.last_error_context = error_context
-                self.execution_error_detected.emit(error_context)
-                return False, None
-
-        # Check for main.py
-        main_file = path_to_run / "main.py"
-        if not main_file.exists():
-            self.chat_message_received.emit("❌ No main.py file found!")
-
-            # Create "no main file" error context
-            error_context = ErrorContext()
-            error_context.last_command = "check for main.py"
-            error_context.stderr = f"main.py not found in {path_to_run}"
-            error_context.exit_code = -3
-            error_context.working_directory = str(path_to_run)
-            error_context.timestamp = datetime.now()
-
-            self.last_error_context = error_context
-            self.execution_error_detected.emit(error_context)
-            return False
-
-        # Check for virtual environment or requirements
-        venv_python = path_to_run / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-        req_file = path_to_run / "requirements.txt"
-
-        # Handle dependencies if requirements.txt exists
-        if req_file.exists():
-            self.chat_message_received.emit("📦 Installing dependencies...")
-            python_for_install = str(venv_python) if venv_python.exists() else self._find_system_python()
-
-            success, result = run_command_and_capture([python_for_install, "-m", "pip", "install", "-r", req_file.name])
-            if not success:
-                self.chat_message_received.emit("❌ Failed to install dependencies. Check terminal for errors.")
-                return False
-            else:
-                self.chat_message_received.emit("✅ Dependencies installed successfully!")
-
-        # Execute main script
-        self.chat_message_received.emit("🏃 Executing main script...")
-        python_to_use = str(venv_python) if venv_python.exists() else self._find_system_python()
-
-        success, result = run_command_and_capture([python_to_use, main_file.name])
-
-        if success:
-            self.chat_message_received.emit("✅ Project execution completed successfully!")
-            return True
-        else:
-            self.chat_message_received.emit("❌ Project execution encountered errors. Check terminal output above.")
-            self.chat_message_received.emit(
-                "💡 Ask Ava to analyze the error: 'Can you fix the error that just occurred?'")
-            return False
-
-    def _find_system_python(self) -> str:
-        """Find system Python (outside of AvA's virtual environment)"""
-        import subprocess, os
-        ava_venv_marker, current_executable = ".venv", sys.executable
-        potential_pythons = []
-
-        if sys.platform == "win32":
-            potential_pythons = ["python", "py", "py -3", r"C:\Python312\python.exe", r"C:\Python311\python.exe"]
-            user_appdata = os.environ.get('LOCALAPPDATA', '')
-            if user_appdata:
-                for version in ['312', '311']:
-                    potential_pythons.append(f"{user_appdata}\\Programs\\Python\\Python{version}\\python.exe")
-        else:
-            potential_pythons = ["python3", "python", "/usr/bin/python3"]
-
-        for python_cmd in potential_pythons:
-            try:
-                cmd_parts = python_cmd.split()
-                result = subprocess.run(cmd_parts + ["--version"], capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    result2 = subprocess.run(
-                        cmd_parts + ["-c", "import sys; print(sys.executable)"],
-                        capture_output=True, text=True, timeout=10
-                    )
-                    if result2.returncode == 0:
-                        python_path = result2.stdout.strip()
-                        if ava_venv_marker not in python_path and python_path != current_executable:
-                            return python_cmd
-            except Exception:
-                continue
-        return "python"
-
-    def _handle_execution_error(self, error_context: ErrorContext):
-        """Handle execution errors - log and prepare for Ava analysis"""
-        self.logger.error(f"Execution error captured: {error_context.get_error_summary()}")
-
-        # Auto-suggest Ava can help
-        suggestion_msg = "\n🤖 Ava can help! Try asking:\n"
-        suggestion_msg += "• 'Can you fix the error that just occurred?'\n"
-        suggestion_msg += "• 'What went wrong with the execution?'\n"
-        suggestion_msg += "• 'Debug the last error'"
-
-        self.chat_message_received.emit(suggestion_msg)
-
-    def _send_error_to_ava(self, user_message: str):
-        """Send error context to Ava for analysis"""
-        if not self.last_error_context:
-            self.chat_message_received.emit("No recent execution errors to analyze.")
+    @Slot(str)
+    def _handle_workflow_request(self, prompt: str):
+        """Handle workflow request from UI"""
+        if not self.workflow_engine:
+            self.logger.error("Workflow engine not initialized")
+            self.chat_message_received.emit("❌ Error: Workflow engine not available")
             return
 
-        # Prepare comprehensive error context for Ava
-        error_summary = self.last_error_context.get_error_summary()
+        # Create async task for workflow
+        asyncio.create_task(self._execute_workflow(prompt))
 
-        # Add file context if available
-        context_message = f"Here's the error that occurred:\n\n{error_summary}\n\n"
+    @Slot(str, dict)
+    def _handle_enhanced_workflow_request(self, prompt: str, context: dict):
+        """Handle enhanced workflow request with context"""
+        if not self.workflow_engine:
+            self.logger.error("Workflow engine not initialized")
+            self.chat_message_received.emit("❌ Error: Workflow engine not available")
+            return
 
-        if self.last_error_context.file_states:
-            context_message += "Project files present:\n"
-            for file_path in sorted(self.last_error_context.file_states.keys()):
-                context_message += f"  - {file_path}\n"
+        # Create async task for enhanced workflow
+        asyncio.create_task(self._execute_enhanced_workflow(prompt, context))
 
-        # Combine user message with error context
-        full_prompt = f"{user_message}\n\nError Context:\n{context_message}"
+    async def _execute_workflow(self, prompt: str):
+        """Execute standard workflow"""
+        try:
+            self.workflow_started.emit(prompt)
+            self.chat_message_received.emit(f"🚀 Starting workflow: {prompt}")
 
-        # Send to workflow engine for analysis
-        if self.workflow_engine:
-            asyncio.create_task(
-                self.workflow_engine.execute_enhanced_workflow(full_prompt, [])
+            result = await self.workflow_engine.execute_workflow(prompt, self.workspace_dir)
+
+            # Workflow completed signal will be emitted by the engine
+
+        except Exception as e:
+            self.logger.error(f"Workflow execution failed: {e}")
+            self.error_occurred.emit(str(e))
+            self.chat_message_received.emit(f"❌ Workflow failed: {str(e)}")
+
+    async def _execute_enhanced_workflow(self, prompt: str, context: dict):
+        """Execute enhanced workflow with context"""
+        try:
+            self.workflow_started.emit(prompt)
+            self.chat_message_received.emit(f"🚀 Starting enhanced workflow: {prompt}")
+
+            # Extract project path from context if available
+            project_path = context.get('project_path', self.current_project_path)
+
+            if not project_path:
+                raise ValueError("No project path available for enhanced workflow")
+
+            result = await self.workflow_engine.execute_workflow(
+                prompt,
+                project_path,
+                use_existing_project=True
             )
 
-    def get_last_error_for_ava(self) -> Optional[str]:
-        """Get the last error in a format suitable for Ava analysis"""
-        if not self.last_error_context:
-            return None
-        return self.last_error_context.get_error_summary()
+            # Workflow completed signal will be emitted by the engine
 
-    def get_error_patterns_for_ava(self) -> str:
-        """Analyze error patterns for Ava"""
-        if not self.error_history:
-            return "No error history available."
+        except Exception as e:
+            self.logger.error(f"Enhanced workflow execution failed: {e}")
+            self.error_occurred.emit(str(e))
+            self.chat_message_received.emit(f"❌ Enhanced workflow failed: {str(e)}")
 
-        analysis = f"Error History ({len(self.error_history)} recent errors):\n\n"
-        for i, error in enumerate(self.error_history[-3:], 1):  # Last 3 errors
-            analysis += f"Error {i}:\n"
-            analysis += f"  Command: {error.last_command}\n"
-            analysis += f"  Exit Code: {error.exit_code}\n"
-            analysis += f"  Time: {error.timestamp.strftime('%H:%M:%S') if error.timestamp else 'Unknown'}\n"
-            if error.stderr:
-                # Get first error line
-                first_error = error.stderr.split('\n')[0][:100]
-                analysis += f"  Error: {first_error}\n"
-            analysis += "\n"
+    @Slot(str)
+    def _handle_sidebar_action(self, action: str):
+        """Handle sidebar actions"""
+        action_map = {
+            'terminal': self._open_terminal,
+            'code_viewer': self._open_code_viewer,
+            'new_project': self.create_new_project_dialog,
+            'load_project': self.load_existing_project_dialog,
+        }
 
-        return analysis
-
-    # --- Rest of the original methods remain the same ---
-
-    def _initialize_execution_engine(self):
-        self.execution_engine = ExecutionEngine(project_state_manager=None, terminal=self.terminal_window)
-        self.logger.info("[OK] Execution engine initialized.")
+        handler = action_map.get(action)
+        if handler:
+            handler()
+        else:
+            self.logger.warning(f"Unknown sidebar action: {action}")
 
     def _open_terminal(self):
         if self.terminal_window:
@@ -586,117 +382,102 @@ class AvAApplication(QObject):
     def _on_workflow_completed(self, result: dict):
         # FIX: The slot's job is to handle the signal, not re-emit it.
         # This breaks the infinite loop.
-        self.logger.info(f"Workflow completed: {result.get('project_name', 'N/A')}")
-        # self.workflow_completed.emit(result) # <-- REMOVED THIS LINE TO BREAK LOOP
+        self.logger.info(f"Workflow completed: {result}")
 
-    def _on_error_occurred(self, component: str, error_message: str):
-        self.logger.error(f"Error in {component}: {error_message}")
+        # Update UI based on result
+        success = result.get('success', False)
+        if success:
+            msg = f"✅ Workflow completed successfully!"
+            if 'num_files' in result:
+                msg += f" ({result['num_files']} files)"
+        else:
+            msg = f"❌ Workflow completed with errors"
 
-    def _on_rag_status_changed(self, status_text: str, color: str):
-        if self.main_window:
-            QMetaObject.invokeMethod(
-                self.main_window, 'update_rag_status_display', Qt.QueuedConnection,
-                Q_ARG(str, status_text), Q_ARG(str, color)
-            )
+        self.chat_message_received.emit(msg)
 
-    def _update_performance_stats(self):
-        pass
+        # Update status
+        self.status_changed.emit({
+            'type': 'workflow_completed',
+            'result': result
+        })
+
+    def _on_error_occurred(self, error_msg: str):
+        self.logger.error(f"Error occurred: {error_msg}")
+        self.chat_message_received.emit(f"❌ Error: {error_msg}")
 
     def get_status(self) -> Dict[str, Any]:
-        llm_models_list = self.llm_client.get_available_models() if self.llm_client else ["LLM Client not init"]
-        rag_info = {
-            "ready": False,
-            "status_text": "RAG: Not Initialized",
-            "available": RAG_MANAGER_AVAILABLE,
-            "collections": {}
+        """Get current application status"""
+        status = {
+            'initialized': True,
+            'current_project': self.current_project,
+            'workspace_dir': str(self.workspace_dir),
         }
 
-        if RAG_MANAGER_AVAILABLE:
-            if self.rag_manager and hasattr(self.rag_manager, 'is_ready'):
-                rag_info["ready"] = self.rag_manager.is_ready
-                rag_info["status_text"] = self.rag_manager.current_status
-                if hasattr(self.rag_manager, 'get_collection_info'):
-                    rag_info["collections"] = self.rag_manager.get_collection_info()
-            else:
-                rag_info["status_text"] = "RAG: Initialization Failed"
-        else:
-            rag_info["status_text"] = "RAG: Dependencies Missing"
+        # Add workflow engine status
+        if self.workflow_engine:
+            status['workflow_engine'] = 'ready'
 
-        return {
-            "ready": self.workflow_engine is not None,
-            "error_aware": True,
-            "llm_models": llm_models_list,
-            "workspace": str(self.workspace_dir),
-            "current_project": self.current_project,
-            "current_session": self.current_session,
-            "configuration": self.current_config,
-            "rag": rag_info,
-            "active_workflows": len(self.active_workflows),
-            "last_error": self.last_error_context.get_error_summary() if self.last_error_context else None
-        }
+        # Add RAG status
+        if self.rag_manager:
+            status['rag'] = self.rag_manager.get_status() if hasattr(self.rag_manager, 'get_status') else 'initialized'
 
-    def _handle_workflow_request(self, user_prompt: str):
-        if not self.workflow_engine:
-            self.error_occurred.emit("workflow", "Engine not available.")
-            return
-        self._open_terminal()
-        asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, []))
+        return status
 
-    def _handle_enhanced_workflow_request(self, user_prompt: str, conversation_history: List[Dict]):
-        if not self.workflow_engine:
-            self.error_occurred.emit("workflow", "Engine not available.")
-            return
+    def shutdown(self):
+        """Shutdown the application gracefully"""
+        self.logger.info("Shutting down AvA Application...")
 
-        # Check if this might be an error analysis request
-        error_keywords = ['error', 'fix', 'debug', 'problem', 'issue', 'failed', 'exception']
-        if any(keyword in user_prompt.lower() for keyword in error_keywords) and self.last_error_context:
-            self._send_error_to_ava(user_prompt)
-            return
+        # Stop performance monitoring
+        if self.performance_timer:
+            self.performance_timer.stop()
 
-        self._open_terminal()
-        asyncio.create_task(self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history))
+        # Cleanup RAG manager
+        if self.rag_manager:
+            # Assuming cleanup method exists
+            pass
 
-    def _handle_sidebar_action(self, action: str):
-        if action == "new_project":
-            self.create_new_project_dialog()
-        elif action == "load_project":
-            self.load_existing_project_dialog()
-        elif action == "open_terminal":
-            self._open_terminal()
-        elif action == "open_code_viewer":
-            self._open_code_viewer()
-        elif action == "run_project":
-            asyncio.create_task(asyncio.to_thread(self.run_project_in_terminal))
-        elif action == "analyze_last_error":
-            if self.last_error_context:
-                self._send_error_to_ava("Please analyze and fix the last error that occurred.")
-            else:
-                self.chat_message_received.emit("No recent errors to analyze.")
+        # Close windows
+        if self.main_window:
+            self.main_window.close()
+        if self.code_viewer:
+            self.code_viewer.close()
+        if self.terminal_window:
+            self.terminal_window.close()
 
+        self.logger.info("AvA Application shutdown complete")
+
+    # Project management methods
     def create_new_project_dialog(self):
-        self.logger.info("Creating new project...")
+        """Create a new project with dialog"""
         if not self.main_window:
             return
 
+        from PySide6.QtWidgets import QInputDialog
+
         project_name, ok = QInputDialog.getText(
-            self.main_window, 'New Project', 'Enter project name:',
-            text='my-ava-project'
+            self.main_window,
+            "New Project",
+            "Enter project name:"
         )
-        if not (ok and project_name.strip()):
+
+        if not ok or not project_name:
             return
 
-        base_dir_str = QFileDialog.getExistingDirectory(
-            self.main_window, 'Select Directory', str(self.workspace_dir)
-        )
-        if not base_dir_str:
+        # Sanitize project name
+        project_name = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        if not project_name:
+            QMessageBox.warning(self.main_window, "Invalid Name", "Please enter a valid project name")
             return
 
-        project_path = Path(base_dir_str) / project_name.strip()
+        project_path = self.workspace_dir / project_name
+
         if project_path.exists():
             reply = QMessageBox.question(
-                self.main_window, 'Directory Exists',
-                f'Directory "{project_name.strip()}" exists. Continue anyway?',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No
+                self.main_window,
+                'Project Exists',
+                f'Project "{project_name}" already exists. Continue anyway?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
@@ -708,7 +489,10 @@ class AvAApplication(QObject):
 
             self.current_project_path = project_path
             self.current_project = project_path.name
+            # FIX: Only emit the application's project_loaded signal here
             self.project_loaded.emit(str(project_path))
+            # Then manually call the handler to avoid duplicate handling
+            self._on_project_loaded(str(project_path))
             self.logger.info(f"New project created: {project_path}")
 
         except Exception as e:
@@ -721,8 +505,11 @@ class AvAApplication(QObject):
             return
 
         project_dir = QFileDialog.getExistingDirectory(
-            self.main_window, 'Select Project Directory', str(self.workspace_dir)
+            self.main_window,
+            'Select Project Directory',
+            str(self.workspace_dir)
         )
+
         if not project_dir:
             return
 
@@ -750,3 +537,105 @@ class AvAApplication(QObject):
                 self.logger.error(f"Error cleaning up RAG manager: {e}")
 
         self.logger.info("AvA Application cleanup completed.")
+
+    # Error handling methods
+    def _handle_execution_error(self, error_info: dict):
+        """Handle execution errors and offer to send to Ava"""
+        error_msg = error_info.get('error', 'Unknown error')
+        file_path = error_info.get('file_path', '')
+
+        # Store error context
+        if not self.last_error_context:
+            self.last_error_context = ErrorContext()
+
+        # Update error context with captured info
+        self.last_error_context.stderr = error_msg
+        self.last_error_context.exit_code = error_info.get('return_code', 1)
+
+        # Add to error history
+        self.error_history.append(self.last_error_context)
+        if len(self.error_history) > 10:  # Keep last 10 errors
+            self.error_history.pop(0)
+
+        # Show error in terminal
+        self.terminal_error.emit(f"❌ Execution Error: {error_msg}")
+
+        # Send to Ava for analysis
+        self._send_error_to_ava(error_msg, file_path)
+
+    def _send_error_to_ava(self, error_msg: str, file_path: str = ""):
+        """Send error to Ava for analysis"""
+        if file_path:
+            prompt = f"I got this error when running {file_path}:\n\n{error_msg}\n\nCan you help fix it?"
+        else:
+            prompt = f"I got this error:\n\n{error_msg}\n\nCan you help fix it?"
+
+        # Send to chat
+        self.chat_message_received.emit(f"🔍 Analyzing error...")
+
+        # Execute error fix workflow
+        if self.workflow_engine and self.current_project_path:
+            asyncio.create_task(
+                self.workflow_engine.execute_workflow(
+                    prompt,
+                    self.current_project_path,
+                    use_existing_project=True
+                )
+            )
+
+    def run_project_in_terminal(self):
+        """Run the current project in terminal with error capture"""
+        if not self.current_project_path:
+            self.terminal_system_message.emit("❌ No project loaded")
+            return
+
+        main_py = self.current_project_path / "main.py"
+        if not main_py.exists():
+            self.terminal_system_message.emit("❌ No main.py found in project")
+            return
+
+        try:
+            # Show what we're running
+            self.terminal_command_to_run.emit(f"python {main_py}")
+
+            # Run with subprocess to capture output
+            result = subprocess.run(
+                [sys.executable, str(main_py)],
+                cwd=str(self.current_project_path),
+                capture_output=True,
+                text=True,
+                timeout=30  # 30 second timeout
+            )
+
+            # Capture error context
+            error_context = ErrorContext()
+            error_context.capture_execution(f"python {main_py}", result, str(self.current_project_path))
+            self.last_error_context = error_context
+
+            # Show output
+            if result.stdout:
+                self.terminal_output.emit(result.stdout)
+
+            if result.stderr:
+                self.terminal_error.emit(result.stderr)
+                # Detect if it's an actual error (non-zero return code)
+                if result.returncode != 0:
+                    self.execution_error_detected.emit({
+                        'error': result.stderr,
+                        'file_path': str(main_py),
+                        'return_code': result.returncode
+                    })
+
+            if result.returncode == 0:
+                self.terminal_system_message.emit("✅ Execution completed successfully")
+            else:
+                self.terminal_system_message.emit(f"❌ Execution failed with code {result.returncode}")
+
+        except subprocess.TimeoutExpired:
+            self.terminal_error.emit("❌ Execution timed out after 30 seconds")
+        except Exception as e:
+            self.terminal_error.emit(f"❌ Execution error: {str(e)}")
+            self.execution_error_detected.emit({
+                'error': str(e),
+                'file_path': str(main_py)
+            })

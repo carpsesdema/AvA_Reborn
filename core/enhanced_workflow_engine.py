@@ -8,7 +8,7 @@ import shutil
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -27,23 +27,30 @@ class EnhancedWorkflowEngine(QObject):
     analysis_started = Signal(str)
     analysis_completed = Signal(str, dict)
 
-    def __init__(self, llm_client, terminal_window, code_viewer, rag_manager=None):
+    def __init__(self, llm_client=None, terminal_window=None, code_viewer=None, rag_service=None):
         super().__init__()
         self.llm_client = llm_client
         self.terminal_window = terminal_window
         self.code_viewer = code_viewer
-        self.rag_manager = rag_manager
+        self.rag_manager = rag_service
         self.logger = logging.getLogger(__name__)
 
-        self.project_state_manager: ProjectStateManager = None
-        self.current_tech_spec: dict = None
+        self.project_state_manager: Optional[ProjectStateManager] = None
+        self.current_tech_spec: Optional[dict] = None
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
             self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
 
-        self.architect_service = ArchitectService(self.llm_client, service_log_emitter, self.rag_manager)
-        self.coder_service = CoderService(self.llm_client, service_log_emitter, self.rag_manager)
-        self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
+        # Initialize services
+        if llm_client:
+            self.architect_service = ArchitectService(llm_client, service_log_emitter, rag_service)
+            self.coder_service = CoderService(llm_client, service_log_emitter, rag_service)
+            self.reviewer_service = ReviewerService(llm_client, service_log_emitter, rag_service)
+        else:
+            # Defer initialization if llm_client not provided
+            self.architect_service = None
+            self.coder_service = None
+            self.reviewer_service = None
 
         # Error analysis prompt templates
         self.error_analysis_prompts = {
@@ -140,45 +147,198 @@ Be comprehensive and provide production-ready fixes.
         except Exception as e:
             self.logger.error(f"❌ Failed to connect terminal signals: {e}")
 
-    async def execute_analysis_workflow(self, project_path_str: str):
-        self.logger.info(f"🚀 Starting Analysis workflow for: {project_path_str}...")
-        self.analysis_started.emit(project_path_str)
-        self.detailed_log_event.emit("WorkflowEngine", "stage_start",
-                                     f"🚀 Initializing Analysis for '{Path(project_path_str).name}'...", "0")
+    def initialize_services(self, llm_client):
+        """Initialize services if they weren't initialized in constructor"""
+        if not self.architect_service:
+            def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
+                self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
+
+            self.architect_service = ArchitectService(llm_client, service_log_emitter, self.rag_manager)
+            self.coder_service = CoderService(llm_client, service_log_emitter, self.rag_manager)
+            self.reviewer_service = ReviewerService(llm_client, service_log_emitter, self.rag_manager)
+            self.llm_client = llm_client
+
+    async def execute_workflow(self, user_prompt: str, base_path: Path = None, use_existing_project: bool = False) -> \
+    Dict[str, Any]:
+        """Main workflow execution entry point"""
+        # Initialize services if needed
+        if not self.architect_service and hasattr(self, 'parent') and hasattr(self.parent(), 'llm_client'):
+            self.initialize_services(self.parent().llm_client)
+
+        if use_existing_project and base_path:
+            # This is a modification workflow
+            return await self.execute_modification_workflow(user_prompt, str(base_path))
+        else:
+            # This is a new project workflow
+            return await self.execute_standard_workflow(user_prompt, base_path)
+
+    async def execute_analysis_workflow(self, project_path: str):
+        """Analyze an existing project and create technical specifications."""
+        self.logger.info(f"Starting project analysis for: {project_path}")
+        project_path_str = str(project_path)
+
         try:
-            self.project_state_manager = ProjectStateManager(Path(project_path_str))
-            self.detailed_log_event.emit("WorkflowEngine", "info", "Project State Manager initialized. Scanned files.",
+            self.detailed_log_event.emit("WorkflowEngine", "status", "🔍 Starting project analysis...", "0")
+
+            # Initialize project state
+            self.project_state_manager = ProjectStateManager(project_path_str)
+            self.project_state_manager.scan_project()
+
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         f"📊 Found {len(self.project_state_manager.files)} files in project.", "1")
+
+            # Use architect to analyze
+            self.detailed_log_event.emit("WorkflowEngine", "stage_update",
+                                         "▶ ARCHITECT: Analyzing project structure and creating technical specification...",
+                                         "0")
+
+            # Show files being analyzed
+            for filename in self.project_state_manager.files.keys():
+                self.detailed_log_event.emit("WorkflowEngine", "file_op", f"📄 Scanning: {filename}", "2")
+
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         "🧠 Architect is analyzing the codebase and understanding the project structure...",
                                          "1")
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         "📝 Creating comprehensive technical specification from scanned files.", "1")
+
             tech_spec = await self.architect_service.analyze_and_create_spec_from_project(self.project_state_manager)
+
             if not tech_spec:
                 raise Exception(
                     "Analysis failed. Architect could not produce a technical specification from the project files.")
+
             self.current_tech_spec = tech_spec
-            self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
-                                         "0")
+            self.detailed_log_event.emit("WorkflowEngine", "success",
+                                         "✅ Analysis complete! Technical spec created.", "0")
             self.analysis_completed.emit(project_path_str, self.current_tech_spec)
+
+            # Only emit project_loaded once
             self.project_loaded.emit(project_path_str)
+
         except Exception as e:
             self.logger.error(f"❌ Analysis Workflow failed: {e}", exc_info=True)
             self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Analysis Error: {str(e)}", "0")
-            self.project_loaded.emit(project_path_str)
+            # Don't emit project_loaded on error
 
-    def _get_files_to_modify(self, user_prompt: str, all_files: List[str]) -> List[str]:
-        """Identifies which files should be modified based on the user's prompt."""
-        files_to_modify = []
-        # A simple but effective heuristic: if a filename is mentioned, it's a target.
-        for filename in all_files:
-            if re.search(r'\b' + re.escape(filename) + r'\b', user_prompt, re.IGNORECASE):
-                files_to_modify.append(filename)
+    async def execute_modification_workflow(self, user_prompt: str, project_path: str) -> Dict[str, Any]:
+        """Execute workflow for modifying an existing project"""
+        # First analyze the project if not already done
+        if not self.project_state_manager or not self.current_tech_spec:
+            await self.execute_analysis_workflow(project_path)
 
-        # If no files are explicitly mentioned, we might need a more advanced AI step.
-        # For now, if none are mentioned, we'll assume we modify everything (the old behavior).
-        if not files_to_modify:
-            self.logger.warning("No specific files mentioned in modification prompt. Will attempt to regenerate all.")
-            return all_files
+        # Then execute the modification
+        return await self.execute_standard_workflow(user_prompt, Path(project_path))
 
-        self.logger.info(f"Identified files to modify from prompt: {files_to_modify}")
-        return files_to_modify
+    async def execute_standard_workflow(self, user_prompt: str, base_path: Path = None) -> Dict[str, Any]:
+        """Execute standard workflow for creating or modifying projects"""
+        self.logger.info(f"🚀 Starting V6 workflow: {user_prompt[:100]}...")
+        workflow_start_time = datetime.now()
+        self.workflow_started.emit(user_prompt)
+
+        try:
+            is_modification = self.project_state_manager is not None and self.current_tech_spec is not None
+
+            # --- PHASE 1: GET TECH SPEC ---
+            if is_modification:
+                tech_spec = self.current_tech_spec
+                # Update tech spec based on new prompt if needed
+                # For now, we'll use the existing spec
+            else:
+                tech_spec = await self.architect_service.create_tech_spec(user_prompt, [])
+
+            if not tech_spec or 'technical_specs' not in tech_spec:
+                raise Exception("Architecture phase failed. No valid technical specification available.")
+
+            # --- PHASE 2: SETUP PROJECT DIRECTORY ---
+            project_name = tech_spec.get("project_name", "ai-project").replace(" ", "-")
+
+            if is_modification and base_path:
+                # Use the existing project directory
+                project_dir = base_path
+            else:
+                # Create new project directory
+                new_project_dir_name = f"{project_name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                workspace = base_path or Path("./workspace")
+                project_dir = workspace / new_project_dir_name
+                project_dir.mkdir(parents=True, exist_ok=True)
+
+            # --- NEW: WRITE REQUIREMENTS.TXT ---
+            requirements = tech_spec.get("requirements", [])
+            if requirements:
+                req_content = "\n".join(requirements)
+                self._write_file(project_dir, "requirements.txt", req_content)
+                self.detailed_log_event.emit("WorkflowEngine", "file_op", "Generated requirements.txt", "1")
+
+            # --- PHASE 3: FILE HANDLING (MODIFICATION-AWARE) ---
+            build_order = tech_spec.get("dependency_order", [])
+            files_in_spec = list(tech_spec.get("technical_specs", {}).keys())
+
+            if is_modification:
+                files_to_actively_modify = self._get_files_to_modify(user_prompt, files_in_spec)
+            else:
+                files_to_actively_modify = files_in_spec
+
+            knowledge_packets = {}
+            results = {"files_created": [], "project_dir": str(project_dir), "failed_files": []}
+
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         f"Files targeted for modification: {files_to_actively_modify}", "1")
+
+            for filename in build_order:
+                file_spec = tech_spec["technical_specs"].get(filename)
+                if not file_spec:
+                    continue
+
+                # Determine if we should generate this file or copy it
+                if filename in files_to_actively_modify:
+                    # GENERATE the modified file
+                    self.detailed_log_event.emit("WorkflowEngine", "stage_start",
+                                                 f"🧬 Generating modified file: {filename}", "1")
+                    dependency_context = self._build_dependency_context(file_spec.get("dependencies", []),
+                                                                        knowledge_packets)
+                    project_context = {"description": tech_spec.get("project_description", "")}
+                    generated_code = await self.coder_service.generate_file_from_spec(
+                        filename, file_spec, project_context, dependency_context
+                    )
+
+                    if "# FALLBACK" in generated_code:
+                        results["failed_files"].append(filename)
+                        continue
+
+                    self._write_file(project_dir, filename, generated_code)
+                    knowledge_packets[filename] = {"spec": file_spec, "source_code": generated_code}
+
+                elif is_modification:
+                    # COPY the original, unchanged file
+                    original_file_path = self.project_state_manager.project_root / filename
+                    if original_file_path.exists():
+                        destination_path = project_dir / filename
+                        shutil.copy2(original_file_path, destination_path)
+                        self.detailed_log_event.emit("WorkflowEngine", "file_op",
+                                                     f"Copied unchanged file: {filename}", "1")
+                        knowledge_packets[filename] = {
+                            "spec": file_spec,
+                            "source_code": original_file_path.read_text()
+                        }
+                    else:
+                        self.logger.warning(f"Wanted to copy {filename} but it doesn't exist in the source project.")
+
+                results["files_created"].append(filename)
+
+            # --- PHASE 4: FINALIZATION ---
+            final_result = await self._finalize_project(results, (datetime.now() - workflow_start_time).total_seconds())
+            self.workflow_completed.emit(final_result)
+            return final_result
+
+        except Exception as e:
+            self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
+            self.workflow_completed.emit({
+                "success": False,
+                "error": str(e),
+                "elapsed_time": (datetime.now() - workflow_start_time).total_seconds()
+            })
+            raise
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
         """Enhanced workflow execution with error analysis capabilities"""
@@ -190,11 +350,11 @@ Be comprehensive and provide production-ready fixes.
                 await self._handle_error_analysis(user_prompt, conversation_context)
             else:
                 # Regular workflow execution
-                await self._execute_standard_workflow(user_prompt, conversation_context)
+                await self.execute_standard_workflow(user_prompt, None)
 
         except Exception as e:
             self.logger.error(f"Workflow execution failed: {e}")
-            self.detailed_log_event.emit("WorkflowEngine", "error", f"Workflow failed: {e}", "3")
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Workflow failed: {e}", "0")
 
     async def _is_error_analysis_request(self, prompt: str) -> bool:
         """Determine if the prompt is requesting error analysis"""
@@ -210,7 +370,7 @@ Be comprehensive and provide production-ready fixes.
 
         # Get error context from the application
         app = self._get_ava_application()
-        if not app or not app.last_error_context:
+        if not app or not hasattr(app, 'last_error_context') or not app.last_error_context:
             await self._send_response(
                 "No recent error context available. Please run the project first to capture errors.")
             return
@@ -223,11 +383,13 @@ Be comprehensive and provide production-ready fixes.
 
         # Gather project context
         project_files = self._get_project_file_list(app.current_project_path)
-        file_states_info = self._format_file_states(error_context.file_states)
+        file_states_info = self._format_file_states(
+            error_context.file_states if hasattr(error_context, 'file_states') else {})
 
         # Format the analysis prompt
         analysis_prompt = prompt_template.format(
-            error_context=error_context.get_error_summary(),
+            error_context=error_context.get_error_summary() if hasattr(error_context, 'get_error_summary') else str(
+                error_context),
             file_list=project_files,
             file_states=file_states_info
         )
@@ -236,11 +398,14 @@ Be comprehensive and provide production-ready fixes.
 
         # Get AI analysis and fixes
         try:
-            response = await self.llm_client.generate_response(
-                analysis_prompt,
-                model=app.current_config.get("chat_model", "gemini-2.5-pro-preview-06-05"),
-                temperature=0.3  # Lower temperature for more precise fixes
-            )
+            if self.llm_client:
+                response = await self.llm_client.generate_response(
+                    analysis_prompt,
+                    model="gpt-4",  # Use a good model for error analysis
+                    temperature=0.3  # Lower temperature for more precise fixes
+                )
+            else:
+                response = "Error: LLM client not initialized"
 
             # Process the response and extract fixes
             await self._process_error_fix_response(response, app.current_project_path)
@@ -251,7 +416,10 @@ Be comprehensive and provide production-ready fixes.
 
     def _classify_error(self, error_context) -> str:
         """Classify the type of error for appropriate handling"""
-        stderr = error_context.stderr.lower()
+        if hasattr(error_context, 'stderr'):
+            stderr = error_context.stderr.lower()
+        else:
+            stderr = str(error_context).lower()
 
         if "syntaxerror" in stderr or "invalid syntax" in stderr:
             return "syntax_error"
@@ -264,7 +432,7 @@ Be comprehensive and provide production-ready fixes.
 
     def _get_project_file_list(self, project_path: Path) -> str:
         """Get a formatted list of project files"""
-        if not project_path.exists():
+        if not project_path or not project_path.exists():
             return "Project directory not found"
 
         try:
@@ -379,92 +547,22 @@ Be comprehensive and provide production-ready fixes.
 
         await self._send_response(f"{ai_response}\n\n{status_msg}")
 
-    async def _execute_standard_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        """Execute standard workflow for non-error requests"""
-        self.logger.info(f"🚀 Starting V6 workflow: {user_prompt[:100]}...")
-        workflow_start_time = datetime.now()
-        self.workflow_started.emit(user_prompt)
-        try:
-            is_modification = self.project_state_manager is not None and self.current_tech_spec is not None
+    def _get_files_to_modify(self, user_prompt: str, all_files: List[str]) -> List[str]:
+        """Identifies which files should be modified based on the user's prompt."""
+        files_to_modify = []
+        # A simple but effective heuristic: if a filename is mentioned, it's a target.
+        for filename in all_files:
+            if re.search(r'\b' + re.escape(filename) + r'\b', user_prompt, re.IGNORECASE):
+                files_to_modify.append(filename)
 
-            # --- PHASE 1: GET TECH SPEC ---
-            tech_spec = self.current_tech_spec if is_modification else await self.architect_service.create_tech_spec(
-                user_prompt, conversation_context)
-            if not tech_spec or 'technical_specs' not in tech_spec:
-                raise Exception("Architecture phase failed. No valid technical specification available.")
+        # If no files are explicitly mentioned, we might need a more advanced AI step.
+        # For now, if none are mentioned, we'll assume we modify everything (the old behavior).
+        if not files_to_modify:
+            self.logger.warning("No specific files mentioned in modification prompt. Will attempt to regenerate all.")
+            return all_files
 
-            # --- PHASE 2: SETUP PROJECT DIRECTORY ---
-            project_name = tech_spec.get("project_name", "ai-project").replace(" ", "-")
-            new_project_dir_name = f"{project_name}-mod-{datetime.now().strftime('%Y%m%d_%H%M%S')}" if is_modification else f"{project_name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            project_dir = Path("./workspace") / new_project_dir_name
-            project_dir.mkdir(parents=True, exist_ok=True)
-
-            # --- NEW: WRITE REQUIREMENTS.TXT ---
-            requirements = tech_spec.get("requirements", [])
-            if requirements:
-                req_content = "\n".join(requirements)
-                self._write_file(project_dir, "requirements.txt", req_content)
-                self.detailed_log_event.emit("WorkflowEngine", "file_op", "Generated requirements.txt", "1")
-
-            # --- PHASE 3: FILE HANDLING (MODIFICATION-AWARE) ---
-            build_order = tech_spec.get("dependency_order", [])
-            files_in_spec = list(tech_spec.get("technical_specs", {}).keys())
-            files_to_actively_modify = self._get_files_to_modify(user_prompt,
-                                                                 files_in_spec) if is_modification else files_in_spec
-
-            knowledge_packets = {}
-            results = {"files_created": [], "project_dir": str(project_dir), "failed_files": []}
-
-            self.detailed_log_event.emit("WorkflowEngine", "info",
-                                         f"Files targeted for modification: {files_to_actively_modify}", "1")
-
-            for filename in build_order:
-                file_spec = tech_spec["technical_specs"].get(filename)
-                if not file_spec:
-                    continue
-
-                # Determine if we should generate this file or copy it
-                if filename in files_to_actively_modify:
-                    # GENERATE the modified file
-                    self.detailed_log_event.emit("WorkflowEngine", "stage_start",
-                                                 f"🧬 Generating modified file: {filename}", "1")
-                    dependency_context = self._build_dependency_context(file_spec.get("dependencies", []),
-                                                                        knowledge_packets)
-                    project_context = {"description": tech_spec.get("project_description", "")}
-                    generated_code = await self.coder_service.generate_file_from_spec(filename, file_spec,
-                                                                                      project_context,
-                                                                                      dependency_context)
-
-                    if "# FALLBACK" in generated_code:
-                        results["failed_files"].append(filename)
-                        continue
-
-                    self._write_file(project_dir, filename, generated_code)
-                    knowledge_packets[filename] = {"spec": file_spec, "source_code": generated_code}
-                elif is_modification:
-                    # COPY the original, unchanged file
-                    original_file_path = self.project_state_manager.project_root / filename
-                    if original_file_path.exists():
-                        destination_path = project_dir / filename
-                        shutil.copy2(original_file_path, destination_path)
-                        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Copied unchanged file: {filename}",
-                                                     "1")
-                        knowledge_packets[filename] = {"spec": file_spec, "source_code": original_file_path.read_text()}
-                    else:
-                        self.logger.warning(f"Wanted to copy {filename} but it doesn't exist in the source project.")
-                # (The case for a new project is handled by the initial `if` block)
-
-                results["files_created"].append(filename)
-
-            # --- PHASE 4: FINALIZATION ---
-            final_result = await self._finalize_project(results, (datetime.now() - workflow_start_time).total_seconds())
-            self.workflow_completed.emit(final_result)
-            return final_result
-        except Exception as e:
-            self.logger.error(f"❌ AI Workflow failed: {e}", exc_info=True)
-            self.workflow_completed.emit({"success": False, "error": str(e),
-                                          "elapsed_time": (datetime.now() - workflow_start_time).total_seconds()})
-            raise
+        self.logger.info(f"Identified files to modify from prompt: {files_to_modify}")
+        return files_to_modify
 
     def _build_dependency_context(self, dependency_files: List[str], knowledge_packets: Dict[str, Dict]) -> str:
         if not dependency_files:
@@ -491,16 +589,18 @@ Be comprehensive and provide production-ready fixes.
     async def _finalize_project(self, results: Dict[str, Any], elapsed_time: float) -> Dict[str, Any]:
         project_dir = results.get("project_dir")
         if project_dir:
-            self.project_loaded.emit(project_dir)
-            self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project loaded into UI: {project_dir}", "1")
-        return {"success": len(results.get("failed_files", [])) == 0,
-                "project_name": Path(project_dir).name if project_dir else "Unknown",
-                "project_dir": project_dir,
-                "num_files": len(results.get("files_created", [])),
-                "files_created": results.get("files_created", []),
-                "failed_files": results.get("failed_files", []),
-                "elapsed_time": elapsed_time,
-                "strategy": "V6 Surgical Modification with Error Analysis"}
+            # Don't emit project_loaded here - it's already emitted in execute_analysis_workflow
+            self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Project finalized: {project_dir}", "1")
+        return {
+            "success": len(results.get("failed_files", [])) == 0,
+            "project_name": Path(project_dir).name if project_dir else "Unknown",
+            "project_dir": project_dir,
+            "num_files": len(results.get("files_created", [])),
+            "files_created": results.get("files_created", []),
+            "failed_files": results.get("failed_files", []),
+            "elapsed_time": elapsed_time,
+            "strategy": "V6 Surgical Modification with Error Analysis"
+        }
 
     async def _send_response(self, message: str):
         """Send response back to the chat interface"""
