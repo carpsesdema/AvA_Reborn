@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V5.4 with Robust GDD Creation
+# core/enhanced_workflow_engine.py - V5.5 with Team Communication
 
 import asyncio
 import json
@@ -18,7 +18,7 @@ from core.project_state_manager import ProjectStateManager
 
 class EnhancedWorkflowEngine(QObject):
     """
-    🚀 V5.4 Workflow Engine: Now with robust GDD management for both new and loaded projects.
+    🚀 V5.5 Workflow Engine: Now with AI team communication and collaborative learning.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -47,12 +47,13 @@ class EnhancedWorkflowEngine(QObject):
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
             self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
 
+        # Initialize services without project state initially
         self.architect_service = ArchitectService(self.llm_client, service_log_emitter, self.rag_manager)
         self.coder_service = CoderService(self.llm_client, service_log_emitter, self.rag_manager)
         self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
 
         self._connect_terminal_signals()
-        self.logger.info("✅ V5.4 'Robust GDD' Workflow Engine initialized.")
+        self.logger.info("✅ V5.5 'Team Communication' Workflow Engine initialized.")
 
     def _connect_terminal_signals(self):
         if self.streaming_terminal and hasattr(self.streaming_terminal, 'stream_log_rich'):
@@ -68,12 +69,39 @@ class EnhancedWorkflowEngine(QObject):
                 self.logger.info(f"[{agent}:{type_key}] {'  ' * int(indent)}{content}")
             )
 
+    def _setup_project_state_and_services(self, project_path: Path):
+        """Initialize or update project state manager and connect it to AI services"""
+        try:
+            # Create or update project state manager
+            if not self.project_state_manager or str(self.project_state_manager.project_root) != str(project_path):
+                self.detailed_log_event.emit("WorkflowEngine", "info",
+                                             f"Setting up project state for: {project_path.name}", "1")
+                self.project_state_manager = ProjectStateManager(project_path)
+
+                # Connect project state to all AI services for team communication
+                self.architect_service.set_project_state(self.project_state_manager)
+                self.coder_service.set_project_state(self.project_state_manager)
+                self.reviewer_service.set_project_state(self.project_state_manager)
+
+                self.detailed_log_event.emit("WorkflowEngine", "success",
+                                             "Team communication system activated", "1")
+
+                # Log team insight stats if available
+                insights_count = len(self.project_state_manager.team_insights)
+                if insights_count > 0:
+                    self.detailed_log_event.emit("WorkflowEngine", "info",
+                                                 f"Loaded {insights_count} team insights from previous work", "1")
+
+        except Exception as e:
+            self.logger.error(f"Failed to setup project state: {e}")
+            self.detailed_log_event.emit("WorkflowEngine", "error",
+                                         f"Project state setup failed: {e}", "1")
+
     def _create_initial_gdd(self, project_path: Path, project_name: str, initial_prompt: str):
         """Creates the initial Game Design Document for a new project."""
         gdd_file_path = project_path / f"{project_name}_GDD.md"
 
-        # --- THIS IS THE FIX ---
-        # We now check if the file exists AND has content. If it's empty, we'll overwrite it!
+        # Check if the file exists AND has content
         try:
             if gdd_file_path.exists() and gdd_file_path.read_text(encoding='utf-8').strip():
                 self.logger.info(f"GDD file at {gdd_file_path} already has content. Skipping creation.")
@@ -128,7 +156,6 @@ class EnhancedWorkflowEngine(QObject):
             self.logger.error(f"❌ Failed to create initial GDD file: {e}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create GDD: {e}", "1")
 
-
     def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: dict):
         """Appends a new entry to the GDD's development log."""
         gdd_file_path = project_path / f"{project_name}_GDD.md"
@@ -173,7 +200,10 @@ class EnhancedWorkflowEngine(QObject):
 
         try:
             project_path = Path(project_path_str)
-            self.project_state_manager = ProjectStateManager(project_path)
+
+            # Setup project state and team communication
+            self._setup_project_state_and_services(project_path)
+
             self.detailed_log_event.emit("WorkflowEngine", "info",
                                          f"Project State Manager initialized. Scanned {len(self.project_state_manager.files)} files.",
                                          "1")
@@ -203,7 +233,7 @@ class EnhancedWorkflowEngine(QObject):
             self.project_loaded.emit(project_path_str)
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        self.logger.info(f"🚀 Starting V5.4 workflow: {user_prompt[:100]}...")
+        self.logger.info(f"🚀 Starting V5.5 workflow: {user_prompt[:100]}...")
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
         gdd_context = ""
@@ -249,6 +279,9 @@ class EnhancedWorkflowEngine(QObject):
                                              f"New project directory created: {project_dir}", "1")
                 self._create_initial_gdd(project_dir, project_name, user_prompt)
 
+            # Setup team communication for the target project directory
+            self._setup_project_state_and_services(project_dir)
+
             self.project_loaded.emit(str(project_dir))
 
             build_order = tech_spec.get("dependency_order", [])
@@ -277,15 +310,28 @@ class EnhancedWorkflowEngine(QObject):
                 dependency_context = self._build_dependency_context(dependency_files, knowledge_packets)
                 project_context = {"description": tech_spec.get("project_description", "")}
                 full_filename = filename if filename.endswith('.py') else f"{filename}.py"
+
+                # Generate code with team communication
                 generated_code = await self.coder_service.generate_file_from_spec(full_filename, file_spec,
                                                                                   project_context,
                                                                                   dependency_context)
+
+                # Review code with team communication
                 review_data, review_passed = await self.reviewer_service.review_code(full_filename, generated_code,
                                                                                      project_context['description'])
+
                 self.detailed_log_event.emit("WorkflowEngine", "info",
                                              f"Review for {full_filename} {'passed' if review_passed else 'failed'}. Writing file to disk.",
                                              "2")
+
+                # Write file and record it in project state
                 self._write_file(project_dir, full_filename, generated_code)
+
+                # Add the file to project state for team communication
+                if self.project_state_manager:
+                    self.project_state_manager.add_file(str(project_dir / full_filename), generated_code,
+                                                        "workflow_engine", f"Generated {full_filename}")
+
                 knowledge_packets[full_filename] = {"spec": file_spec, "source_code": generated_code}
                 results["files_created"].append(full_filename)
 
@@ -306,7 +352,9 @@ class EnhancedWorkflowEngine(QObject):
             raise
 
     def _build_dependency_context(self, dependency_files: List[str], knowledge_packets: Dict[str, Dict]) -> str:
-        if not dependency_files: return "This file has no dependencies."
+        if not dependency_files:
+            return "This file has no dependencies."
+
         context_str = ""
         for dep_file in dependency_files:
             lookup_key = dep_file if dep_file.endswith('.py') else f"{dep_file}.py"
@@ -338,7 +386,7 @@ class EnhancedWorkflowEngine(QObject):
             "files_created": results.get("files_created", []),
             "failed_files": results.get("failed_files", []),
             "elapsed_time": elapsed_time,
-            "strategy": "V5.4 Robust GDD"
+            "strategy": "V5.5 Team Communication"
         }
 
         if project_dir_str:
@@ -358,6 +406,20 @@ class EnhancedWorkflowEngine(QObject):
 
             if final_result["success"]:
                 self._update_gdd_log(project_path, base_project_name, self.original_user_prompt, results)
+
+        # Log team insights summary
+        if self.project_state_manager:
+            insights_count = len(self.project_state_manager.team_insights)
+            self.detailed_log_event.emit("WorkflowEngine", "info",
+                                         f"Project completed with {insights_count} team insights stored", "1")
+
+            # Save the project state to persist team insights
+            try:
+                self.project_state_manager.save_state()
+                self.detailed_log_event.emit("WorkflowEngine", "success",
+                                             "Team insights saved for future iterations", "1")
+            except Exception as e:
+                self.logger.error(f"Failed to save team insights: {e}")
 
         self.detailed_log_event.emit("WorkflowEngine", "success", "Project finalization complete.", "1")
         return final_result
