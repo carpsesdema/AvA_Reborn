@@ -73,7 +73,8 @@ class AvALeftSidebar(QWidget):
         self.model_config_panel.update_model_status_display(config_summary)
 
     def update_rag_status_display(self, status_text: str):
-        self.knowledge_panel.update_rag_status(status_text)
+        # This method is now a no-op as the display has been removed.
+        pass
 
 
 class AIModelConfigPanel(StyledPanel):
@@ -159,29 +160,7 @@ class KnowledgeBasePanel(StyledPanel):
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
         self.add_widget(self.add_files_btn)
 
-        rag_status_layout = QHBoxLayout()
-        rag_status_layout.setContentsMargins(0, 12, 0, 0)
-        rag_label = QLabel("RAG:")
-        rag_label.setFont(Typography.body())
-        rag_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-        self.rag_status_display_label = QLabel("Initializing embedder...")
-        self.rag_status_display_label.setFont(Typography.body_small())
-        self.rag_status_display_label.setStyleSheet(f"color: {Colors.ACCENT_ORANGE};")
-        rag_status_layout.addWidget(rag_label)
-        rag_status_layout.addWidget(self.rag_status_display_label, 1)
-        self.add_layout(rag_status_layout)
-
-    def update_rag_status(self, status_text: str):
-        self.rag_status_display_label.setText(status_text)
-        if "ready" in status_text.lower() or "complete" in status_text.lower():
-            color = Colors.ACCENT_GREEN
-        elif "error" in status_text.lower() or "failed" in status_text.lower():
-            color = Colors.ACCENT_RED
-        elif "initializing" in status_text.lower() or "loading" in status_text.lower():
-            color = Colors.ACCENT_ORANGE
-        else:
-            color = Colors.TEXT_SECONDARY
-        self.rag_status_display_label.setStyleSheet(f"color: {color};")
+        # RAG status display removed.
 
 
 class ChatActionsPanel(StyledPanel):

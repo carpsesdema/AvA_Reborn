@@ -133,9 +133,8 @@ class AvAMainWindow(QMainWindow):
 
     @Slot(str, str)
     def update_rag_status_display(self, status_text: str, status_color_key: str):
-        """Updates the RAG status display in the sidebar."""
-        self.sidebar.update_rag_status_display(status_text)
-        self.chat_interface.update_rag_status(status_text, status_color_key)
+        """Updates the RAG status display. (This is now a no-op)."""
+        pass
 
     @Slot(str, str)
     def on_workflow_started(self, workflow_type: str, description: str = ""):

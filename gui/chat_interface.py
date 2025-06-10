@@ -408,22 +408,10 @@ class ChatInterface(QWidget):
         performance_layout.addWidget(self.performance_indicator)
         performance_layout.addWidget(self.performance_text)
 
-        # RAG status
-        self.rag_indicator = StatusIndicator("working")
-        self.rag_text = QLabel("RAG: Initializing...")
-        self.rag_text.setFont(Typography.body_small())
-        self.rag_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-
-        rag_layout = QHBoxLayout()
-        rag_layout.setSpacing(6)
-        rag_layout.addWidget(self.rag_indicator)
-        rag_layout.addWidget(self.rag_text)
-
         status_layout.addLayout(specialist_layout)
         status_layout.addStretch()
         status_layout.addLayout(performance_layout)
         status_layout.addStretch()
-        status_layout.addLayout(rag_layout)
 
         layout.addLayout(status_layout)
         self.setLayout(layout)
@@ -563,6 +551,5 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
 
     ### MODIFIED ###
     def update_rag_status(self, rag_text: str, status: str = "working"):
-        """Update RAG status in the footer."""
-        self.rag_text.setText(rag_text)
-        self.rag_indicator.update_status(status)
+        """Update RAG status in the footer. (This is now a no-op)."""
+        pass
