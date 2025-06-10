@@ -71,19 +71,50 @@ class EnhancedWorkflowEngine(QObject):
     def _create_initial_gdd(self, project_path: Path, project_name: str, initial_prompt: str):
         """Creates the initial Game Design Document for a new project."""
         gdd_file_path = project_path / f"{project_name}_GDD.md"
-        if gdd_file_path.exists():
-            self.logger.warning(f"GDD file already exists at {gdd_file_path}. Skipping creation.")
-            return
 
-        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Creating initial GDD: {gdd_file_path.name}", "1")
+        # --- THIS IS THE FIX ---
+        # We now check if the file exists AND has content. If it's empty, we'll overwrite it!
+        try:
+            if gdd_file_path.exists() and gdd_file_path.read_text(encoding='utf-8').strip():
+                self.logger.info(f"GDD file at {gdd_file_path} already has content. Skipping creation.")
+                return
+        except Exception as e:
+            self.logger.warning(f"Could not read existing GDD file to check for content, will overwrite. Error: {e}")
+
+        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Creating/updating GDD: {gdd_file_path.name}", "1")
         gdd_template = f"""
 # Game Design Document: {project_name}
 
-## Project Vision
-> {initial_prompt}
+## 1. High-Level Vision
+> What is the one-sentence description of this project? What is its core purpose?
+> The initial user request was: "{initial_prompt}"
 
-## Implemented Systems
-_(This section will be populated as you build out the project.)_
+(Describe the core vision of your project here...)
+
+
+## 2. Key Features
+> List the major features or systems you want to build.
+> This helps the AI understand the primary components.
+
+- Feature A: (e.g., "A voxel-based world generation system.")
+- Feature B: (e.g., "First-person player controller with physics.")
+- Feature C: (e.g., "An inventory system for collecting items.")
+
+
+## 3. Technical Requirements & Constraints
+> Specify any strict technical needs or limitations.
+> This is crucial for guiding the Architect AI.
+
+- **Frameworks:** (e.g., "Must use the Ursina engine for Python.")
+- **Libraries:** (e.g., "No external libraries besides Ursina.")
+- **Platform:** (e.g., "Must run on Windows 10.")
+- **Other:** (e.g., "Code must be PEP 8 compliant.")
+
+
+## 4. Aesthetics & Feel
+> What is the desired look and feel? Is it retro, modern, minimalist, etc.?
+
+(Describe the visual style, sound design, and overall mood here...)
 
 ---
 
@@ -97,13 +128,13 @@ _(This section will be populated as you build out the project.)_
             self.logger.error(f"❌ Failed to create initial GDD file: {e}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create GDD: {e}", "1")
 
+
     def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: dict):
         """Appends a new entry to the GDD's development log."""
         gdd_file_path = project_path / f"{project_name}_GDD.md"
         if not gdd_file_path.exists():
             self.logger.error(f"Could not find GDD file to update at {gdd_file_path}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"GDD file not found for update.", "1")
-            # If GDD is missing, create it with the log entry.
             vision = f"Project '{project_name}' was loaded. The original vision was not recorded."
             self._create_initial_gdd(project_path, project_name, vision)
 
@@ -156,11 +187,9 @@ _(This section will be populated as you build out the project.)_
             self.is_existing_project_loaded = True
             self.original_project_path = project_path
 
-            # --- NEW: Check for and create GDD on load ---
             project_name = tech_spec.get("project_name", project_path.name)
             project_description = tech_spec.get("project_description", "An existing project loaded into AvA.")
             self._create_initial_gdd(project_path, project_name, project_description)
-            # --- END NEW ---
 
             self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
                                          "0")
@@ -208,7 +237,7 @@ _(This section will be populated as you build out the project.)_
                                              f"Copying original project to '{project_dir}'...", "1")
                 try:
                     shutil.copytree(self.original_project_path, project_dir, dirs_exist_ok=True,
-                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git', '*_GDD.md'))
+                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git'))
                 except Exception as copy_error:
                     raise Exception(f"Failed to create a copy of the existing project: {copy_error}")
                 self.detailed_log_event.emit("WorkflowEngine", "success", "Project copy complete.", "1")
