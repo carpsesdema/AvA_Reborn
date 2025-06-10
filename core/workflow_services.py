@@ -12,13 +12,20 @@ from core.project_state_manager import ProjectStateManager  # NEW IMPORT
 
 # --- Prompt Templates ---
 
-# V4 ARCHITECT PROMPT - MODIFIED TO INCLUDE REQUIREMENTS
+# --- MODIFICATION HERE ---
+# I've added a section to emphasize the importance of the GDD Context.
 ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the ARCHITECT AI. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.
 
-    USER REQUEST: "{full_requirements}"
+    **USER REQUEST**: "{full_requirements}"
 
-    RELEVANT CONTEXT FROM KNOWLEDGE BASE:
+    **PRIORITY CONTEXT (GDD - Game Design Document):**
+    The following context is from the project's official design document. This is the MOST IMPORTANT source of truth for the project's high-level goals, implemented systems, and development history. You MUST use this to guide your architectural decisions.
+    ---
+    {gdd_context}
+    ---
+
+    **RELEVANT CONTEXT FROM KNOWLEDGE BASE (RAG):**
     {rag_context}
 
     Your output MUST be a single, valid JSON object. This object will contain the project name, a description, a list of required libraries, a dependency-sorted build order, and a detailed `technical_specs` dictionary for every file.
@@ -55,6 +62,7 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
 
     **IMPORTANT: Your _entire_ output must be ONLY the raw, valid JSON object. Do not include any conversational filler or markdown formatting.**
 """)
+# --- END MODIFICATION ---
 
 # NEW PROMPT for analyzing existing code!
 ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
@@ -289,14 +297,31 @@ class BaseAIService:
 
 class ArchitectService(BaseAIService):
 
-    async def create_tech_spec(self, user_prompt: str, full_conversation: List[Dict] = None) -> dict:
+    async def create_tech_spec(self, user_prompt: str, conversation_context: List[Dict] = None) -> dict:
         self.stream_emitter("Architect", "thought",
                             "Phase 1: Architecting the complete project technical specification...", 0)
-        requirements = [msg.get("message", "") for msg in (full_conversation or []) if msg.get("role") == "user"]
-        requirements.append(user_prompt)
+
+        # --- MODIFICATION HERE ---
+        # Splitting the user prompt to extract the GDD context we added earlier.
+        # The prompt is now structured as "user's actual request\n\n--- GDD CONTEXT ---\n..."
+        prompt_parts = user_prompt.split("\n\n--- GDD CONTEXT ---\n")
+        actual_user_prompt = prompt_parts[0]
+        gdd_context = prompt_parts[1] if len(prompt_parts) > 1 else "No GDD provided."
+
+        requirements = [msg.get("message", "") for msg in (conversation_context or []) if msg.get("role") == "user"]
+        requirements.append(actual_user_prompt)
         full_requirements = " ".join(req.strip() for req in requirements if req.strip())
+
         rag_context = await self._get_intelligent_rag_context(full_requirements, k=1)
-        plan_prompt = ARCHITECT_PROMPT_TEMPLATE.format(full_requirements=full_requirements, rag_context=rag_context)
+
+        # Pass the separated contexts to the template
+        plan_prompt = ARCHITECT_PROMPT_TEMPLATE.format(
+            full_requirements=full_requirements,
+            gdd_context=gdd_context,
+            rag_context=rag_context
+        )
+        # --- END MODIFICATION ---
+
         tech_spec = await self._stream_and_collect_json(plan_prompt, LLMRole.ARCHITECT, "Architect")
         if not tech_spec or not tech_spec.get("technical_specs"):
             self.stream_emitter("Architect", "error",
