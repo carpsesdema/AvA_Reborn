@@ -113,6 +113,7 @@ class AvAApplication(QObject):
             try:
                 self.rag_manager = RAGManager()
                 await self.rag_manager.async_initialize()
+                # This line correctly connects the RAG manager's signal to the application's signal.
                 self.rag_manager.status_changed.connect(self.rag_status_changed.emit)
             except Exception as e:
                 self.logger.error(f"RAG manager initialization failed: {e}", exc_info=True)
@@ -327,7 +328,6 @@ class AvAApplication(QObject):
         except Exception as e:
             QMessageBox.critical(self.main_window, "Error", f"Failed to load session: {e}")
 
-    ### MODIFIED ###
     def create_new_project_dialog(self):
         """Creates a new project with a directory, main.py, GDD, and venv."""
         if not self.main_window: return
@@ -352,7 +352,6 @@ class AvAApplication(QObject):
         else:
             project_path.mkdir(parents=True, exist_ok=True)
 
-        # --- MODIFIED: More robust GDD creation ---
         try:
             # Create a placeholder main.py
             (project_path / "main.py").write_text(

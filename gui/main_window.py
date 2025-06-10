@@ -28,12 +28,16 @@ class AvAMainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self.resize(1400, 900)
 
+        # UI must be initialized first
         self._init_ui()
         self._apply_theme()
+
+        # --- MODIFIED: Connect signals BEFORE showing the window or running async tasks ---
         self._connect_signals()
 
         if self.ava_app:
             self._connect_ava_signals()
+            # The timer is fine here, as it will fire after the event loop starts
             QTimer.singleShot(100, self.update_all_status_displays)
 
     def _apply_theme(self):
@@ -71,7 +75,7 @@ class AvAMainWindow(QMainWindow):
         self.ava_app.error_occurred.connect(self.on_app_error_occurred)
         self.ava_app.project_loaded.connect(self.update_project_display)
 
-        # --- MODIFIED: Connect directly to the application's RAG status signal ---
+        # Connect the application's RAG status signal to the main window's slot
         self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
 
     @Slot(str)
@@ -103,8 +107,8 @@ class AvAMainWindow(QMainWindow):
     def update_all_status_displays(self):
         self._update_model_config_display()
         if self.ava_app and self.ava_app.rag_manager:
-            self.update_rag_status_display(self.ava_app.rag_manager.current_status,
-                                           "ready" if self.ava_app.rag_manager.is_ready else "offline")
+            status_key = "ready" if self.ava_app.rag_manager.is_ready else "working"
+            self.update_rag_status_display(self.ava_app.rag_manager.current_status, status_key)
 
     @Slot(dict)
     def _on_model_configuration_applied(self, config_summary: dict):
@@ -131,6 +135,7 @@ class AvAMainWindow(QMainWindow):
     def update_rag_status_display(self, status_text: str, status_color_key: str):
         """Updates the RAG status display in the sidebar."""
         self.sidebar.update_rag_status_display(status_text)
+        self.chat_interface.update_rag_status(status_text, status_color_key)
 
     @Slot(str, str)
     def on_workflow_started(self, workflow_type: str, description: str = ""):
