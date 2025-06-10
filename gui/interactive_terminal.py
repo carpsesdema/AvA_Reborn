@@ -1,4 +1,4 @@
-# gui/interactive_terminal.py - A Beautiful, Snappy, and Venv-Aware Console
+# gui/interactive_terminal.py - Beautiful Terminal with Two Essential Buttons
 
 import sys
 import os
@@ -12,15 +12,15 @@ from gui.components import Colors, Typography, ModernButton
 
 class InteractiveTerminal(QWidget):
     """
-    A beautiful and functional interactive terminal that runs commands
-    asynchronously using QProcess and is aware of project virtual environments.
+    Beautiful terminal with essential run functionality
     """
-    command_completed = Signal(int)  # Emits the exit code when a command finishes
+    command_completed = Signal(int)
     force_run_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.working_directory = Path.cwd()
+        self.current_project_path = None
 
         self.process = QProcess(self)
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -33,15 +33,36 @@ class InteractiveTerminal(QWidget):
     def _init_ui(self):
         """Initialize the UI components."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
 
+        # Simple button row
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(12)
+
+        self.run_main_btn = ModernButton("▶️ Run main.py", button_type="primary")
+        self.run_main_btn.setMinimumHeight(36)
+        self.run_main_btn.clicked.connect(self._run_main_py)
+
+        self.install_deps_btn = ModernButton("📦 Install Requirements", button_type="secondary")
+        self.install_deps_btn.setMinimumHeight(36)
+        self.install_deps_btn.clicked.connect(self._install_requirements)
+
+        button_layout.addWidget(self.run_main_btn)
+        button_layout.addWidget(self.install_deps_btn)
+        button_layout.addStretch()
+
+        main_layout.addLayout(button_layout)
+
+        # Beautiful terminal output
         self.output_area = QTextEdit()
         self.output_area.setReadOnly(True)
-        self.output_area.setFont(Typography.code())
+        self.output_area.setFont(QFont("Consolas", 11))
         self.output_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.output_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        main_layout.addWidget(self.output_area, 1)
 
+        # Command input
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 8, 0, 0)
         input_layout.setSpacing(8)
@@ -50,158 +71,187 @@ class InteractiveTerminal(QWidget):
         self._update_prompt_label()
 
         self.input_line = QLineEdit()
-        self.input_line.setFont(Typography.code())
+        self.input_line.setFont(QFont("Consolas", 10))
         self.input_line.setFrame(False)
         self.input_line.returnPressed.connect(self.run_manual_command)
 
-        self.run_project_btn = ModernButton("▶️ Run Project", button_type="primary")
-        self.run_project_btn.setMinimumHeight(32)
-        self.run_project_btn.setMaximumWidth(140)
-        self.run_project_btn.clicked.connect(self.force_run_requested.emit)
-        self.run_project_btn.setToolTip(
-            "Run the current project's main file after ensuring venv and dependencies are set up.")
-
         input_layout.addWidget(self.prompt_label)
         input_layout.addWidget(self.input_line, 1)
-        input_layout.addWidget(self.run_project_btn)
-
-        main_layout.addWidget(self.output_area, 1)
         main_layout.addLayout(input_layout)
 
     def _apply_style(self):
-        self.setStyleSheet(
-            f"background: {Colors.PRIMARY_BG}; border: 1px solid {Colors.BORDER_DEFAULT}; border-radius: 8px;")
-        self.output_area.setStyleSheet(f"""
-            QTextEdit {{ background: {Colors.PRIMARY_BG}; color: {Colors.TEXT_PRIMARY}; border: none; padding: 8px; }}
-            QScrollBar:vertical {{ background: {Colors.PRIMARY_BG}; width: 8px; border-radius: 4px; }}
-            QScrollBar::handle:vertical {{ background: {Colors.BORDER_DEFAULT}; border-radius: 4px; }}
-            QScrollBar::handle:vertical:hover {{ background: {Colors.ACCENT_BLUE}; }}
-        """)
-        self.prompt_label.setStyleSheet(
-            f"background: transparent; color: {Colors.ACCENT_BLUE}; font-weight: bold; padding-top: 2px;")
-        self.input_line.setStyleSheet(
-            f"background: transparent; color: {Colors.TEXT_PRIMARY}; border: none; padding: 4px 0px;")
-        self.run_project_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {Colors.ACCENT_GREEN}, stop:1 #2d863a);
-                color: white; border: 2px solid #2d863a; border-radius: 6px; padding: 6px 12px; font-weight: bold;
+        """Apply beautiful styling to the terminal"""
+        self.setStyleSheet(f"""
+            InteractiveTerminal {{
+                background: {Colors.PRIMARY_BG};
+                border-radius: 8px;
             }}
-            QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4dce5d, stop:1 #3fb950); border-color: #3fb950; }}
-            QPushButton:pressed {{ background: #2d863a; }}
-            QPushButton:disabled {{ background: {Colors.BORDER_DEFAULT}; color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER_MUTED}; }}
+            QTextEdit {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a1a1a, stop:1 #0f0f0f);
+                color: #e0e0e0;
+                border: 1px solid #333;
+                border-radius: 6px;
+                padding: 12px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                selection-background-color: {Colors.ACCENT_BLUE};
+            }}
+            QLineEdit {{
+                background: #2a2a2a;
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid #404040;
+                border-radius: 4px;
+                padding: 6px 8px;
+                font-family: 'Consolas', monospace;
+            }}
+            QLineEdit:focus {{
+                border-color: {Colors.ACCENT_BLUE};
+                background: #333;
+            }}
+            QScrollBar:vertical {{
+                background: #2a2a2a;
+                width: 8px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #666;
+            }}
         """)
 
-    def set_working_directory(self, path: str):
-        self.working_directory = Path(path).resolve()
-        if not self.working_directory.exists() or not self.working_directory.is_dir():
-            self.append_error(f"Directory not found, reverting to default: {path}")
-            self.working_directory = Path.cwd()
+    def _run_main_py(self):
+        """Simple: just run python main.py"""
+        if not self.current_project_path:
+            self.append_error("No project loaded.")
+            return
+
+        main_file = self.current_project_path / 'main.py'
+        if not main_file.exists():
+            self.append_error("main.py not found in project.")
+            return
+
+        self.append_system_message(f"Running main.py...")
+        self.execute_command(sys.executable, [str(main_file)])
+
+    def _install_requirements(self):
+        """Simple: install requirements.txt if it exists"""
+        if not self.current_project_path:
+            self.append_error("No project loaded.")
+            return
+
+        req_file = self.current_project_path / 'requirements.txt'
+        if not req_file.exists():
+            self.append_error("requirements.txt not found.")
+            return
+
+        self.append_system_message("Installing requirements...")
+        self.execute_command(sys.executable, ['-m', 'pip', 'install', '-r', str(req_file)])
+
+    def set_working_directory(self, directory: str):
+        """Set the working directory"""
+        self.working_directory = Path(directory)
+        self.current_project_path = Path(directory)
         self._update_prompt_label()
-        self.append_system_message(f"Working directory set to: {self.working_directory}")
 
     def _update_prompt_label(self):
-        prompt_path = str(self.working_directory.name)
-        venv_path = self.working_directory / 'venv'
-        if venv_path.exists():
-            self.prompt_label.setText(f"({prompt_path}) >")
+        """Update the prompt label"""
+        if hasattr(self, 'working_directory'):
+            dir_name = self.working_directory.name
+            self.prompt_label.setText(f"{dir_name}$ ")
+            self.prompt_label.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+            self.prompt_label.setStyleSheet(f"color: {Colors.ACCENT_GREEN}; font-weight: bold;")
         else:
-            self.prompt_label.setText(f"{prompt_path} >")
-
-    def _get_venv_environment(self) -> QProcessEnvironment:
-        """Creates a QProcessEnvironment with the venv's PATH prepended."""
-        venv_path = self.working_directory / 'venv'
-        if not venv_path.exists():
-            return QProcessEnvironment.systemEnvironment()
-
-        env = QProcessEnvironment.systemEnvironment()
-        original_path = env.value("PATH")
-
-        # Determine script path based on OS
-        if sys.platform == "win32":
-            scripts_path = str(venv_path / "Scripts")
-        else:
-            scripts_path = str(venv_path / "bin")
-
-        # Prepend the venv path to the system PATH
-        new_path = f"{scripts_path}{os.pathsep}{original_path}"
-        env.insert("PATH", new_path)
-
-        # Unset PYTHONHOME if it's set, as it can interfere with venvs
-        env.remove("PYTHONHOME")
-
-        self.append_system_message(f"Activated virtual environment: {venv_path.name}")
-        return env
+            self.prompt_label.setText("$ ")
 
     def execute_command(self, program: str, arguments: list):
-        """Executes a command using QProcess, activating venv if available."""
+        """Execute a command"""
         if self.process.state() == QProcess.ProcessState.Running:
             self.append_error("A command is already running.")
             return
 
         self.process.setWorkingDirectory(str(self.working_directory))
+        self.process.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
 
-        # Set the venv-aware environment for the process
-        self.process.setProcessEnvironment(self._get_venv_environment())
+        command_str = f"{program} {' '.join(arguments)}"
+        self.append_command(command_str)
 
-        self.append_command(f"{program} {' '.join(arguments)}")
         self.process.start(program, arguments)
-        if not self.process.waitForStarted(2000):  # Wait 2s for process to start
+        if not self.process.waitForStarted(3000):
             self.append_error(f"Error starting process: {self.process.errorString()}")
 
     def run_manual_command(self):
-        """Executes a command manually entered by the user."""
+        """Execute manually typed commands"""
         command_text = self.input_line.text().strip()
-        if not command_text: return
+        if not command_text:
+            return
+
         self.input_line.clear()
 
-        # Simple parsing for program and args
+        if command_text == "clear":
+            self.clear_terminal()
+            return
+
         parts = command_text.split()
         program = parts[0]
         args = parts[1:]
         self.execute_command(program, args)
 
     def _handle_output(self):
-        """Handle new data available on stdout/stderr."""
+        """Handle process output"""
         data = self.process.readAll()
-        self.append_output(data.data().decode(errors='ignore'))
+        output = data.data().decode(errors='ignore')
+        self.append_output(output)
 
     def _on_command_finished(self, exit_code, exit_status):
-        """Handle the completion of a command."""
-        status_text = "successfully" if exit_code == 0 else f"with error code {exit_code}"
-        self.append_system_message(f"Process finished {status_text}.\n")
+        """Handle command completion"""
+        if exit_code == 0:
+            self.append_system_message("✅ Command completed")
+        else:
+            self.append_error(f"❌ Command failed (exit code {exit_code})")
+
         self.input_line.setFocus()
         self.command_completed.emit(exit_code)
 
     def clear_terminal(self):
+        """Clear the terminal"""
         self.output_area.clear()
 
     def append_output(self, text: str):
+        """Append regular output"""
         cursor = self.output_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(text)
         self.output_area.ensureCursorVisible()
 
     def append_error(self, text: str):
-        self._append_formatted_text(text, Colors.ACCENT_RED)
+        """Append error text"""
+        self._append_formatted_text(f"❌ {text}\n", Colors.ACCENT_RED)
 
     def append_system_message(self, text: str):
-        self._append_formatted_text(f"{text}\n", Colors.TEXT_MUTED, italic=True)
+        """Append system message"""
+        self._append_formatted_text(f"ℹ️ {text}\n", Colors.ACCENT_BLUE)
 
     def append_command(self, command: str):
+        """Append command with prompt"""
         self.append_output("\n")
-        # Update prompt label to include venv indicator if present
-        current_prompt_text = self.prompt_label.text()
-        self._append_formatted_text(f"{current_prompt_text} ", Colors.ACCENT_BLUE, bold=True)
+        current_prompt = self.prompt_label.text()
+        self._append_formatted_text(f"{current_prompt}", Colors.ACCENT_GREEN)
         self._append_formatted_text(f"{command}\n", Colors.TEXT_PRIMARY)
 
-    def _append_formatted_text(self, text: str, color: str, bold=False, italic=False):
+    def _append_formatted_text(self, text: str, color: str):
+        """Append colored text"""
         cursor = self.output_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+
         char_format = QTextCharFormat()
         char_format.setForeground(QColor(color))
-        char_format.setFontWeight(QFont.Weight.Bold if bold else QFont.Weight.Normal)
-        char_format.setFontItalic(italic)
+
         cursor.mergeCharFormat(char_format)
         cursor.insertText(text)
+
         self.output_area.setCurrentCharFormat(QTextCharFormat())
         self.output_area.ensureCursorVisible()

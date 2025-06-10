@@ -353,20 +353,19 @@ class ChatActionsPanel(StyledPanel):
                 self.add_widget(btn)
 
 
-# Enhanced Sidebar Panel for Model Status
+# Enhanced Sidebar Panel for Model Status - UPDATED FOR V4 ROLES
 class ModelStatusPanel(StyledPanel):
-    """Panel showing AI specialist model assignments"""
+    """Panel showing AI specialist model assignments for V4 architecture"""
 
     def __init__(self):
         super().__init__("AI Specialists Status")
         self._init_ui()
 
     def _init_ui(self):
-        """Initialize model status displays"""
+        """Initialize model status displays for V4 roles only"""
         specialists = [
-            ("🧠 Planner", "planner_status"),
+            ("🏛️ Architect", "architect_status"),
             ("⚙️ Coder", "coder_status"),
-            ("📄 Assembler", "assembler_status"),
             ("🧐 Reviewer", "reviewer_status"),
             ("💬 Chat", "chat_status")
         ]
@@ -393,15 +392,14 @@ class ModelStatusPanel(StyledPanel):
             setattr(self, f"{attr_name}_indicator", indicator)
 
     def update_model_status_display(self, config_summary: dict):
-        """Update the model status display"""
+        """Update the model status display for V4 roles"""
 
         def truncate_model(name, length=22):
             return name[:length - 3] + "..." if name and len(name) > length else name or "Not configured"
 
         status_map = {
-            "planner": (self.planner_status, self.planner_status_indicator, "🧠 Planner"),
+            "architect": (self.architect_status, self.architect_status_indicator, "🏛️ Architect"),
             "coder": (self.coder_status, self.coder_status_indicator, "⚙️ Coder"),
-            "assembler": (self.assembler_status, self.assembler_status_indicator, "📄 Assembler"),
             "reviewer": (self.reviewer_status, self.reviewer_status_indicator, "🧐 Reviewer"),
             "chat": (self.chat_status, self.chat_status_indicator, "💬 Chat")
         }

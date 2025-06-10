@@ -1,9 +1,10 @@
-# core/workflow_services.py
+# core/workflow_services.py - Enhanced with Smart Reviewer
 
 import asyncio
 import json
 import re
 import textwrap
+import ast
 from typing import Callable, Dict, List
 
 from core.llm_client import LLMRole, EnhancedLLMClient
@@ -144,13 +145,82 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     Generate the complete and fully implemented Python code for `{file_path}` now:
 """)
 
+# ENHANCED REVIEWER PROMPT - THE SINGLE QUALITY POWERHOUSE
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are a senior code reviewer examining this Python file for quality and correctness. Provide a review as a JSON object with keys: "approved" (boolean), "summary" (string), "suggestions" (list of strings).
+    You are the SMART REVIEWER AI - the single comprehensive quality gate for all generated code. You perform deep analysis covering syntax, security, performance, style, best practices, and architectural consistency.
+
+    **FILE TO REVIEW:** {file_path}
+    **PROJECT DESCRIPTION:** {project_description}
+
+    **CODE TO REVIEW:**
+    ```python
+    {code}
+    ```
+
+    **COMPREHENSIVE ANALYSIS REQUIRED:**
+
+    1. **SYNTAX & CORRECTNESS**
+       - Check for syntax errors, undefined variables, import issues
+       - Verify all functions/classes are properly implemented (no bare `pass` statements)
+       - Ensure proper indentation and Python grammar
+
+    2. **SECURITY ANALYSIS**
+       - Scan for dangerous functions (eval, exec, subprocess with shell=True)
+       - Check for SQL injection vulnerabilities in query construction
+       - Identify unsafe file operations or user input handling
+       - Flag missing input validation and sanitization
+
+    3. **PERFORMANCE & EFFICIENCY**
+       - Identify inefficient algorithms or data structures
+       - Check for memory leaks or unnecessary object creation
+       - Flag blocking operations that should be async
+       - Suggest optimization opportunities
+
+    4. **STYLE & BEST PRACTICES**
+       - PEP 8 compliance (line length, naming conventions, imports)
+       - Proper docstring usage for classes and functions
+       - Appropriate error handling with specific exceptions
+       - Code readability and maintainability
+
+    5. **ARCHITECTURAL CONSISTENCY**
+       - Verify adherence to project patterns and conventions
+       - Check proper separation of concerns
+       - Ensure consistent API design and interfaces
+       - Validate proper dependency management
+
+    **OUTPUT FORMAT:**
+    Return a JSON object with this exact structure:
+    {{
+        "approved": boolean,
+        "quality_score": number (1-10),
+        "summary": "Brief overall assessment",
+        "issues": [
+            {{
+                "category": "security|performance|style|syntax|architecture",
+                "severity": "critical|high|medium|low",
+                "line": number or null,
+                "message": "Specific issue description",
+                "suggestion": "How to fix this issue"
+            }}
+        ],
+        "suggestions": [
+            "Overall improvement recommendations"
+        ],
+        "security_concerns": [
+            "Any security-related issues found"
+        ],
+        "performance_notes": [
+            "Performance optimization opportunities"
+        ]
+    }}
+
+    **CRITICAL:** Return ONLY the JSON object. No explanations or markdown formatting.
 """)
 
 
 class BaseAIService:
-    # ... (This class is unchanged)
+    """Base service class with common functionality"""
+
     def __init__(self, llm_client: EnhancedLLMClient, stream_emitter: Callable, rag_manager=None):
         self.llm_client = llm_client
         self.stream_emitter = stream_emitter
@@ -201,13 +271,14 @@ class BaseAIService:
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
-        # ... (This method remains unchanged)
-        if not self.rag_manager or not self.rag_manager.is_ready: return "No RAG context available."
+        if not self.rag_manager or not self.rag_manager.is_ready:
+            return "No RAG context available."
         self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
         dynamic_query = f"Python code example for {query}"
         try:
             results = self.rag_manager.query_context(dynamic_query, k=k)
-            if not results: return "No specific examples found in the knowledge base."
+            if not results:
+                return "No specific examples found in the knowledge base."
             return "\n\n---\n\n".join([
                 f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
                 for r in results if r.get('content')])
@@ -304,18 +375,159 @@ class CoderService(BaseAIService):
 
 
 class ReviewerService(BaseAIService):
-    """🧐 Performs a final quality check on generated code."""
+    """🧠 ENHANCED Smart Reviewer - The Single Quality Powerhouse"""
 
     async def review_code(self, file_path: str, code: str, project_description: str) -> tuple[dict, bool]:
-        self.stream_emitter("Reviewer", "thought", f"Requesting final quality review for '{file_path}'...", 2)
+        self.stream_emitter("Reviewer", "thought", f"Performing comprehensive quality analysis for '{file_path}'...", 2)
+
+        # Enhanced review that replaces the entire validation framework
         review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
             file_path=file_path,
             project_description=project_description,
             code=code
         )
+
         review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
+
         if not review_data:
             self.stream_emitter("Reviewer", "error", "Review failed: Could not parse response. Approving by default.",
                                 2)
             return {"approved": True, "summary": "Review failed to parse, approved by default."}, True
-        return review_data, review_data.get('approved', False)
+
+        # Enhanced feedback processing
+        approved = review_data.get('approved', False)
+        quality_score = review_data.get('quality_score', 5.0)
+        issues = review_data.get('issues', [])
+
+        # Log detailed analysis results
+        if issues:
+            critical_issues = [i for i in issues if i.get('severity') == 'critical']
+            high_issues = [i for i in issues if i.get('severity') == 'high']
+
+            if critical_issues:
+                self.stream_emitter("Reviewer", "error", f"Found {len(critical_issues)} critical issues", 2)
+                for issue in critical_issues:
+                    self.stream_emitter("Reviewer", "error", f"Critical: {issue.get('message', 'Unknown issue')}", 3)
+
+            if high_issues:
+                self.stream_emitter("Reviewer", "warning", f"Found {len(high_issues)} high-priority issues", 2)
+
+        # Security analysis
+        security_concerns = review_data.get('security_concerns', [])
+        if security_concerns:
+            self.stream_emitter("Reviewer", "security", f"Security analysis found {len(security_concerns)} concerns", 2)
+            for concern in security_concerns:
+                self.stream_emitter("Reviewer", "security", f"Security: {concern}", 3)
+
+        # Performance analysis
+        performance_notes = review_data.get('performance_notes', [])
+        if performance_notes:
+            self.stream_emitter("Reviewer", "performance", f"Performance optimization opportunities identified", 2)
+
+        self.stream_emitter("Reviewer", "success" if approved else "warning",
+                            f"Review complete: Quality Score {quality_score}/10 - {'APPROVED' if approved else 'NEEDS REVISION'}",
+                            2)
+
+        return review_data, approved
+
+    async def _static_code_analysis(self, code: str) -> dict:
+        """Perform static analysis that replaces external tools"""
+        analysis_results = {
+            'syntax_errors': [],
+            'style_violations': [],
+            'security_issues': [],
+            'performance_issues': [],
+            'complexity_warnings': []
+        }
+
+        try:
+            # Syntax validation
+            tree = ast.parse(code)
+
+            # Security analysis
+            security_issues = self._check_security_patterns(code, tree)
+            analysis_results['security_issues'].extend(security_issues)
+
+            # Style analysis
+            style_issues = self._check_style_patterns(code)
+            analysis_results['style_violations'].extend(style_issues)
+
+            # Performance analysis
+            perf_issues = self._check_performance_patterns(code, tree)
+            analysis_results['performance_issues'].extend(perf_issues)
+
+        except SyntaxError as e:
+            analysis_results['syntax_errors'].append({
+                'line': e.lineno,
+                'message': e.msg,
+                'severity': 'critical'
+            })
+
+        return analysis_results
+
+    def _check_security_patterns(self, code: str, tree: ast.AST) -> List[dict]:
+        """Check for security anti-patterns"""
+        issues = []
+
+        # Check for dangerous function calls
+        dangerous_functions = ['eval', 'exec', 'compile', '__import__']
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in dangerous_functions:
+                    issues.append({
+                        'line': node.lineno,
+                        'message': f"Dangerous function '{node.func.id}' detected",
+                        'severity': 'critical',
+                        'category': 'security'
+                    })
+
+        # Check for SQL injection patterns
+        if 'execute(' in code and any(pattern in code for pattern in ['%s', '+', 'format(']):
+            issues.append({
+                'message': "Potential SQL injection vulnerability detected",
+                'severity': 'high',
+                'category': 'security'
+            })
+
+        return issues
+
+    def _check_style_patterns(self, code: str) -> List[dict]:
+        """Check for style violations"""
+        issues = []
+        lines = code.split('\n')
+
+        for i, line in enumerate(lines, 1):
+            # Line length check
+            if len(line) > 88:
+                issues.append({
+                    'line': i,
+                    'message': f"Line too long ({len(line)} > 88 characters)",
+                    'severity': 'medium',
+                    'category': 'style'
+                })
+
+            # Trailing whitespace
+            if line.rstrip() != line:
+                issues.append({
+                    'line': i,
+                    'message': "Trailing whitespace detected",
+                    'severity': 'low',
+                    'category': 'style'
+                })
+
+        return issues
+
+    def _check_performance_patterns(self, code: str, tree: ast.AST) -> List[dict]:
+        """Check for performance anti-patterns"""
+        issues = []
+
+        # Check for inefficient patterns
+        if 'for ' in code and ' in range(len(' in code:
+            issues.append({
+                'message': "Consider using enumerate() instead of range(len())",
+                'severity': 'medium',
+                'category': 'performance'
+            })
+
+        return issues
