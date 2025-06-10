@@ -62,7 +62,6 @@ class AvAApplication(QObject):
         self.active_workflows = {}
 
     def _setup_logging(self):
-        # ... (implementation unchanged) ...
         log_dir = Path("./logs")
         log_dir.mkdir(exist_ok=True)
 
@@ -84,7 +83,6 @@ class AvAApplication(QObject):
         logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 
     async def initialize(self):
-        # ... (implementation unchanged) ...
         self.logger.info("🚀 Initializing AvA Application...")
         self.main_window = AvAMainWindow(ava_app=self)
         self.code_viewer = CodeViewerWindow()
@@ -95,7 +93,6 @@ class AvAApplication(QObject):
         await self.async_initialize_components()
 
     async def async_initialize_components(self):
-        # ... (implementation unchanged) ...
         self.logger.info("Initializing async components...")
         try:
             await self._initialize_rag_manager_async()
@@ -108,12 +105,10 @@ class AvAApplication(QObject):
             self.error_occurred.emit("async_initialization", str(e))
 
     def _initialize_core_services(self):
-        # ... (implementation unchanged) ...
         self.logger.info("Initializing core services...")
         self.llm_client = EnhancedLLMClient()
 
     async def _initialize_rag_manager_async(self):
-        # ... (implementation unchanged) ...
         if RAG_MANAGER_AVAILABLE:
             try:
                 self.rag_manager = RAGManager()
@@ -124,7 +119,6 @@ class AvAApplication(QObject):
                 self.rag_manager = None
 
     def _initialize_workflow_engine(self):
-        # ... (implementation unchanged) ...
         self.workflow_engine = EnhancedWorkflowEngine(self.llm_client, self.streaming_terminal, self.code_viewer,
                                                       self.rag_manager)
 
@@ -228,7 +222,6 @@ class AvAApplication(QObject):
         self.code_viewer.terminal.execute_command(python_executable, args)
 
     def _terminal_log(self, log_type: str, message: str):
-        # ... (implementation unchanged) ...
         if self.code_viewer and self.code_viewer.terminal:
             terminal = self.code_viewer.terminal
             log_methods = {"info": terminal.append_system_message, "error": terminal.append_error,
@@ -245,7 +238,6 @@ class AvAApplication(QObject):
                 log_method(prefix + message)
 
     def get_status(self) -> Dict[str, Any]:
-        # ... (implementation unchanged) ...
         llm_models_list = self.llm_client.get_available_models() if self.llm_client else ["LLM Client not init"]
         rag_info = {"ready": False, "status_text": "RAG: Not Initialized", "available": RAG_MANAGER_AVAILABLE}
         if RAG_MANAGER_AVAILABLE and self.rag_manager:
@@ -260,13 +252,11 @@ class AvAApplication(QObject):
 
     @Slot(str)
     def _on_file_generated(self, file_path: str):
-        # ... (implementation unchanged) ...
         self.logger.info(f"File generated: {file_path}")
         if self.code_viewer: self.code_viewer.auto_open_file(file_path)
 
     @Slot(str)
     def _on_project_loaded(self, project_path: str):
-        # ... (implementation unchanged) ...
         self.logger.info(f"Project loaded: {project_path}")
         self.current_project_path = Path(project_path)
         self.current_project = self.current_project_path.name
@@ -278,7 +268,6 @@ class AvAApplication(QObject):
             self.code_viewer.activateWindow()
 
     def _handle_sidebar_action(self, action: str):
-        # ... (implementation unchanged) ...
         self.logger.info(f"Sidebar action: {action}")
         if action == "view_log":
             if self.streaming_terminal: self.streaming_terminal.show(); self.streaming_terminal.raise_(); self.streaming_terminal.activateWindow()
@@ -292,7 +281,6 @@ class AvAApplication(QObject):
             self.new_session()
 
     def new_session(self):
-        # ... (implementation unchanged) ...
         if self.main_window:
             self.main_window.chat_interface.clear_chat()
             self.main_window.chat_interface._add_welcome_message()
@@ -302,7 +290,6 @@ class AvAApplication(QObject):
         self.logger.info("New session started.")
 
     def save_session(self):
-        # ... (implementation unchanged) ...
         if not self.main_window: return
         history = self.main_window.chat_interface.conversation_history
         session_data = {"version": "1.0", "timestamp": datetime.now().isoformat(), "project_name": self.current_project,
@@ -325,7 +312,6 @@ class AvAApplication(QObject):
             QMessageBox.critical(self.main_window, "Error", f"Failed to save session: {e}")
 
     def load_session(self):
-        # ... (implementation unchanged) ...
         if not self.main_window: return
         file_name, _ = QFileDialog.getOpenFileName(self.main_window, "Load Session", str(self.workspace_dir),
                                                    "JSON Files (*.json)")
@@ -366,27 +352,32 @@ class AvAApplication(QObject):
         else:
             project_path.mkdir(parents=True, exist_ok=True)
 
-        # --- NEW: Create venv and GDD automatically ---
+        # --- MODIFIED: More robust GDD creation ---
         try:
             # Create a placeholder main.py
             (project_path / "main.py").write_text(
-                f'if __name__ == "__main__":\n    print("Hello from {project_name}!")\n')
+                f'# main.py for {project_name}\n\nif __name__ == "__main__":\n    print("Hello from {project_name}!")\n')
 
             # Create the initial GDD file
             gdd_file_path = project_path / f"{project_name}_GDD.md"
-            gdd_template = f"""
-# Game Design Document: {project_name_raw}
+            gdd_template = f"""# Game Design Document: {project_name_raw}
 
-## Project Vision
+## 1. Project Vision
 > Initial idea: {project_name_raw}
 
-## Implemented Systems
+## 2. Core Gameplay Loop
+_(To be defined)_
+
+## 3. Key Features
+_(To be defined)_
+
+## 4. Implemented Systems
 _(This section will be populated as you build out the project.)_
 
 ---
 
 ## Development Log
-- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized.
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized by AvA.
 """
             gdd_file_path.write_text(gdd_template.strip(), encoding='utf-8')
 
@@ -395,8 +386,6 @@ _(This section will be populated as you build out the project.)_
             QMessageBox.information(self.main_window, "Project Setup",
                                     "Creating virtual environment... This may take a moment.")
 
-            # Use QProcess.execute() for a simple, blocking call suitable for a quick operation
-            # This is safer than subprocess.run() in a GUI event handler.
             process = QProcess()
             process.setWorkingDirectory(str(project_path))
             process.start(sys.executable, ['-m', 'venv', 'venv'])
@@ -412,14 +401,11 @@ _(This section will be populated as you build out the project.)_
             self.logger.error(f"Failed during project creation for '{project_name}': {e}", exc_info=True)
             return
 
-        # --- End of new logic ---
-
         self._on_project_loaded(str(project_path))
         self.main_window.chat_interface.add_assistant_response(
             f"✅ Project '{project_name}' created at {project_path}.\n\nA virtual environment and a GDD file have been set up. What should we build first?")
 
     def load_existing_project_dialog(self):
-        # ... (implementation unchanged) ...
         if not self.main_window: return
         folder_path_str = QFileDialog.getExistingDirectory(self.main_window, "Load Existing Project",
                                                            str(self.workspace_dir))
@@ -509,7 +495,6 @@ _(This section will be populated as you build out the project.)_
             self.error_occurred.emit("simple_chat", str(e))
 
     def shutdown(self):
-        # ... (implementation unchanged) ...
         self.logger.info("Shutting down AvA Application...")
         if self.main_window: self.main_window.close()
         if self.code_viewer: self.code_viewer.close()

@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V5.5 with Team Communication
+# core/enhanced_workflow_engine.py - V5.5 with Team Communication + ROBUST FIXES
 
 import asyncio
 import json
@@ -97,78 +97,68 @@ class EnhancedWorkflowEngine(QObject):
             self.detailed_log_event.emit("WorkflowEngine", "error",
                                          f"Project state setup failed: {e}", "1")
 
-    def _create_initial_gdd(self, project_path: Path, project_name: str, initial_prompt: str):
-        """Creates the initial Game Design Document for a new project."""
-        gdd_file_path = project_path / f"{project_name}_GDD.md"
+    ### MODIFIED ###
+    def _ensure_gdd_exists(self, project_path: Path, project_name_raw: str, initial_prompt: str):
+        """
+        Ensures a Game Design Document (GDD) exists. If not, creates one.
+        This is now the single point of truth for GDD creation.
+        """
+        # Sanitize project name for filename
+        project_name_sanitized = "".join(c for c in project_name_raw.strip() if c.isalnum() or c in ('_', '-')).rstrip()
+        if not project_name_sanitized:
+            project_name_sanitized = "ava_project"
 
-        # Check if the file exists AND has content
+        gdd_file_path = project_path / f"{project_name_sanitized}_GDD.md"
+
+        # Only create if it doesn't exist. This prevents overwriting user modifications.
+        if gdd_file_path.exists():
+            self.logger.info(f"GDD file already exists at {gdd_file_path}. Skipping creation.")
+            return
+
+        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"GDD not found. Creating: {gdd_file_path.name}", "1")
         try:
-            if gdd_file_path.exists() and gdd_file_path.read_text(encoding='utf-8').strip():
-                self.logger.info(f"GDD file at {gdd_file_path} already has content. Skipping creation.")
-                return
-        except Exception as e:
-            self.logger.warning(f"Could not read existing GDD file to check for content, will overwrite. Error: {e}")
+            gdd_template = f"""# Game Design Document: {project_name_raw}
 
-        self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Creating/updating GDD: {gdd_file_path.name}", "1")
-        gdd_template = f"""
-# Game Design Document: {project_name}
+## 1. Project Vision
+> Initial idea: {initial_prompt}
 
-## 1. High-Level Vision
-> What is the one-sentence description of this project? What is its core purpose?
-> The initial user request was: "{initial_prompt}"
+## 2. Core Gameplay Loop
+_(To be defined as project evolves)_
 
-(Describe the core vision of your project here...)
+## 3. Key Features
+_(To be defined as project evolves)_
 
-
-## 2. Key Features
-> List the major features or systems you want to build.
-> This helps the AI understand the primary components.
-
-- Feature A: (e.g., "A voxel-based world generation system.")
-- Feature B: (e.g., "First-person player controller with physics.")
-- Feature C: (e.g., "An inventory system for collecting items.")
-
-
-## 3. Technical Requirements & Constraints
-> Specify any strict technical needs or limitations.
-> This is crucial for guiding the Architect AI.
-
-- **Frameworks:** (e.g., "Must use the Ursina engine for Python.")
-- **Libraries:** (e.g., "No external libraries besides Ursina.")
-- **Platform:** (e.g., "Must run on Windows 10.")
-- **Other:** (e.g., "Code must be PEP 8 compliant.")
-
-
-## 4. Aesthetics & Feel
-> What is the desired look and feel? Is it retro, modern, minimalist, etc.?
-
-(Describe the visual style, sound design, and overall mood here...)
+## 4. Implemented Systems
+_(This section will be populated as you build out the project.)_
 
 ---
 
 ## Development Log
-- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized.
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Project initialized or loaded into AvA.
 """
-        try:
             gdd_file_path.write_text(gdd_template.strip(), encoding='utf-8')
-            self.file_generated.emit(str(gdd_file_path))
+            self.detailed_log_event.emit("WorkflowEngine", "success", f"GDD created successfully: {gdd_file_path.name}",
+                                         "1")
         except Exception as e:
-            self.logger.error(f"❌ Failed to create initial GDD file: {e}")
+            self.logger.error(f"Failed to create GDD file: {e}")
             self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create GDD: {e}", "1")
 
-    def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: dict):
-        """Appends a new entry to the GDD's development log."""
+    ### MODIFIED ###
+    def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: Dict[str, Any]):
+        """Updates the project's GDD with the latest workflow results."""
         gdd_file_path = project_path / f"{project_name}_GDD.md"
+
+        # GDD should exist by now, but we add a fallback just in case.
         if not gdd_file_path.exists():
-            self.logger.error(f"Could not find GDD file to update at {gdd_file_path}")
-            self.detailed_log_event.emit("WorkflowEngine", "error", f"GDD file not found for update.", "1")
+            self.logger.error(f"Could not find GDD file to update at {gdd_file_path}. Recreating it.")
             vision = f"Project '{project_name}' was loaded. The original vision was not recorded."
-            self._create_initial_gdd(project_path, project_name, vision)
+            self._ensure_gdd_exists(project_path, project_name, vision)
 
         self.detailed_log_event.emit("WorkflowEngine", "file_op", f"Updating GDD log: {gdd_file_path.name}", "1")
         files_created = ", ".join(results.get("files_created", []))
         log_entry = f"""
-- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**:
+---
+- **{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}**: Workflow Run
   - **Request**: "{user_prompt}"
   - **Result**: Successfully implemented changes.
   - **Files Modified/Created**: {files_created if files_created else "None specified."}
@@ -192,6 +182,96 @@ class EnhancedWorkflowEngine(QObject):
                 return f"Error reading GDD: {e}"
         return ""
 
+    def _create_basic_tech_spec_from_files(self, project_path: Path) -> dict:
+        """Create a basic tech spec from existing files when analysis fails."""
+        self.detailed_log_event.emit("WorkflowEngine", "info", "Creating fallback tech spec from existing files...",
+                                     "1")
+
+        python_files = list(project_path.rglob("*.py"))
+        python_files = [f for f in python_files if '__pycache__' not in f.parts and '.venv' not in f.parts]
+
+        file_specs = {}
+        for py_file in python_files:
+            rel_path = py_file.relative_to(project_path)
+            file_name = str(rel_path).replace('\\', '/').replace('.py', '')
+            file_specs[file_name] = {
+                "purpose": f"Existing file: {rel_path}",
+                "dependencies": [],
+                "api_contract": {"description": f"Existing implementation in {rel_path}"}
+            }
+
+        return {
+            "project_name": project_path.name,
+            "project_description": f"Existing project '{project_path.name}' ready for modifications",
+            "technical_specs": file_specs,
+            "dependency_order": list(file_specs.keys()),
+            "requirements": []  # Will be populated later if needed
+        }
+
+    def _create_requirements_txt(self, project_dir: Path, tech_spec: dict):
+        """Create requirements.txt file from tech spec."""
+        requirements = tech_spec.get("requirements", [])
+        if requirements:
+            req_file = project_dir / "requirements.txt"
+            self.detailed_log_event.emit("WorkflowEngine", "file_op",
+                                         f"Creating requirements.txt with {len(requirements)} packages", "1")
+            try:
+                req_content = "\n".join(requirements) + "\n"
+                req_file.write_text(req_content, encoding='utf-8')
+                self.detailed_log_event.emit("WorkflowEngine", "success", "requirements.txt created successfully", "1")
+            except Exception as e:
+                self.logger.error(f"Failed to create requirements.txt: {e}")
+                self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create requirements.txt: {e}", "1")
+
+    def _setup_virtual_environment(self, project_dir: Path):
+        """Set up virtual environment for the project."""
+        import sys
+        import subprocess
+
+        venv_path = project_dir / "venv"
+        if venv_path.exists():
+            self.detailed_log_event.emit("WorkflowEngine", "info", "Virtual environment already exists", "1")
+            return
+
+        self.detailed_log_event.emit("WorkflowEngine", "info", "Creating virtual environment...", "1")
+        try:
+            # Create venv
+            result = subprocess.run([sys.executable, '-m', 'venv', str(venv_path)],
+                                    capture_output=True, text=True, cwd=str(project_dir))
+
+            if result.returncode == 0:
+                self.detailed_log_event.emit("WorkflowEngine", "success", "Virtual environment created successfully",
+                                             "1")
+
+                # Install requirements if they exist
+                req_file = project_dir / "requirements.txt"
+                if req_file.exists():
+                    self.detailed_log_event.emit("WorkflowEngine", "info", "Installing requirements...", "1")
+
+                    # Determine pip path
+                    if sys.platform == "win32":
+                        pip_path = venv_path / "Scripts" / "pip.exe"
+                    else:
+                        pip_path = venv_path / "bin" / "pip"
+
+                    pip_result = subprocess.run([str(pip_path), 'install', '-r', str(req_file)],
+                                                capture_output=True, text=True, cwd=str(project_dir))
+
+                    if pip_result.returncode == 0:
+                        self.detailed_log_event.emit("WorkflowEngine", "success", "Requirements installed successfully",
+                                                     "1")
+                    else:
+                        self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                                     f"Requirements installation had issues: {pip_result.stderr[:200]}",
+                                                     "1")
+            else:
+                self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create venv: {result.stderr[:200]}",
+                                             "1")
+
+        except Exception as e:
+            self.logger.error(f"Failed to create virtual environment: {e}")
+            self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create venv: {e}", "1")
+
     async def execute_analysis_workflow(self, project_path_str: str):
         self.logger.info(f"🚀 Starting Analysis workflow for: {project_path_str}...")
         self.analysis_started.emit(project_path_str)
@@ -201,17 +281,65 @@ class EnhancedWorkflowEngine(QObject):
         try:
             project_path = Path(project_path_str)
 
+            # Validate project path exists
+            if not project_path.exists():
+                raise Exception(f"Project path does not exist: {project_path_str}")
+
             # Setup project state and team communication
             self._setup_project_state_and_services(project_path)
 
+            # Check if project state manager was created successfully
+            if not self.project_state_manager:
+                raise Exception("Failed to initialize project state manager")
+
+            files_count = len(self.project_state_manager.files)
             self.detailed_log_event.emit("WorkflowEngine", "info",
-                                         f"Project State Manager initialized. Scanned {len(self.project_state_manager.files)} files.",
+                                         f"Project State Manager initialized. Scanned {files_count} files.",
                                          "1")
 
-            tech_spec = await self.architect_service.analyze_and_create_spec_from_project(self.project_state_manager)
+            # If no files were found, that's important to know but not an error
+            if files_count == 0:
+                self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                             "No Python files found in project. Analysis will be limited.", "1")
+
+            # Try to analyze the project - with better error handling and debugging
+            self.detailed_log_event.emit("WorkflowEngine", "info", "Starting AI analysis of project structure...", "1")
+
+            # Multiple attempts with different strategies
+            tech_spec = None
+            for attempt in range(3):
+                try:
+                    self.detailed_log_event.emit("WorkflowEngine", "info", f"Analysis attempt {attempt + 1}/3...", "1")
+                    tech_spec = await self.architect_service.analyze_and_create_spec_from_project(
+                        self.project_state_manager)
+
+                    # Validate the tech spec thoroughly
+                    if tech_spec and isinstance(tech_spec, dict) and tech_spec.get("technical_specs"):
+                        self.detailed_log_event.emit("WorkflowEngine", "success", "✅ AI analysis successful!", "1")
+                        break
+                    else:
+                        self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                                     f"Attempt {attempt + 1} returned incomplete analysis. Retrying...",
+                                                     "1")
+                        tech_spec = None
+
+                except Exception as analysis_error:
+                    self.logger.error(f"Analysis attempt {attempt + 1} failed: {analysis_error}", exc_info=True)
+                    self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                                 f"Attempt {attempt + 1} failed: {analysis_error}", "1")
+                    # Wait a bit between retries
+                    if attempt < 2:
+                        await asyncio.sleep(1)
+
+            # If AI analysis failed, create fallback tech spec
+            if not tech_spec or not isinstance(tech_spec, dict):
+                self.detailed_log_event.emit("WorkflowEngine", "warning",
+                                             "AI analysis failed. Creating fallback tech spec...", "1")
+                tech_spec = self._create_basic_tech_spec_from_files(project_path)
+
+            # Ensure we have a valid tech spec
             if not tech_spec:
-                raise Exception(
-                    "Analysis failed. Architect could not produce a technical specification from the project files.")
+                raise Exception("Failed to create any technical specification for the project")
 
             self.current_tech_spec = tech_spec
             self.is_existing_project_loaded = True
@@ -219,7 +347,10 @@ class EnhancedWorkflowEngine(QObject):
 
             project_name = tech_spec.get("project_name", project_path.name)
             project_description = tech_spec.get("project_description", "An existing project loaded into AvA.")
-            self._create_initial_gdd(project_path, project_name, project_description)
+
+            ### MODIFIED ###
+            # Ensure GDD exists after loading an existing project
+            self._ensure_gdd_exists(project_path, project_name, project_description)
 
             self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Technical spec created.",
                                          "0")
@@ -230,6 +361,19 @@ class EnhancedWorkflowEngine(QObject):
         except Exception as e:
             self.logger.error(f"❌ Analysis Workflow failed: {e}", exc_info=True)
             self.detailed_log_event.emit("WorkflowEngine", "error", f"❌ Analysis Error: {str(e)}", "0")
+
+            # CREATE FALLBACK TECH SPEC so modifications can still proceed
+            try:
+                project_path = Path(project_path_str)
+                self.current_tech_spec = self._create_basic_tech_spec_from_files(project_path)
+                self.is_existing_project_loaded = True
+                self.original_project_path = project_path
+                self.detailed_log_event.emit("WorkflowEngine", "info",
+                                             "Using fallback tech spec for future modifications", "0")
+            except Exception as fallback_error:
+                self.logger.error(f"Failed to create fallback tech spec: {fallback_error}")
+
+            # Still emit project_loaded signal so the UI doesn't hang
             self.project_loaded.emit(project_path_str)
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
@@ -277,7 +421,10 @@ class EnhancedWorkflowEngine(QObject):
                 project_dir.mkdir(parents=True, exist_ok=True)
                 self.detailed_log_event.emit("WorkflowEngine", "file_op",
                                              f"New project directory created: {project_dir}", "1")
-                self._create_initial_gdd(project_dir, project_name, user_prompt)
+
+                ### MODIFIED ###
+                # Ensure GDD exists for a new project
+                self._ensure_gdd_exists(project_dir, project_name, user_prompt)
 
             # Setup team communication for the target project directory
             self._setup_project_state_and_services(project_dir)
@@ -334,6 +481,12 @@ class EnhancedWorkflowEngine(QObject):
 
                 knowledge_packets[full_filename] = {"spec": file_spec, "source_code": generated_code}
                 results["files_created"].append(full_filename)
+
+            # Create requirements.txt from tech spec
+            self._create_requirements_txt(project_dir, tech_spec)
+
+            # Set up virtual environment
+            self._setup_virtual_environment(project_dir)
 
             self.workflow_progress.emit("finalization", "Finalizing project...")
             elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
@@ -405,7 +558,11 @@ class EnhancedWorkflowEngine(QObject):
                     pass
 
             if final_result["success"]:
-                self._update_gdd_log(project_path, base_project_name, self.original_user_prompt, results)
+                ### MODIFIED ###
+                # The project name passed here should be the sanitized one for the filename
+                sanitized_base_name = "".join(
+                    c for c in base_project_name.strip() if c.isalnum() or c in ('_', '-')).rstrip()
+                self._update_gdd_log(project_path, sanitized_base_name, self.original_user_prompt, results)
 
         # Log team insights summary
         if self.project_state_manager:
