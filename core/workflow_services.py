@@ -379,6 +379,7 @@ class BaseAIService:
         dynamic_query = f"Python code example for {query}"
         try:
             results = self.rag_manager.query_context(dynamic_query, k=k)
+            self.stream_emitter("RAG", "success", "Context retrieval complete.", 4)
             if not results:
                 return "No specific examples found in the knowledge base."
             return "\n\n---\n\n".join([
@@ -395,14 +396,17 @@ class ArchitectService(BaseAIService):
         self.stream_emitter("Architect", "thought",
                             "Phase 1: Architecting the complete project technical specification...", 0)
 
-        # Extract GDD context from user prompt
+        # --- FIX: Ensure we get the string, not a list ---
         prompt_parts = user_prompt.split("\n\n--- GDD CONTEXT ---\n")
         actual_user_prompt = prompt_parts[0]
         gdd_context = prompt_parts[1] if len(prompt_parts) > 1 else "No GDD provided."
 
         requirements = [msg.get("message", "") for msg in (conversation_context or []) if msg.get("role") == "user"]
         requirements.append(actual_user_prompt)
-        full_requirements = " ".join(req.strip() for req in requirements if req.strip())
+
+        # Filter out any potential non-string elements just in case
+        str_requirements = [str(req) for req in requirements if req]
+        full_requirements = " ".join(req.strip() for req in str_requirements if req.strip())
 
         # Get team context and RAG context
         team_context = self._get_team_context_string("architectural")
@@ -493,6 +497,18 @@ class ArchitectService(BaseAIService):
 class CoderService(BaseAIService):
     """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
 
+    def _clean_code_output(self, code: str) -> str:
+        """Removes markdown fences from code output."""
+        # This regex handles optional language specifier and leading/trailing whitespace
+        match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        # Fallback for code that might not have the language specifier but has fences
+        match = re.search(r"```\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return code.strip()
+
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:
         """
@@ -510,20 +526,27 @@ class CoderService(BaseAIService):
 
         # === PASS 2: Consolidated Polishing Pass (Blocking) ===
         self.stream_emitter("Coder", "refinement_pass", "2/2: Polishing code (error handling & docs)...", 2)
-        final_code = await self._final_refinement_pass(initial_code)
-        if not final_code:
+        polished_code = await self._final_refinement_pass(initial_code)
+        if not polished_code:
             self.stream_emitter("Coder", "warning", f"Polishing pass failed for {file_path}. Using initial draft.", 3)
-            final_code = initial_code  # Fallback to the initial draft
+            final_code = initial_code
+        else:
+            final_code = polished_code
 
         self.stream_emitter("Coder", "success", f"Multi-pass generation finished for {file_path}!", 1)
 
+        # --- MODIFIED: Clean the final code before returning ---
+        clean_final_code = self._clean_code_output(final_code)
+
         # Analyze the final generated code and contribute insights
-        self._analyze_and_contribute_code_insights(file_path, final_code)
+        self._analyze_and_contribute_code_insights(file_path, clean_final_code)
 
-        return final_code
+        return clean_final_code
 
-    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict, dependency_context: str) -> str:
+    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict,
+                                  dependency_context: str) -> str:
         """Generates the first functional version of the code and streams it."""
+        self.stream_emitter("Coder", "thought_detail", "Gathering context for initial draft...", 3)
         team_context = self._get_team_context_string("implementation")
         rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}", k=3)
 
@@ -538,6 +561,7 @@ class CoderService(BaseAIService):
         if dependency_context:
             generation_prompt += f"\n\n**DEPENDENCY CONTEXT:**\n{dependency_context}"
 
+        self.stream_emitter("Coder", "thought_detail", "Prompt assembled. Waiting for LLM to start writing...", 3)
         all_chunks = []
         try:
             async for chunk in self.llm_client.stream_chat(generation_prompt, LLMRole.CODER):

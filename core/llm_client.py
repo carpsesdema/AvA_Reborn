@@ -117,7 +117,8 @@ class EnhancedLLMClient:
                 [LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
             self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
-                "gemini", "gemini-2.5-flash-preview-05-20", api_key, base_url, 0.7, 8000, [LLMRole.CHAT]
+                "gemini", "gemini-2.5-flash-preview-05-20", api_key, base_url, 0.7, 8000,
+                [LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             print("✅ Google Gemini models loaded.")
 
@@ -125,7 +126,7 @@ class EnhancedLLMClient:
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
             self.models["deepseek-reasoner"] = ModelConfig(
-                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT, LLMRole.REVIEWER]
+                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT]
             )
             self.models["deepseek-coder"] = ModelConfig(
                 "deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
@@ -154,11 +155,10 @@ class EnhancedLLMClient:
     def _assign_roles(self):
         """Assigns the best available model to each role based on suitability and speed."""
         preferences = {
-            LLMRole.ARCHITECT: ["claude-3-5-sonnet-20240620", "gpt-4o", "deepseek-reasoner",
-                                "gemini-2.5-pro-preview-06-05"],
-            LLMRole.CODER: ["deepseek-coder", "claude-3-5-sonnet-20240620", "gpt-4o", "ollama_codellama"],
-            LLMRole.REVIEWER: ["gpt-4o-mini", "claude-3-5-sonnet-20240620", "gemini-2.5-flash-preview-05-20"],
-            LLMRole.CHAT: ["gpt-4o-mini", "deepseek-chat", "claude-3-5-sonnet-20240620"]
+            LLMRole.ARCHITECT: ["deepseek-reasoner", "claude-3-opus-20240229", "gpt-4o"],
+            LLMRole.CODER: ["gemini-2.5-flash-preview-05-20", "claude-3-5-sonnet-20240620", "gpt-4o"],
+            LLMRole.REVIEWER: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini"],
+            LLMRole.CHAT: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini", "deepseek-chat"]
         }
 
         for role, preferred_models in preferences.items():

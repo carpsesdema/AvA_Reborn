@@ -179,10 +179,11 @@ class AvAApplication(QObject):
         venv_path = self.current_project_path / 'venv'
         if venv_path.exists() and (venv_path / 'pyvenv.cfg').exists():
             self._terminal_log("info", "Virtual environment found.")
-            self._on_command_completed(0)
+            self._on_command_completed(0)  # Success, move to next step
             return
 
         self._terminal_log("info", "Virtual environment not found. Creating...")
+        # Use the base python interpreter to create the venv
         program = sys.executable
         args = ['-m', 'venv', 'venv']
         self.code_viewer.terminal.execute_command(program, args)
@@ -191,13 +192,23 @@ class AvAApplication(QObject):
         req_file = self.current_project_path / 'requirements.txt'
         if not req_file.exists():
             self._terminal_log("info", "No requirements.txt found. Skipping dependency installation.")
-            self._on_command_completed(0)
+            self._on_command_completed(0)  # Success, move to next step
             return
 
         self._terminal_log("info", "requirements.txt found. Installing dependencies...")
         venv_path = self.current_project_path / 'venv'
-        pip_executable = str(venv_path / 'Scripts' / 'pip') if sys.platform == 'win32' else str(
-            venv_path / 'bin' / 'pip')
+
+        # --- MODIFIED: Use the correct pip from the project's venv ---
+        if sys.platform == 'win32':
+            pip_executable = str(venv_path / 'Scripts' / 'pip.exe')
+        else:
+            pip_executable = str(venv_path / 'bin' / 'pip')
+
+        if not Path(pip_executable).exists():
+            self._terminal_log("error", f"Could not find pip executable at {pip_executable}")
+            self._on_command_completed(1)
+            return
+
         args = ['install', '-r', str(req_file)]
         self.code_viewer.terminal.execute_command(pip_executable, args)
 
@@ -209,16 +220,26 @@ class AvAApplication(QObject):
                     main_file = py_file
                     break
 
-        if not main_file.exists():
+        if not main_file.exists() or not main_file.is_file():
             self._terminal_log("error",
                                "Could not find a main entry point (main.py or file with __name__ == '__main__').")
             self._on_command_completed(1)
             return
 
-        self._terminal_log("info", f"Executing entry point: {main_file.name}...")
+        self._terminal_log("info", f"Executing entry point: {main_file.relative_to(self.current_project_path)}...")
         venv_path = self.current_project_path / 'venv'
-        python_executable = str(venv_path / 'Scripts' / 'python') if sys.platform == 'win32' else str(
-            venv_path / 'bin' / 'python')
+
+        # --- MODIFIED: Use the correct python from the project's venv ---
+        if sys.platform == 'win32':
+            python_executable = str(venv_path / 'Scripts' / 'python.exe')
+        else:
+            python_executable = str(venv_path / 'bin' / 'python')
+
+        if not Path(python_executable).exists():
+            self._terminal_log("error", f"Could not find python executable at {python_executable}")
+            self._on_command_completed(1)
+            return
+
         args = [str(main_file)]
         self.code_viewer.terminal.execute_command(python_executable, args)
 
