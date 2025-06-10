@@ -226,6 +226,20 @@ class ProjectStateManager:
         self._invalidate_context_cache()  # NEW: Invalidate cache when files change
         return file_state
 
+    def _get_summarized_file_states(self) -> Dict[str, Any]:
+        """Creates a summarized dictionary of file states, omitting full content."""
+        summary = {}
+        for path, fs in self.files.items():
+            summary[path] = {
+                "path": fs.path,
+                "hash": fs.hash,
+                "dependencies": fs.dependencies,
+                "exports": fs.exports,
+                "last_modified": fs.last_modified.isoformat(),
+                # OMITTING 'content' and 'imports' for brevity
+            }
+        return summary
+
     def get_project_context(self, for_file: str = None, ai_role: str = None) -> Dict[str, Any]:
         project_overview_serializable = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
@@ -233,6 +247,11 @@ class ProjectStateManager:
         }
         project_overview_serializable.setdefault("main_files", self._identify_main_files())
         project_overview_serializable.setdefault("architecture_type", self._detect_architecture_type())
+
+        # --- MODIFICATION ---
+        # Instead of sending full file contents, send a summary.
+        project_overview_serializable["files"] = self._get_summarized_file_states()
+        # --- END MODIFICATION ---
 
         context = {
             "project_overview": project_overview_serializable,
@@ -381,12 +400,18 @@ class ProjectStateManager:
             print(f"Project root {self.project_root} does not exist or is not a directory.")
             return
 
+        ignore_dirs = {'.git', 'venv', '.venv', '__pycache__', 'node_modules', 'build', 'dist', '.idea', '.vscode'}
+
         for py_file in self.project_root.rglob("*.py"):
             try:
+                # Check if any part of the path is in the ignore list
+                if any(part in ignore_dirs for part in py_file.parts):
+                    continue
+
                 rel_path = str(py_file.relative_to(self.project_root))
-                if not any(part.startswith('.') for part in py_file.parts):
-                    content = py_file.read_text(encoding='utf-8', errors='ignore')
-                    self.add_file(str(py_file), content)
+                content = py_file.read_text(encoding='utf-8', errors='ignore')
+                self.add_file(str(py_file), content)
+
             except Exception as e:
                 print(f"Failed to scan file {py_file}: {e}")
 

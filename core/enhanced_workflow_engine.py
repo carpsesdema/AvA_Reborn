@@ -236,8 +236,8 @@ _(This section will be populated as you build out the project.)_
         self.detailed_log_event.emit("WorkflowEngine", "info", "Creating virtual environment...", "1")
         try:
             # Create venv
-            result = subprocess.run([sys.executable, '-m', 'venv', str(venv_path)],
-                                    capture_output=True, text=True, cwd=str(project_dir))
+            cmd = [sys.executable, '-m', 'venv', venv_path.name]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=str(project_dir))
 
             if result.returncode == 0:
                 self.detailed_log_event.emit("WorkflowEngine", "success", "Virtual environment created successfully",
@@ -265,7 +265,8 @@ _(This section will be populated as you build out the project.)_
                                                      f"Requirements installation had issues: {pip_result.stderr[:200]}",
                                                      "1")
             else:
-                self.detailed_log_event.emit("WorkflowEngine", "error", f"Failed to create venv: {result.stderr[:200]}",
+                self.detailed_log_event.emit("WorkflowEngine", "error",
+                                             f"Failed to create venv: {result.stderr or result.stdout}",
                                              "1")
 
         except Exception as e:
@@ -503,21 +504,29 @@ _(This section will be populated as you build out the project.)_
             raise
 
     def _build_dependency_context(self, dependency_files: List[str], knowledge_packets: Dict[str, Dict]) -> str:
+        """
+        Builds a lean context string from dependencies, focusing on API contracts
+        instead of full source code to keep prompts small and focused.
+        """
         if not dependency_files:
             return "This file has no dependencies."
 
-        context_str = ""
+        context_str = "This file must correctly import and use functions/classes from the following dependencies according to their API contracts:\n"
         for dep_file in dependency_files:
             lookup_key = dep_file if dep_file.endswith('.py') else f"{dep_file}.py"
 
             if lookup_key in knowledge_packets:
                 packet = knowledge_packets[lookup_key]
-                context_str += f"\n\n--- CONTEXT FOR DEPENDENCY: {lookup_key} ---\n"
-                context_str += f"SPECIFICATION:\n```json\n{json.dumps(packet['spec'], indent=2)}\n```\n"
-                context_str += f"FULL SOURCE CODE:\n```python\n{packet['source_code']}\n```\n"
+                # --- THIS IS THE KEY CHANGE ---
+                # We ONLY provide the API contract, not the full source code.
+                api_contract = packet.get('spec', {}).get('api_contract', {})
+                context_str += f"\n--- DEPENDENCY: {lookup_key} ---\n"
+                context_str += f"API CONTRACT:\n```json\n{json.dumps(api_contract, indent=2)}\n```\n"
+                # --- FULL SOURCE CODE IS REMOVED ---
             else:
-                self.logger.warning(f"Dependency '{lookup_key}' not found. Context incomplete.")
-                context_str += f"\n\n--- NOTE: Context for '{lookup_key}' was not available. ---\n"
+                self.logger.warning(f"Dependency '{lookup_key}' not found in knowledge packets. Context will be incomplete.")
+                context_str += f"\n--- NOTE: API contract for '{lookup_key}' was not available. Assume standard imports. ---\n"
+
         return context_str
 
     def _write_file(self, project_dir: Path, filename: str, content: str):

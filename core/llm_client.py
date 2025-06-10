@@ -113,7 +113,7 @@ class EnhancedLLMClient:
         if api_key := os.getenv("GEMINI_API_KEY"):
             base_url = os.getenv("GOOGLE_API_BASE")
             self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
-                "gemini", "gemini-2.5-pro-preview-06-05", api_key, base_url, 0.4, 8000,
+                "gemini", "gemini-2.5-pro-preview-06-05", api_key, base_url, 0.3, 8000,
                 [LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
             self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
@@ -126,7 +126,7 @@ class EnhancedLLMClient:
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
             self.models["deepseek-reasoner"] = ModelConfig(
-                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT]
+                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT, LLMRole.CODER]
             )
             self.models["deepseek-coder"] = ModelConfig(
                 "deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
@@ -155,8 +155,8 @@ class EnhancedLLMClient:
     def _assign_roles(self):
         """Assigns the best available model to each role based on suitability and speed."""
         preferences = {
-            LLMRole.ARCHITECT: ["deepseek-reasoner", "claude-3-opus-20240229", "gpt-4o"],
-            LLMRole.CODER: ["gemini-2.5-flash-preview-05-20", "claude-3-5-sonnet-20240620", "gpt-4o"],
+            LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229", "gpt-4o"],
+            LLMRole.CODER: ["deepseek-reasoner", "claude-3-5-sonnet-20240620", "gpt-4o"],
             LLMRole.REVIEWER: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini"],
             LLMRole.CHAT: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini", "deepseek-chat"]
         }
@@ -312,7 +312,12 @@ class EnhancedLLMClient:
             async with session.post(url, headers={"Content-Type": "application/json"}, json=payload) as response:
                 response_json = await response.json()
                 if response.status == 200 and "candidates" in response_json and response_json["candidates"]:
-                    return response_json["candidates"][0]["content"]["parts"][0]["text"]
+                    # Safer access to potentially missing 'parts' key
+                    content = response_json["candidates"][0].get("content", {})
+                    parts = content.get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "")
+                    return "" # Return empty if no parts found
                 raise Exception(f"Gemini API error {response.status}: {response_json}")
 
     async def _stream_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
@@ -331,8 +336,8 @@ class EnhancedLLMClient:
                             data = json.loads(line[6:])
                             if data.get("candidates"):
                                 yield data["candidates"][0]["content"]["parts"][0]["text"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: Gemini stream JSON decode error: {line.decode('utf-8', 'ignore')}")
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            print(f"Warning: Gemini stream decode/parse error: {line.decode('utf-8', 'ignore')}")
 
     async def _call_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         url = config.base_url or "https://api.anthropic.com/v1/messages"
@@ -406,8 +411,8 @@ class EnhancedLLMClient:
                             delta = chunk["choices"][0].get("delta", {})
                             if delta.get("content"):
                                 yield delta["content"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: DeepSeek stream JSON decode error: {line_str}")
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            print(f"Warning: DeepSeek stream decode/parse error: {line_str}")
 
     async def _call_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
