@@ -152,6 +152,24 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
 """)
 
 
+# --- NEW: Helper function for refinement passes ---
+def create_refinement_prompt(code: str, instruction: str) -> str:
+    """Creates a standardized prompt for a code refinement pass."""
+    return textwrap.dedent(f"""
+        You are a code refiner. Your task is to modify the given code based on a specific instruction.
+        **IMPORTANT**: You must ONLY return the complete, modified code. Do not add explanations, markdown, or any other text.
+
+        INSTRUCTION: {instruction}
+
+        CODE TO REFINE:
+        ```python
+        {code}
+        ```
+
+        COMPLETE REFINED CODE:
+    """)
+
+
 class BaseAIService:
     """Base class for AI services with team communication capabilities."""
 
@@ -473,23 +491,55 @@ class ArchitectService(BaseAIService):
 
 
 class CoderService(BaseAIService):
-    """Enhanced Coder Service with team learning capabilities."""
+    """Enhanced Coder Service with Multi-Pass Refinement."""
 
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:
-        """Generate a file based on its specification."""
-        self.stream_emitter("Coder", "thought", f"Generating code for {file_path}...", 1)
+        """
+        Generate a file with a multi-pass refinement process.
+        """
+        self.stream_emitter("Coder", "thought", f"Starting multi-pass generation for {file_path}...", 1)
 
-        if not file_spec:
-            self.stream_emitter("Coder", "error", f"No specifications found for {file_path}", 2)
-            return ""
+        # === PASS 1: Initial Code Draft ===
+        self.stream_emitter("Coder", "refinement_pass", "1/3: Generating initial code draft...", 2)
+        initial_code = await self._initial_draft_pass(file_path, file_spec, project_context, dependency_context)
+        if not initial_code:
+            self.stream_emitter("Coder", "error", f"Initial draft failed for {file_path}", 2)
+            return ""  # Failed to generate anything
+        self.stream_emitter("Coder", "info", f"Initial draft for {file_path} complete.", 3)
 
-        # Get team context focused on implementation patterns
+        # === PASS 2: Error Handling & Robustness ===
+        self.stream_emitter("Coder", "refinement_pass", "2/3: Hardening code with error handling...", 2)
+        hardened_code = await self._error_handling_pass(initial_code)
+        if not hardened_code:
+            self.stream_emitter("Coder", "warning",
+                                f"Error handling pass failed for {file_path}. Using previous version.", 3)
+            hardened_code = initial_code  # Fallback to previous version
+        else:
+            self.stream_emitter("Coder", "info", f"Error handling pass complete for {file_path}.", 3)
+
+        # === PASS 3: Documentation & Styling Pass ===
+        self.stream_emitter("Coder", "refinement_pass", "3/3: Adding final documentation and styling...", 2)
+        final_code = await self._documentation_pass(hardened_code)
+        if not final_code:
+            self.stream_emitter("Coder", "warning",
+                                f"Documentation pass failed for {file_path}. Using previous version.", 3)
+            final_code = hardened_code  # Fallback to previous version
+        else:
+            self.stream_emitter("Coder", "info", f"Documentation pass complete for {file_path}.", 3)
+
+        self.stream_emitter("Coder", "success", f"Multi-pass generation finished for {file_path}!", 1)
+
+        # Analyze the final generated code and contribute insights
+        self._analyze_and_contribute_code_insights(file_path, final_code)
+
+        return final_code
+
+    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict,
+                                  dependency_context: str) -> str:
+        """Generates the first functional version of the code."""
         team_context = self._get_team_context_string("implementation")
-
-        # Get RAG context for this specific file type
-        file_purpose = file_spec.get("purpose", file_path)
-        rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_purpose}", k=3)
+        rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}", k=3)
 
         generation_prompt = CODER_PROMPT_TEMPLATE.format(
             file_path=file_path,
@@ -497,36 +547,38 @@ class CoderService(BaseAIService):
             api_contract=json.dumps(file_spec.get("api_contract", {}), indent=2),
             dependencies=", ".join(file_spec.get("dependencies", [])),
             team_context=team_context,
-            rag_context=rag_context
+            rag_context=rag_context,
         )
-
-        # Add dependency context if available
         if dependency_context:
             generation_prompt += f"\n\n**DEPENDENCY CONTEXT:**\n{dependency_context}"
 
-        self.stream_emitter("Coder", "generating", f"Creating implementation for {file_path}...", 2)
-
+        # Stream the result for the user to see the draft being written
         all_chunks = []
         try:
             async for chunk in self.llm_client.stream_chat(generation_prompt, LLMRole.CODER):
                 all_chunks.append(chunk)
+                # We don't stream the intermediate passes, just the final result, so we emit the chunk here.
                 self.stream_emitter("Coder", "llm_chunk", chunk, 3)
-
-            code = "".join(all_chunks).strip()
-
-            if not code:
-                self.stream_emitter("Coder", "error", f"No code generated for {file_path}", 2)
-                return ""
-
-            # Analyze the generated code and contribute insights
-            self._analyze_and_contribute_code_insights(file_path, code)
-
-            self.stream_emitter("Coder", "success", f"Code generation completed for {file_path}", 1)
-            return code
-
+            return "".join(all_chunks).strip()
         except Exception as e:
-            self.stream_emitter("Coder", "error", f"Error generating code for {file_path}: {e}", 2)
+            self.stream_emitter("Coder", "error", f"Error during initial draft for {file_path}: {e}", 2)
             return ""
+
+    async def _error_handling_pass(self, code: str) -> str:
+        """Adds robust error handling to the code."""
+        if not code.strip(): return ""
+        instruction = "Review this code and add comprehensive error handling. Use try-except blocks for I/O, API calls, and potential calculation errors. Validate inputs where appropriate. Do not change the core logic."
+        prompt = create_refinement_prompt(code, instruction)
+        # Using a non-streaming call for quicker internal passes
+        return await self.llm_client.chat(prompt, LLMRole.CODER)
+
+    async def _documentation_pass(self, code: str) -> str:
+        """Adds docstrings and ensures PEP 8 compliance."""
+        if not code.strip(): return ""
+        instruction = "Review this code and add Google-style docstrings to all classes and functions. Ensure all public methods have type hints. Do not change any of the existing logic."
+        prompt = create_refinement_prompt(code, instruction)
+        # Using a non-streaming call for quicker internal passes
+        return await self.llm_client.chat(prompt, LLMRole.CODER)
 
     def _analyze_and_contribute_code_insights(self, file_path: str, code: str):
         """Analyze generated code and contribute implementation insights."""
