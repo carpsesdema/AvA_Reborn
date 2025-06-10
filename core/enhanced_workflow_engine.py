@@ -463,12 +463,10 @@ _(This section will be populated as you build out the project.)_
                                                                                   project_context,
                                                                                   dependency_context)
 
-                # Review code with team communication
-                review_data, review_passed = await self.reviewer_service.review_code(full_filename, generated_code,
-                                                                                     project_context['description'])
-
+                # --- REMOVED REVIEWER CALL ---
+                # The Coder's output is now considered final for new files.
                 self.detailed_log_event.emit("WorkflowEngine", "info",
-                                             f"Review for {full_filename} {'passed' if review_passed else 'failed'}. Writing file to disk.",
+                                             f"Coder finished {full_filename}. Writing file to disk.",
                                              "2")
 
                 # Write file and record it in project state

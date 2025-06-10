@@ -88,7 +88,8 @@ class EnhancedLLMClient:
         if api_key := os.getenv("OPENAI_API_KEY"):
             base_url = os.getenv("OPENAI_API_BASE")
             self.models["gpt-4o"] = ModelConfig(
-                "openai", "gpt-4o", api_key, base_url, 0.5, 8000, [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
+                "openai", "gpt-4o", api_key, base_url, 0.5, 8000,
+                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             self.models["gpt-4o-mini"] = ModelConfig(
                 "openai", "gpt-4o-mini", api_key, base_url, 0.7, 16000, [LLMRole.CHAT]
@@ -99,10 +100,12 @@ class EnhancedLLMClient:
         if api_key := os.getenv("ANTHROPIC_API_KEY"):
             base_url = os.getenv("ANTHROPIC_API_BASE")
             self.models["claude-3-5-sonnet-20240620"] = ModelConfig(
-                "anthropic", "claude-3-5-sonnet-20240620", api_key, base_url, 0.5, 8000, [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
+                "anthropic", "claude-3-5-sonnet-20240620", api_key, base_url, 0.5, 8000,
+                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             self.models["claude-3-opus-20240229"] = ModelConfig(
-                "anthropic", "claude-3-opus-20240229", api_key, base_url, 0.5, 8000, [LLMRole.ARCHITECT, LLMRole.REVIEWER]
+                "anthropic", "claude-3-opus-20240229", api_key, base_url, 0.5, 8000,
+                [LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
             print("✅ Anthropic models loaded.")
 
@@ -110,7 +113,8 @@ class EnhancedLLMClient:
         if api_key := os.getenv("GEMINI_API_KEY"):
             base_url = os.getenv("GOOGLE_API_BASE")
             self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
-                "gemini", "gemini-2.5-pro-preview-06-05", api_key, base_url, 0.4, 8000, [LLMRole.ARCHITECT, LLMRole.REVIEWER]
+                "gemini", "gemini-2.5-pro-preview-06-05", api_key, base_url, 0.4, 8000,
+                [LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
             self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
                 "gemini", "gemini-2.5-flash-preview-05-20", api_key, base_url, 0.7, 8000, [LLMRole.CHAT]
@@ -121,7 +125,7 @@ class EnhancedLLMClient:
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
             self.models["deepseek-reasoner"] = ModelConfig(
-                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
+                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT, LLMRole.REVIEWER]
             )
             self.models["deepseek-coder"] = ModelConfig(
                 "deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
@@ -148,12 +152,13 @@ class EnhancedLLMClient:
         print("✅ Ollama models configured (ensure models are pulled and server is running).")
 
     def _assign_roles(self):
-        """Assigns the best available model to each role based on suitability."""
+        """Assigns the best available model to each role based on suitability and speed."""
         preferences = {
-            LLMRole.ARCHITECT: ["claude-3-5-sonnet-20240620", "gpt-4o", "gemini-2.5-pro-preview-06-05", "ollama_qwen2"],
-            LLMRole.CODER: ["deepseek-reasoner", "deepseek-coder", "claude-3-5-sonnet-20240620", "gpt-4o", "ollama_codellama"],
-            LLMRole.REVIEWER: ["gpt-4o", "claude-3-5-sonnet-20240620", "gemini-2.5-pro-preview-06-05", "ollama_llama3"],
-            LLMRole.CHAT: ["gpt-4o-mini", "gemini-2.5-flash-preview-05-20", "deepseek-chat", "claude-3-5-sonnet-20240620", "ollama_llama3"]
+            LLMRole.ARCHITECT: ["claude-3-5-sonnet-20240620", "gpt-4o", "deepseek-reasoner",
+                                "gemini-2.5-pro-preview-06-05"],
+            LLMRole.CODER: ["deepseek-coder", "claude-3-5-sonnet-20240620", "gpt-4o", "ollama_codellama"],
+            LLMRole.REVIEWER: ["gpt-4o-mini", "claude-3-5-sonnet-20240620", "gemini-2.5-flash-preview-05-20"],
+            LLMRole.CHAT: ["gpt-4o-mini", "deepseek-chat", "claude-3-5-sonnet-20240620"]
         }
 
         for role, preferred_models in preferences.items():
@@ -162,6 +167,15 @@ class EnhancedLLMClient:
                 if model_name in self.models:
                     assigned_model = model_name
                     break
+
+            # Fallback if no preferred models are available
+            if not assigned_model:
+                # Find any model suitable for the role
+                for model_key, model_config in self.models.items():
+                    if role in model_config.suitable_roles:
+                        assigned_model = model_key
+                        break
+
             self.role_assignments[role] = assigned_model
 
         available_models = list(self.models.keys())
@@ -169,6 +183,7 @@ class EnhancedLLMClient:
             print("❌ No models available. Please check your API keys in the .env file.")
             return
 
+        # Final fallback for any unassigned roles
         for role in LLMRole:
             if not self.role_assignments.get(role):
                 self.role_assignments[role] = available_models[0]
@@ -255,7 +270,8 @@ class EnhancedLLMClient:
         messages.append({"role": "user", "content": prompt})
         url = f"{config.base_url or 'https://api.openai.com'}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
-        payload = {"model": config.model, "messages": messages, "temperature": config.temperature, "max_tokens": config.max_tokens}
+        payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
+                   "max_tokens": config.max_tokens}
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 resp_json = await response.json()
@@ -263,12 +279,14 @@ class EnhancedLLMClient:
                     return resp_json["choices"][0]["message"]["content"]
                 raise Exception(f"OpenAI API error {response.status}: {resp_json}")
 
-    async def _stream_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
+    async def _stream_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
+        str, None]:
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
         url = f"{config.base_url or 'https://api.openai.com'}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
-        payload = {"model": config.model, "messages": messages, "temperature": config.temperature, "max_tokens": config.max_tokens, "stream": True}
+        payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
+                   "max_tokens": config.max_tokens, "stream": True}
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
@@ -405,7 +423,8 @@ class EnhancedLLMClient:
                     return response_json["response"]
                 raise Exception(f"Ollama API error {response.status}: {response_json}")
 
-    async def _stream_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[str, None]:
+    async def _stream_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
+        str, None]:
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
         url = f"{config.base_url}/api/generate"
         payload = {
