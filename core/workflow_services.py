@@ -491,42 +491,29 @@ class ArchitectService(BaseAIService):
 
 
 class CoderService(BaseAIService):
-    """Enhanced Coder Service with Multi-Pass Refinement."""
+    """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
 
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:
         """
-        Generate a file with a multi-pass refinement process.
+        Generate a file with a two-pass refinement process for better responsiveness.
         """
-        self.stream_emitter("Coder", "thought", f"Starting multi-pass generation for {file_path}...", 1)
+        self.stream_emitter("Coder", "thought", f"Starting 2-pass generation for {file_path}...", 1)
 
-        # === PASS 1: Initial Code Draft ===
-        self.stream_emitter("Coder", "refinement_pass", "1/3: Generating initial code draft...", 2)
+        # === PASS 1: Initial Code Draft (Streaming) ===
+        self.stream_emitter("Coder", "refinement_pass", "1/2: Generating initial code draft...", 2)
         initial_code = await self._initial_draft_pass(file_path, file_spec, project_context, dependency_context)
         if not initial_code:
             self.stream_emitter("Coder", "error", f"Initial draft failed for {file_path}", 2)
-            return ""  # Failed to generate anything
-        self.stream_emitter("Coder", "info", f"Initial draft for {file_path} complete.", 3)
+            return ""
+        self.stream_emitter("Coder", "info", "Initial draft complete. Now polishing.", 3)
 
-        # === PASS 2: Error Handling & Robustness ===
-        self.stream_emitter("Coder", "refinement_pass", "2/3: Hardening code with error handling...", 2)
-        hardened_code = await self._error_handling_pass(initial_code)
-        if not hardened_code:
-            self.stream_emitter("Coder", "warning",
-                                f"Error handling pass failed for {file_path}. Using previous version.", 3)
-            hardened_code = initial_code  # Fallback to previous version
-        else:
-            self.stream_emitter("Coder", "info", f"Error handling pass complete for {file_path}.", 3)
-
-        # === PASS 3: Documentation & Styling Pass ===
-        self.stream_emitter("Coder", "refinement_pass", "3/3: Adding final documentation and styling...", 2)
-        final_code = await self._documentation_pass(hardened_code)
+        # === PASS 2: Consolidated Polishing Pass (Blocking) ===
+        self.stream_emitter("Coder", "refinement_pass", "2/2: Polishing code (error handling & docs)...", 2)
+        final_code = await self._final_refinement_pass(initial_code)
         if not final_code:
-            self.stream_emitter("Coder", "warning",
-                                f"Documentation pass failed for {file_path}. Using previous version.", 3)
-            final_code = hardened_code  # Fallback to previous version
-        else:
-            self.stream_emitter("Coder", "info", f"Documentation pass complete for {file_path}.", 3)
+            self.stream_emitter("Coder", "warning", f"Polishing pass failed for {file_path}. Using initial draft.", 3)
+            final_code = initial_code  # Fallback to the initial draft
 
         self.stream_emitter("Coder", "success", f"Multi-pass generation finished for {file_path}!", 1)
 
@@ -535,9 +522,8 @@ class CoderService(BaseAIService):
 
         return final_code
 
-    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict,
-                                  dependency_context: str) -> str:
-        """Generates the first functional version of the code."""
+    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict, dependency_context: str) -> str:
+        """Generates the first functional version of the code and streams it."""
         team_context = self._get_team_context_string("implementation")
         rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}", k=3)
 
@@ -552,32 +538,25 @@ class CoderService(BaseAIService):
         if dependency_context:
             generation_prompt += f"\n\n**DEPENDENCY CONTEXT:**\n{dependency_context}"
 
-        # Stream the result for the user to see the draft being written
         all_chunks = []
         try:
             async for chunk in self.llm_client.stream_chat(generation_prompt, LLMRole.CODER):
                 all_chunks.append(chunk)
-                # We don't stream the intermediate passes, just the final result, so we emit the chunk here.
                 self.stream_emitter("Coder", "llm_chunk", chunk, 3)
             return "".join(all_chunks).strip()
         except Exception as e:
             self.stream_emitter("Coder", "error", f"Error during initial draft for {file_path}: {e}", 2)
             return ""
 
-    async def _error_handling_pass(self, code: str) -> str:
-        """Adds robust error handling to the code."""
+    async def _final_refinement_pass(self, code: str) -> str:
+        """
+        Performs a single, consolidated refinement pass for error handling and documentation.
+        """
         if not code.strip(): return ""
-        instruction = "Review this code and add comprehensive error handling. Use try-except blocks for I/O, API calls, and potential calculation errors. Validate inputs where appropriate. Do not change the core logic."
+        self.stream_emitter("Coder", "thought_detail", "Adding error handling, docstrings, and type hints...", 3)
+        instruction = "Review this code. First, add comprehensive error handling (try-except blocks, input validation). Second, add professional, Google-style docstrings to all classes and functions, including type hints. Return only the complete, final code."
         prompt = create_refinement_prompt(code, instruction)
-        # Using a non-streaming call for quicker internal passes
-        return await self.llm_client.chat(prompt, LLMRole.CODER)
-
-    async def _documentation_pass(self, code: str) -> str:
-        """Adds docstrings and ensures PEP 8 compliance."""
-        if not code.strip(): return ""
-        instruction = "Review this code and add Google-style docstrings to all classes and functions. Ensure all public methods have type hints. Do not change any of the existing logic."
-        prompt = create_refinement_prompt(code, instruction)
-        # Using a non-streaming call for quicker internal passes
+        # Using a non-streaming call for the consolidated internal pass
         return await self.llm_client.chat(prompt, LLMRole.CODER)
 
     def _analyze_and_contribute_code_insights(self, file_path: str, code: str):
