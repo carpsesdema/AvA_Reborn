@@ -1,4 +1,4 @@
-# core/workflow_services.py - Enhanced with Team Communication
+# core/workflow_services.py - Enhanced with Team Communication and Improved JSON Parsing
 
 import asyncio
 import json
@@ -86,6 +86,8 @@ ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
 
     Include all existing files in the technical_specs, infer the purpose and api_contract from the actual code content, and determine the correct dependency order.
 
+    **CRITICAL**: Return ONLY valid JSON. No explanations, no markdown, no extra text. Just the JSON object.
+
     **The system will fail if it receives anything other than the raw, valid JSON object.**
 """)
 
@@ -106,23 +108,20 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
 
     **CRITICAL IMPLEMENTATION REQUIREMENTS:**
     1. **LEARN FROM TEAM**: Study the team insights above. Follow established patterns, coding standards, and architectural decisions from previous work.
-    2. **MIMIC RAG EXAMPLES**: The code examples show the quality and style expected. Match that level of professionalism.
-    3. Generate the **entire, complete, and runnable source code** for the file `{file_path}`.
-    4. Implement the full logic for every method and function defined in your technical specification. **DO NOT use `pass` as a placeholder.** Your code must be fully implemented.
-    5. You MUST adhere to the `api_contract` from your technical specification and correctly use the classes, methods, and variables from the provided dependency context.
-    6. **Your entire response MUST be ONLY the raw Python code.** Do not include any explanations or markdown formatting like ```python.
+    2. **MIMIC RAG EXAMPLES**: The code examples show the quality and style expected.
+    3. **COMPLETE IMPLEMENTATION**: Generate the ENTIRE file, not just stubs or templates.
+    4. **DEPENDENCY CONTEXT**: Use the provided dependency information to ensure proper imports and integrations.
 
-    Generate the complete and fully implemented Python code for `{file_path}` now:
+    Generate high-quality, production-ready Python code. Return ONLY the complete source code, no explanations or markdown formatting.
 """)
 
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the SMART REVIEWER AI - the single comprehensive quality gate for all generated code. You perform deep analysis covering syntax, security, performance, style, best practices, and architectural consistency.
+    You are the REVIEWER AI. Conduct a comprehensive code review of the provided Python file.
 
-    **FILE TO REVIEW:** {file_path}
+    **FILE:** {file_path}
     **PROJECT DESCRIPTION:** {project_description}
 
-    **TEAM KNOWLEDGE & STANDARDS:**
-    Your team has established these patterns and quality standards:
+    **TEAM QUALITY STANDARDS:**
     {team_context}
 
     **CODE TO REVIEW:**
@@ -130,77 +129,55 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     {code}
     ```
 
-    **COMPREHENSIVE ANALYSIS REQUIRED:**
+    Perform a thorough review checking for:
+    1. Code quality and best practices
+    2. Adherence to team standards and patterns
+    3. Security considerations
+    4. Performance implications
+    5. Documentation completeness
+    6. Error handling
+    7. Testing considerations
 
-    1. **SYNTAX & CORRECTNESS**
-       - Check for syntax errors, undefined variables, import issues
-       - Verify all functions/classes are properly implemented (no bare `pass` statements)
-       - Ensure proper indentation and Python grammar
-
-    2. **SECURITY ANALYSIS**
-       - Scan for dangerous functions (eval, exec, subprocess with shell=True)
-       - Check for SQL injection vulnerabilities in query construction
-       - Identify unsafe file operations or user input handling
-       - Flag missing input validation and sanitization
-
-    3. **PERFORMANCE & EFFICIENCY**
-       - Identify inefficient algorithms or data structures
-       - Check for memory leaks or unnecessary object creation
-       - Flag blocking operations that should be async
-       - Suggest optimization opportunities
-
-    4. **STYLE & BEST PRACTICES**
-       - PEP 8 compliance (line length, naming conventions, imports)
-       - Proper docstring usage for classes and functions
-       - Appropriate error handling with specific exceptions
-       - Code readability and maintainability
-
-    5. **TEAM CONSISTENCY**
-       - Adherence to established team patterns and standards
-       - Consistency with architectural decisions
-       - Proper integration with existing codebase
-
-    **IMPORTANT**: Return your analysis as a JSON object with the following structure:
+    Your response MUST be a valid JSON object with this structure:
     {{
-        "approved": boolean,
-        "quality_score": number (1-10),
-        "issues": [
-            {{"severity": "critical/high/medium/low", "message": "description", "line": number, "category": "syntax/security/performance/style/consistency"}}
-        ],
-        "suggestions": ["improvement suggestion 1", "improvement suggestion 2"],
-        "team_insights": ["pattern observed", "quality standard noted"],
-        "summary": "Brief overall assessment"
+      "approved": true/false,
+      "summary": "Brief overall assessment",
+      "strengths": ["List of positive aspects"],
+      "issues": ["List of concerns or improvements needed"],
+      "suggestions": ["Specific improvement recommendations"],
+      "confidence": 0.0-1.0
     }}
+
+    Return ONLY the JSON object, no explanations or markdown formatting.
 """)
 
 
 class BaseAIService:
-    """Enhanced base service with team communication capabilities."""
+    """Base class for AI services with team communication capabilities."""
 
     def __init__(self, llm_client: EnhancedLLMClient, stream_emitter: Callable, rag_manager=None):
         self.llm_client = llm_client
         self.stream_emitter = stream_emitter
         self.rag_manager = rag_manager
-        self.project_state: ProjectStateManager = None  # Will be set by workflow engine
+        self.project_state: ProjectStateManager = None
 
     def set_project_state(self, project_state: ProjectStateManager):
-        """Set the project state manager for team communication."""
+        """Connect this service to the project state for team communication."""
         self.project_state = project_state
 
-    def _contribute_team_insight(self, insight_type: str, agent_name: str, content: str,
+    def _contribute_team_insight(self, insight_type: str, source_agent: str, content: str,
                                  impact_level: str = "medium", related_files: List[str] = None):
         """Contribute an insight to the team knowledge base."""
         if self.project_state:
             self.project_state.add_team_insight(
                 insight_type=insight_type,
-                source_agent=agent_name.lower(),
+                source_agent=source_agent,
                 content=content,
                 impact_level=impact_level,
                 related_files=related_files or []
             )
-            self.stream_emitter(agent_name, "insight", f"Contributed {insight_type} insight: {content[:50]}...", 3)
 
-    def _get_team_context_string(self, context_type: str = "all") -> str:
+    def _get_team_context_string(self, context_type: str = "full") -> str:
         """Get formatted team context for prompts."""
         if not self.project_state:
             return "No team context available."
@@ -252,29 +229,105 @@ class BaseAIService:
         return formatted
 
     def _parse_json_from_response(self, text: str, agent_name: str) -> dict:
-        """Enhanced JSON parsing with better error handling."""
-        text = text.strip()
-        if text.startswith('```json') and text.endswith('```'):
-            json_text = text[7:-3].strip()
-            self.stream_emitter(agent_name, "parsing", "Found markdown JSON block. Parsing that.", 3)
-        elif text.startswith('```') and text.endswith('```'):
-            json_text = text[3:-3].strip()
-            self.stream_emitter(agent_name, "parsing", "Found generic markdown block. Parsing that.", 3)
-        else:
-            start, end = text.find('{'), text.rfind('}')
-            if start != -1 and end != -1 and end > start:
-                json_text = text[start:end + 1]
-                self.stream_emitter(agent_name, "fallback",
-                                    "No markdown fences. Extracted content between first and last curly braces.", 3)
-            else:
-                self.stream_emitter(agent_name, "error", "Could not find any JSON-like structure.", 3)
-                return {}
+        """Enhanced JSON parsing with better error handling and multiple strategies."""
+        original_text = text.strip()
+
+        # Strategy 1: Look for markdown JSON blocks
+        json_patterns = [
+            (r'```json\s*(.*?)\s*```', "markdown JSON block"),
+            (r'```\s*(.*?)\s*```', "generic markdown block"),
+            (r'(?s)\{.*\}', "JSON object pattern")
+        ]
+
+        for pattern, description in json_patterns:
+            matches = re.findall(pattern, original_text, re.DOTALL)
+            if matches:
+                json_text = matches[0].strip() if isinstance(matches[0], str) else matches[0]
+                self.stream_emitter(agent_name, "parsing", f"Found {description}. Parsing...", 3)
+
+                try:
+                    parsed = json.loads(json_text)
+                    self.stream_emitter(agent_name, "success", f"Successfully parsed JSON from {description}", 3)
+                    return parsed
+                except json.JSONDecodeError as e:
+                    self.stream_emitter(agent_name, "warning", f"JSON parse failed for {description}: {e}", 3)
+                    continue
+
+        # Strategy 2: Look for object boundaries manually
+        start = original_text.find('{')
+        end = original_text.rfind('}')
+
+        if start != -1 and end != -1 and end > start:
+            json_text = original_text[start:end + 1]
+            self.stream_emitter(agent_name, "fallback", "Extracting content between first and last braces", 3)
+
+            try:
+                parsed = json.loads(json_text)
+                self.stream_emitter(agent_name, "success", "Successfully parsed JSON from brace extraction", 3)
+                return parsed
+            except json.JSONDecodeError as e:
+                self.stream_emitter(agent_name, "warning", f"Brace extraction parse failed: {e}", 3)
+
+        # Strategy 3: Try to clean and fix common JSON issues
+        cleaned_text = self._attempt_json_cleanup(original_text, agent_name)
+        if cleaned_text:
+            try:
+                parsed = json.loads(cleaned_text)
+                self.stream_emitter(agent_name, "success", "Successfully parsed JSON after cleanup", 3)
+                return parsed
+            except json.JSONDecodeError as e:
+                self.stream_emitter(agent_name, "warning", f"Cleanup attempt failed: {e}", 3)
+
+        # Final failure
+        self.stream_emitter(agent_name, "error", "All JSON parsing strategies failed", 3)
+        self.stream_emitter(agent_name, "debug", f"Response preview: {original_text[:500]}...", 4)
+        return {}
+
+    def _attempt_json_cleanup(self, text: str, agent_name: str) -> str:
+        """Attempt to clean and fix common JSON formatting issues."""
         try:
-            return json.loads(json_text)
-        except json.JSONDecodeError as e:
-            self.stream_emitter(agent_name, "error", f"JSON parsing failed: {e}", 3)
-            self.stream_emitter(agent_name, "debug", f"Failed to parse text: {json_text[:200]}...", 4)
-            return {}
+            # Remove common prefixes/suffixes that LLMs add
+            cleaned = text.strip()
+
+            # Remove markdown language indicators
+            cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.MULTILINE)
+            cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
+
+            # Remove common AI response prefixes
+            prefixes_to_remove = [
+                r'^Here\'s the.*?:\s*',
+                r'^The.*?is:\s*',
+                r'^Based on.*?:\s*',
+                r'^After.*?:\s*'
+            ]
+
+            for prefix in prefixes_to_remove:
+                cleaned = re.sub(prefix, '', cleaned, flags=re.IGNORECASE | re.MULTILINE)
+
+            # Find the JSON object
+            start = cleaned.find('{')
+            end = cleaned.rfind('}')
+
+            if start != -1 and end != -1 and end > start:
+                cleaned = cleaned[start:end + 1]
+
+                # Fix common JSON issues
+                # Fix trailing commas
+                cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+
+                # Fix unquoted keys (simple cases)
+                cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+
+                # Fix single quotes to double quotes
+                cleaned = cleaned.replace("'", '"')
+
+                self.stream_emitter(agent_name, "info", "Attempted JSON cleanup", 4)
+                return cleaned
+
+        except Exception as e:
+            self.stream_emitter(agent_name, "debug", f"JSON cleanup failed: {e}", 4)
+
+        return ""
 
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
         self.stream_emitter(agent_name, "thought", f"Generating {role.value} response...", 2)
@@ -283,15 +336,22 @@ class BaseAIService:
             async for chunk in self.llm_client.stream_chat(prompt, role):
                 all_chunks.append(chunk)
                 self.stream_emitter(agent_name, "llm_chunk", chunk, 3)
+
             response_text = "".join(all_chunks)
             if not response_text.strip():
                 self.stream_emitter(agent_name, "error", "LLM returned an empty response.", 2)
                 return {}
+
+            self.stream_emitter(agent_name, "info", f"Received {len(response_text)} characters from LLM", 3)
             return self._parse_json_from_response(response_text, agent_name)
+
         except Exception as e:
             self.stream_emitter(agent_name, "error", f"Error during streaming/collection: {e}", 2)
             if all_chunks:
-                return self._parse_json_from_response("".join(all_chunks), agent_name)
+                partial_response = "".join(all_chunks)
+                self.stream_emitter(agent_name, "info",
+                                    f"Attempting to parse partial response ({len(partial_response)} chars)", 3)
+                return self._parse_json_from_response(partial_response, agent_name)
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
@@ -370,13 +430,30 @@ class ArchitectService(BaseAIService):
 
         # Get enhanced project context with team insights
         project_context = project_state.get_enhanced_project_context()
-        serializable_context = json.loads(json.dumps(project_context, default=str))
+
+        # Validate that we have content to analyze
+        if not project_context.get("project_overview", {}).get("files"):
+            self.stream_emitter("Architect", "warning",
+                                "No files found in project context for analysis", 1)
+            return {}
+
+        # Create serializable context
+        try:
+            serializable_context = json.loads(json.dumps(project_context, default=str))
+        except Exception as e:
+            self.stream_emitter("Architect", "error",
+                                f"Failed to serialize project context: {e}", 1)
+            return {}
 
         analysis_prompt = ARCHITECT_ANALYSIS_PROMPT_TEMPLATE.format(
             project_context_json=json.dumps(serializable_context, indent=2)
         )
 
+        self.stream_emitter("Architect", "info",
+                            f"Sending {len(analysis_prompt)} character prompt to LLM", 2)
+
         tech_spec = await self._stream_and_collect_json(analysis_prompt, LLMRole.ARCHITECT, "Architect")
+
         if not tech_spec or not tech_spec.get("technical_specs"):
             self.stream_emitter("Architect", "error",
                                 "Project analysis failed. Could not produce a valid technical specification from the provided context.",
@@ -398,11 +475,12 @@ class ArchitectService(BaseAIService):
 class CoderService(BaseAIService):
     """Enhanced Coder Service with team learning capabilities."""
 
-    async def generate_file(self, file_path: str, tech_spec: dict, project_context: dict = None) -> str:
+    async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
+                                      dependency_context: str = "") -> str:
+        """Generate a file based on its specification."""
         self.stream_emitter("Coder", "thought", f"Generating code for {file_path}...", 1)
 
-        file_specs = tech_spec.get("technical_specs", {}).get(file_path, {})
-        if not file_specs:
+        if not file_spec:
             self.stream_emitter("Coder", "error", f"No specifications found for {file_path}", 2)
             return ""
 
@@ -410,17 +488,21 @@ class CoderService(BaseAIService):
         team_context = self._get_team_context_string("implementation")
 
         # Get RAG context for this specific file type
-        file_purpose = file_specs.get("purpose", file_path)
+        file_purpose = file_spec.get("purpose", file_path)
         rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_purpose}", k=3)
 
         generation_prompt = CODER_PROMPT_TEMPLATE.format(
             file_path=file_path,
-            file_purpose=file_specs.get("purpose", ""),
-            api_contract=json.dumps(file_specs.get("api_contract", {}), indent=2),
-            dependencies=", ".join(file_specs.get("dependencies", [])),
+            file_purpose=file_spec.get("purpose", ""),
+            api_contract=json.dumps(file_spec.get("api_contract", {}), indent=2),
+            dependencies=", ".join(file_spec.get("dependencies", [])),
             team_context=team_context,
             rag_context=rag_context
         )
+
+        # Add dependency context if available
+        if dependency_context:
+            generation_prompt += f"\n\n**DEPENDENCY CONTEXT:**\n{dependency_context}"
 
         self.stream_emitter("Coder", "generating", f"Creating implementation for {file_path}...", 2)
 
@@ -519,179 +601,36 @@ class ReviewerService(BaseAIService):
                 self.stream_emitter("Reviewer", "warning", "Review failed to parse, approving by default.", 2)
                 return {"approved": True, "summary": "Review failed to parse, approved by default."}, True
 
-            # Contribute quality insights from the review
-            self._contribute_review_insights(file_path, review_data)
+            # Extract key information
+            approved = review_data.get("approved", True)
+            summary = review_data.get("summary", "No summary provided")
 
-            # Enhanced feedback processing
-            approved = review_data.get('approved', False)
-            quality_score = review_data.get('quality_score', 5.0)
-            issues = review_data.get('issues', [])
+            # Contribute quality insights based on review
+            if review_data.get("strengths"):
+                for strength in review_data["strengths"][:2]:  # Top 2 strengths
+                    self._contribute_team_insight(
+                        "quality",
+                        "Reviewer",
+                        f"Code strength identified: {strength}",
+                        "low",
+                        [file_path]
+                    )
 
-            # Log detailed analysis results
-            if issues:
-                critical_issues = [i for i in issues if i.get('severity') == 'critical']
-                high_issues = [i for i in issues if i.get('severity') == 'high']
+            if review_data.get("issues"):
+                for issue in review_data["issues"][:2]:  # Top 2 issues
+                    self._contribute_team_insight(
+                        "quality",
+                        "Reviewer",
+                        f"Code issue to watch: {issue}",
+                        "medium",
+                        [file_path]
+                    )
 
-                if critical_issues:
-                    self.stream_emitter("Reviewer", "error", f"Found {len(critical_issues)} critical issues", 2)
-                    for issue in critical_issues:
-                        self.stream_emitter("Reviewer", "error", f"Critical: {issue.get('message', 'Unknown issue')}",
-                                            3)
-
-                if high_issues:
-                    self.stream_emitter("Reviewer", "warning", f"Found {len(high_issues)} high-priority issues", 2)
-
-            self.stream_emitter("Reviewer", "success" if approved else "warning",
-                                f"Review complete: Quality Score {quality_score}/10 - {'APPROVED' if approved else 'NEEDS REVISION'}",
-                                2)
+            result_msg = f"{'✅ Approved' if approved else '❌ Needs work'}: {summary}"
+            self.stream_emitter("Reviewer", "success" if approved else "warning", result_msg, 1)
 
             return review_data, approved
 
         except Exception as e:
             self.stream_emitter("Reviewer", "error", f"Review process failed: {e}", 2)
-            return {"approved": True, "summary": "Review failed, approved by default."}, True
-
-    def _contribute_review_insights(self, file_path: str, review_data: Dict):
-        """Contribute insights from code review to team knowledge."""
-        try:
-            # Contribute quality insights
-            if review_data.get('team_insights'):
-                for insight in review_data['team_insights']:
-                    self._contribute_team_insight(
-                        "quality",
-                        "Reviewer",
-                        insight,
-                        "medium",
-                        [file_path]
-                    )
-
-            # Contribute pattern observations
-            quality_score = review_data.get('quality_score', 5)
-            if quality_score >= 8:
-                self._contribute_team_insight(
-                    "quality",
-                    "Reviewer",
-                    f"High-quality implementation in {file_path} (score: {quality_score}/10)",
-                    "medium",
-                    [file_path]
-                )
-            elif quality_score < 6:
-                issues = review_data.get('issues', [])
-                common_issues = {}
-                for issue in issues:
-                    category = issue.get('category', 'unknown')
-                    common_issues[category] = common_issues.get(category, 0) + 1
-
-                for category, count in common_issues.items():
-                    if count > 1:
-                        self._contribute_team_insight(
-                            "quality",
-                            "Reviewer",
-                            f"Recurring {category} issues detected - focus area for improvement",
-                            "high"
-                        )
-
-        except Exception as e:
-            self.stream_emitter("Reviewer", "debug", f"Failed to contribute review insights: {e}", 4)
-
-    async def _static_code_analysis(self, code: str) -> dict:
-        """Perform static analysis that replaces external tools"""
-        analysis_results = {
-            'syntax_errors': [],
-            'style_violations': [],
-            'security_issues': [],
-            'performance_issues': [],
-            'complexity_warnings': []
-        }
-
-        try:
-            # Syntax validation
-            tree = ast.parse(code)
-
-            # Security analysis
-            security_issues = self._check_security_patterns(code, tree)
-            analysis_results['security_issues'].extend(security_issues)
-
-            # Style analysis
-            style_issues = self._check_style_patterns(code)
-            analysis_results['style_violations'].extend(style_issues)
-
-            # Performance analysis
-            perf_issues = self._check_performance_patterns(code, tree)
-            analysis_results['performance_issues'].extend(perf_issues)
-
-        except SyntaxError as e:
-            analysis_results['syntax_errors'].append({
-                'line': e.lineno,
-                'message': e.msg,
-                'severity': 'critical'
-            })
-
-        return analysis_results
-
-    def _check_security_patterns(self, code: str, tree: ast.AST) -> List[dict]:
-        """Check for security anti-patterns"""
-        issues = []
-
-        # Check for dangerous function calls
-        dangerous_functions = ['eval', 'exec', 'compile', '__import__']
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in dangerous_functions:
-                    issues.append({
-                        'line': node.lineno,
-                        'message': f"Dangerous function '{node.func.id}' detected",
-                        'severity': 'critical',
-                        'category': 'security'
-                    })
-
-        # Check for SQL injection patterns
-        if 'execute(' in code and any(pattern in code for pattern in ['%s', '+', 'format(']):
-            issues.append({
-                'message': "Potential SQL injection vulnerability detected",
-                'severity': 'high',
-                'category': 'security'
-            })
-
-        return issues
-
-    def _check_style_patterns(self, code: str) -> List[dict]:
-        """Check for style violations"""
-        issues = []
-        lines = code.split('\n')
-
-        for i, line in enumerate(lines, 1):
-            # Line length check
-            if len(line) > 88:
-                issues.append({
-                    'line': i,
-                    'message': f"Line too long ({len(line)} > 88 characters)",
-                    'severity': 'medium',
-                    'category': 'style'
-                })
-
-            # Trailing whitespace
-            if line.rstrip() != line:
-                issues.append({
-                    'line': i,
-                    'message': "Trailing whitespace detected",
-                    'severity': 'low',
-                    'category': 'style'
-                })
-
-        return issues
-
-    def _check_performance_patterns(self, code: str, tree: ast.AST) -> List[dict]:
-        """Check for performance anti-patterns"""
-        issues = []
-
-        # Check for inefficient patterns
-        if 'for ' in code and ' in range(len(' in code:
-            issues.append({
-                'message': "Consider using enumerate() instead of range(len())",
-                'severity': 'medium',
-                'category': 'performance'
-            })
-
-        return issues
+            return {"approved": True, "summary": f"Review failed due to error: {e}"}, True

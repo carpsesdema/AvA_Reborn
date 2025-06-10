@@ -1,55 +1,41 @@
-# gui/code_viewer.py - Professional Code Viewer with Integrated Terminal & Modern UI
+# gui/code_viewer.py - AvA Code Viewer with Terminal
 
 import re
 from pathlib import Path
-
-from PySide6.QtCore import Qt, Signal, Slot, QFileSystemWatcher, QPoint
-from PySide6.QtGui import QFont, QAction, QIcon, QSyntaxHighlighter, QTextCharFormat, QColor, QTextCursor
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtGui import QAction, QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QTextCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTreeWidget, QTreeWidgetItem, QTextEdit, QLabel,
-    QFileDialog, QMessageBox, QTabWidget, QFrame, QMenu, QHeaderView
+    QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem, QLabel, QMessageBox, QFileDialog
 )
 
 from gui.components import Colors, Typography
-# Import our UI components
 from gui.interactive_terminal import InteractiveTerminal
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
-    """Professional Python syntax highlighter with multiline support."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.highlighting_rules = []
 
-        # Define colors from our design system
-        keyword_color = QColor(Colors.ACCENT_BLUE)
-        string_color = QColor(Colors.ACCENT_ORANGE)
-        comment_color = QColor(Colors.ACCENT_GREEN)
-        function_color = QColor("#DCDCAA")  # A nice yellow for functions
-        self_color = QColor("#9CDCFE")  # Light blue for 'self'
-        class_color = QColor("#4EC9B0")  # Teal for class names
+        # Define colors
+        keyword_color = QColor("#569CD6")  # Blue
+        string_color = QColor("#CE9178")  # Orange
+        comment_color = QColor("#6A9955")  # Green
+        function_color = QColor("#DCDCAA")  # Yellow
+        class_color = QColor("#4EC9B0")  # Cyan
 
         # Keywords
         keyword_format = QTextCharFormat()
         keyword_format.setForeground(keyword_color)
         keyword_format.setFontWeight(QFont.Weight.Bold)
         keywords = [
-            'and', 'as', 'assert', 'break', 'class', 'continue', 'def',
-            'del', 'elif', 'else', 'except', 'finally', 'for',
-            'from', 'global', 'if', 'import', 'in', 'is', 'lambda',
-            'not', 'or', 'pass', 'raise', 'return', 'try',
-            'while', 'with', 'yield', 'None', 'True', 'False', 'async', 'await'
+            'and', 'as', 'assert', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+            'exec', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'not',
+            'or', 'pass', 'print', 'raise', 'return', 'try', 'while', 'yield', 'None', 'True', 'False'
         ]
-        self.highlighting_rules.extend([(r'\b' + word + r'\b', keyword_format) for word in keywords])
+        self.highlighting_rules = [(rf'\b{keyword}\b', keyword_format) for keyword in keywords]
 
-        # 'self' keyword
-        self_format = QTextCharFormat()
-        self_format.setForeground(self_color)
-        self.highlighting_rules.append((r'\bself\b', self_format))
-
-        # Strings
+        # String literals
         string_format = QTextCharFormat()
         string_format.setForeground(string_color)
         self.highlighting_rules.append((r'".*?"', string_format))
@@ -143,7 +129,7 @@ class CodeEditor(QTextEdit):
     def save_file(self) -> bool:
         if not self.file_path: return False
         try:
-            Path(self.file_path).write_text(self.toPlainText(), encoding='utf-f8')
+            Path(self.file_path).write_text(self.toPlainText(), encoding='utf-8')
             self.document().setModified(False)
             self.is_modified = False
             return True
@@ -165,127 +151,153 @@ class FileTree(QTreeWidget):
     def __init__(self):
         super().__init__()
         self.setHeaderHidden(True)
-        self.header().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.setRootIsDecorated(True)
         self.setStyleSheet(f"""
             QTreeWidget {{
                 background: {Colors.PRIMARY_BG};
                 color: {Colors.TEXT_PRIMARY};
                 border: none;
                 outline: none;
+                selection-background-color: {Colors.ACCENT_BLUE};
+                selection-color: {Colors.PRIMARY_BG};
             }}
-            QTreeView::branch {{
-                background: transparent;
+            QTreeWidget::item {{
+                padding: 4px 8px;
+                border: none;
             }}
-            QTreeWidget::item {{ padding: 6px 4px; border-radius: 4px; }}
-            QTreeWidget::item:hover {{ background: {Colors.HOVER_BG}; }}
-            QTreeWidget::item:selected {{ background: {Colors.ACCENT_BLUE}; color: white; }}
+            QTreeWidget::item:hover {{
+                background: {Colors.HOVER_BG};
+            }}
+            QTreeWidget::item:selected {{
+                background: {Colors.ACCENT_BLUE};
+            }}
         """)
-        self.itemClicked.connect(self._on_item_clicked)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._show_context_menu)
-        self.watcher = QFileSystemWatcher()
-        self.watcher.directoryChanged.connect(self.refresh_tree)
-        self.project_root = None
+        self.itemDoubleClicked.connect(self._on_item_double_clicked)
 
     def load_project(self, project_path: str):
-        if self.project_root: self.watcher.removePath(str(self.project_root))
-        self.project_root = Path(project_path)
-        if not self.project_root.exists(): self.project_root.mkdir(parents=True, exist_ok=True)
-        self.watcher.addPath(str(self.project_root))
         self.clear()
-        self._build_tree_recursive(self.project_root, self.invisibleRootItem())
+        root_path = Path(project_path)
+        if not root_path.exists():
+            return
 
-    def _build_tree_recursive(self, path: Path, parent_item: QTreeWidgetItem):
+        root_item = QTreeWidgetItem([root_path.name])
+        root_item.setData(0, Qt.ItemDataRole.UserRole, str(root_path))
+        self.addTopLevelItem(root_item)
+        self._populate_tree(root_item, root_path)
+        root_item.setExpanded(True)
+
+    def _populate_tree(self, parent_item, path: Path):
+        if not path.is_dir():
+            return
+
         try:
-            items = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
-            for item_path in items:
-                if item_path.name.startswith(('.', '__pycache__')): continue
-                item = QTreeWidgetItem(parent_item, [item_path.name])
-                item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
+            items = []
+            # Directories first
+            for item_path in sorted(path.iterdir()):
+                if item_path.name.startswith('.') or item_path.name == '__pycache__':
+                    continue
+
                 if item_path.is_dir():
-                    item.setIcon(0, QIcon.fromTheme("folder-open", self.style().standardIcon(
-                        self.style().StandardPixmap.SP_DirOpenIcon)))
-                    self.watcher.addPath(str(item_path))
-                    self._build_tree_recursive(item_path, item)
+                    dir_item = QTreeWidgetItem([f"📁 {item_path.name}"])
+                    dir_item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
+                    parent_item.addChild(dir_item)
+                    self._populate_tree(dir_item, item_path)
+                    items.append((dir_item, True))
                 else:
-                    icon = QIcon.fromTheme("text-x-python" if item_path.suffix == '.py' else "text-x-generic",
-                                           self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
-                    item.setIcon(0, icon)
+                    # File icons based on extension
+                    icon = self._get_file_icon(item_path.suffix)
+                    file_item = QTreeWidgetItem([f"{icon} {item_path.name}"])
+                    file_item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
+                    parent_item.addChild(file_item)
+                    items.append((file_item, False))
         except PermissionError:
             pass
 
-    @Slot()
-    def refresh_tree(self, path=""):
-        if self.project_root: self.load_project(str(self.project_root))
+    def _get_file_icon(self, extension: str) -> str:
+        icon_map = {
+            '.py': '🐍',
+            '.txt': '📄',
+            '.md': '📝',
+            '.json': '⚙️',
+            '.yml': '⚙️',
+            '.yaml': '⚙️',
+            '.toml': '⚙️',
+            '.ini': '⚙️',
+            '.cfg': '⚙️',
+            '.html': '🌐',
+            '.css': '🎨',
+            '.js': '📜',
+            '.ts': '📜',
+            '.sql': '🗃️',
+            '.gitignore': '🚫',
+            '.env': '🔑',
+        }
+        return icon_map.get(extension.lower(), '📄')
 
     @Slot(QTreeWidgetItem, int)
-    def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
+    def _on_item_double_clicked(self, item, column):
         file_path = item.data(0, Qt.ItemDataRole.UserRole)
-        if Path(file_path).is_file():
+        if file_path and Path(file_path).is_file():
             self.file_selected.emit(file_path)
-        else:
-            self.folder_selected.emit(file_path)
-
-    @Slot(QPoint)
-    def _show_context_menu(self, position):
-        menu = QMenu(self)
-        refresh_action = QAction("Refresh Tree", self)
-        refresh_action.triggered.connect(self.refresh_tree)
-        menu.addAction(refresh_action)
-        menu.exec(self.mapToGlobal(position))
 
 
 class CodeViewerWindow(QMainWindow):
-    file_changed = Signal(str, str)
     run_project_requested = Signal()
+    file_changed = Signal(str, str)
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AvA - Code Viewer & IDE")
-        self.setGeometry(200, 100, 1400, 900)
-        self.open_files = {}
         self.current_project = None
+        self.open_files = {}
+
+        self.setWindowTitle("AvA - Code Viewer")
+        self.setGeometry(100, 100, 1400, 900)
+
         self._init_ui()
-        self._apply_theme()
         self._create_menus()
         self._connect_signals()
+        self._apply_theme()
 
     def _init_ui(self):
         central_widget = QWidget()
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
+        # Main splitter
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.setStyleSheet(f"""
-            QSplitter::handle {{ background-color: {Colors.BORDER_DEFAULT}; }}
-            QSplitter::handle:horizontal {{ width: 2px; }}
-            QSplitter::handle:vertical {{ height: 2px; }}
-            QSplitter::handle:hover {{ background-color: {Colors.ACCENT_BLUE}; }}
-        """)
+        main_splitter.setChildrenCollapsible(False)
 
-        left_panel = self._create_left_panel()
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_splitter.setStyleSheet(main_splitter.styleSheet())  # Inherit style
-
-        editor_panel = self._create_editor_panel()
-        self.terminal = InteractiveTerminal()
-
-        right_splitter.addWidget(editor_panel)
-        right_splitter.addWidget(self.terminal)
-        right_splitter.setSizes([600, 250])
-
+        # Left panel (File Explorer)
+        left_panel = self._create_file_explorer_panel()
         main_splitter.addWidget(left_panel)
+
+        # Right splitter (Editor + Terminal)
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_splitter.setChildrenCollapsible(False)
+
+        # Editor panel
+        editor_panel = self._create_editor_panel()
+        right_splitter.addWidget(editor_panel)
+
+        # Terminal panel
+        self.terminal = InteractiveTerminal()
+        right_splitter.addWidget(self.terminal)
+
+        # Set splitter ratios
+        right_splitter.setSizes([600, 300])
         main_splitter.addWidget(right_splitter)
         main_splitter.setSizes([300, 1100])
 
-        main_layout.addWidget(main_splitter)
-        self.setCentralWidget(central_widget)
+        layout.addWidget(main_splitter)
 
-    def _create_left_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setStyleSheet(
-            f"background-color: {Colors.SECONDARY_BG}; border-right: 1px solid {Colors.BORDER_DEFAULT};")
+    def _create_file_explorer_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setMinimumWidth(250)
+        panel.setMaximumWidth(400)
+        panel.setStyleSheet(f"background: {Colors.SECONDARY_BG}; border-right: 1px solid {Colors.BORDER_DEFAULT};")
+
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(8)
@@ -370,27 +382,36 @@ class CodeViewerWindow(QMainWindow):
         self.terminal.set_working_directory(project_path)
         self.terminal.clear_terminal()
         self.terminal.append_system_message(f"Project '{Path(project_path).name}' loaded.")
-        if self.tab_widget.tabText(0) == "Welcome": self.tab_widget.removeTab(0)
+        # Remove welcome tab if it's still there
+        if self.tab_widget.tabText(0) == "Welcome":
+            self.tab_widget.removeTab(0)
         self.setWindowTitle(f"AvA - Code Viewer [{Path(project_path).name}]")
 
     @Slot()
     def _open_project_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Project Folder")
-        if folder: self.load_project(folder)
+        if folder:
+            self.load_project(folder)
 
     @Slot(str)
     def _open_file_in_new_tab(self, file_path: str):
         file_path_str = str(Path(file_path))
+        # Check if file is already open
         for i in range(self.tab_widget.count()):
             widget = self.tab_widget.widget(i)
             if isinstance(widget, CodeEditor) and widget.file_path == file_path_str:
                 self.tab_widget.setCurrentIndex(i)
                 return
-        if self.tab_widget.count() == 1 and not isinstance(self.tab_widget.widget(0),
-                                                           CodeEditor): self.tab_widget.removeTab(0)
+
+        # Remove welcome tab if it's the only tab
+        if self.tab_widget.count() == 1 and not isinstance(self.tab_widget.widget(0), CodeEditor):
+            self.tab_widget.removeTab(0)
+
+        # Create new editor
         editor = CodeEditor()
         editor.load_file(file_path_str)
         editor.file_modified.connect(self._on_file_modified)
+
         tab_index = self.tab_widget.addTab(editor, Path(file_path_str).name)
         self.tab_widget.setTabToolTip(tab_index, file_path_str)
         self.tab_widget.setCurrentIndex(tab_index)
@@ -398,17 +419,24 @@ class CodeViewerWindow(QMainWindow):
 
     @Slot(int)
     def _close_tab(self, index: int):
-        if index < 0 or index >= self.tab_widget.count(): return
+        if index < 0 or index >= self.tab_widget.count():
+            return
+
         widget = self.tab_widget.widget(index)
         if isinstance(widget, CodeEditor):
             if widget.document().isModified():
-                reply = QMessageBox.question(self, "Unsaved Changes", f"Save changes?",
-                                             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
+                reply = QMessageBox.question(
+                    self, "Unsaved Changes", f"Save changes?",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel
+                )
                 if reply == QMessageBox.StandardButton.Save:
                     widget.save_file()
                 elif reply == QMessageBox.StandardButton.Cancel:
                     return
-            if widget.file_path in self.open_files: del self.open_files[widget.file_path]
+
+            if widget.file_path in self.open_files:
+                del self.open_files[widget.file_path]
+
         self.tab_widget.removeTab(index)
 
     @Slot()
@@ -424,8 +452,11 @@ class CodeViewerWindow(QMainWindow):
             if isinstance(widget, CodeEditor) and widget.file_path == file_path:
                 self.tab_widget.setTabText(i, f"{Path(file_path).name} *")
                 break
-        if file_path in self.open_files: self.file_changed.emit(file_path, self.open_files[file_path].toPlainText())
+
+        if file_path in self.open_files:
+            self.file_changed.emit(file_path, self.open_files[file_path].toPlainText())
 
     @Slot(str)
     def auto_open_file(self, file_path: str):
-        if Path(file_path).exists(): self._open_file_in_new_tab(file_path)
+        if Path(file_path).exists():
+            self._open_file_in_new_tab(file_path)
