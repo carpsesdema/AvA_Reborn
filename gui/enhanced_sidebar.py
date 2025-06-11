@@ -162,7 +162,6 @@ class KnowledgeBasePanel(StyledPanel):
 
 
 class ChatActionsPanel(StyledPanel):
-    # ... (This class remains unchanged, keeping the new save/load buttons)
     action_triggered = Signal(str)
 
     def __init__(self):
@@ -175,10 +174,10 @@ class ChatActionsPanel(StyledPanel):
                 ("💾 Save Session", "save_session"),
                 ("📂 Load Session", "load_session"),
                 ("💬 New Session", "new_session"),
-                ("📊 View LLM Log", "view_log"),
             ]),
             ("Tools", [
-                ("📟 Open Terminal", "open_terminal"),
+                ("📊 View LLM Log", "view_log"),
+                ("📈 Workflow Monitor", "open_workflow_monitor"),
                 ("📄 Open Code Viewer", "open_code_viewer"),
             ]),
             ("System", [
@@ -195,7 +194,7 @@ class ChatActionsPanel(StyledPanel):
             group_label = QLabel(group_name)
             group_label.setFont(Typography.body_small())
             group_label.setStyleSheet(
-                "color: {Colors.TEXT_MUTED}; font-weight: 600; margin: 4px 0px 2px 0px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;")
+                f"color: {Colors.TEXT_MUTED}; font-weight: 600; margin: 4px 0px 2px 0px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;")
             self.add_widget(group_label)
 
             for text, action in buttons:

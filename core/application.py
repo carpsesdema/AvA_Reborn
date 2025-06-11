@@ -17,6 +17,7 @@ from gui.code_viewer import CodeViewerWindow
 # Import our UI components
 from gui.main_window import AvAMainWindow
 from gui.terminals import StreamingTerminal
+from gui.workflow_monitor_window import WorkflowMonitorWindow
 
 try:
     from core.rag_manager import RAGManager
@@ -53,6 +54,7 @@ class AvAApplication(QObject):
         self.workflow_engine = None
         self.rag_manager = None
         self.streaming_terminal = None
+        self.workflow_monitor = None  # Add this
 
         self.workspace_dir = Path("C:/Projects/AvA_Reborn/workspace")
         self.workspace_dir.mkdir(exist_ok=True)
@@ -87,6 +89,7 @@ class AvAApplication(QObject):
         self.main_window = AvAMainWindow(ava_app=self)
         self.code_viewer = CodeViewerWindow()
         self.streaming_terminal = StreamingTerminal()
+        self.workflow_monitor = WorkflowMonitorWindow()  # Create instance
         self._initialize_core_services()
         self.main_window.show()
         await asyncio.sleep(0.01)
@@ -132,9 +135,17 @@ class AvAApplication(QObject):
             self.main_window.sidebar.action_triggered.connect(self._handle_sidebar_action)
 
         if self.workflow_engine:
+            # Central handler in AvAApplication
+            self.workflow_engine.workflow_started.connect(self._on_workflow_started)
             self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
             self.workflow_engine.file_generated.connect(self._on_file_generated)
             self.workflow_engine.project_loaded.connect(self._on_project_loaded)
+            # Connect new workflow monitor signals
+            if self.workflow_monitor:
+                self.workflow_engine.node_status_changed.connect(self.workflow_monitor.update_agent_status)
+                self.workflow_engine.data_flow_started.connect(self.workflow_monitor.activate_connection)
+                self.workflow_engine.data_flow_completed.connect(self.workflow_monitor.deactivate_connection)
+                self.workflow_engine.workflow_reset.connect(self.workflow_monitor.refresh_workflow)
 
         if self.code_viewer:
             self.code_viewer.run_project_requested.connect(self.run_current_project)
@@ -142,6 +153,19 @@ class AvAApplication(QObject):
 
         self.error_occurred.connect(self._on_error_occurred)
         self.logger.info("✅ Components connected.")
+
+    @Slot(str, str)
+    def _on_workflow_started(self, workflow_type: str, description: str):
+        """Handle the start of any workflow centrally."""
+        # Show the monitor window automatically
+        if self.workflow_monitor:
+            self.workflow_monitor.show()
+            self.workflow_monitor.raise_()
+            self.workflow_monitor.activateWindow()
+
+        # Update the chat interface in the main window
+        if self.main_window:
+            self.main_window.on_workflow_started(workflow_type, description)
 
     @Slot()
     def run_current_project(self):
@@ -293,6 +317,8 @@ class AvAApplication(QObject):
         self.logger.info(f"Sidebar action: {action}")
         if action == "view_log":
             if self.streaming_terminal: self.streaming_terminal.show(); self.streaming_terminal.raise_(); self.streaming_terminal.activateWindow()
+        elif action == "open_workflow_monitor":
+            if self.workflow_monitor: self.workflow_monitor.show(); self.workflow_monitor.raise_(); self.workflow_monitor.activateWindow()
         elif action == "open_code_viewer":
             if self.code_viewer: self.code_viewer.show(); self.code_viewer.raise_(); self.code_viewer.activateWindow()
         elif action == "save_session":
@@ -479,8 +505,11 @@ _(This section will be populated as you build out the project.)_
             if not self.workflow_engine:
                 self.error_occurred.emit("workflow_engine", "Workflow engine not initialized.")
                 return
-            if self.streaming_terminal:
-                self.streaming_terminal.show()
+
+            # The streaming terminal is now managed by the workflow start signal
+            # if self.streaming_terminal:
+            #     self.streaming_terminal.show()
+
             # This is already an async method, so we can await the task
             await self.workflow_engine.execute_enhanced_workflow(user_prompt, conversation_history)
         else:  # "chat" or any other response
@@ -519,4 +548,5 @@ _(This section will be populated as you build out the project.)_
         if self.main_window: self.main_window.close()
         if self.code_viewer: self.code_viewer.close()
         if self.streaming_terminal: self.streaming_terminal.close()
+        if self.workflow_monitor: self.workflow_monitor.close()  # Add this
         self.logger.info("Shutdown complete.")
