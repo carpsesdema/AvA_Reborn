@@ -154,13 +154,14 @@ class AgentNode(QGraphicsObject):
         name_rect = QRectF(rect.left() + 60, rect.top() + 15, rect.width() - 75, 25)
         painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.agent_name)
 
-        # Status text
+        # Status text - FIXED: Use proper text alignment flags
         painter.setPen(QColor(Colors.TEXT_SECONDARY))
         status_font = Typography.body_small()
         painter.setFont(status_font)
         status_rect = QRectF(rect.left() + 60, rect.top() + 40, rect.width() - 75, 40)
-        # --- THE FIX IS HERE ---
-        painter.drawText(status_rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self._status_text)
+
+        # Use proper text alignment flags
+        painter.drawText(status_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, self._status_text)
 
     def set_status(self, status: str, status_text: str = ""):
         """Update node status with smooth animation"""

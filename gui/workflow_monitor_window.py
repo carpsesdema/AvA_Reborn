@@ -1,6 +1,6 @@
 # gui/workflow_monitor_window.py - Graphics Window for Workflow Visualization
 import sys
-from PySide6.QtCore import Qt, QPointF, Slot
+from PySide6.QtCore import Qt, QPointF, Slot, QTimer
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QMainWindow, QGraphicsView, QWidget, QVBoxLayout, QHBoxLayout,
@@ -25,12 +25,17 @@ class WorkflowMonitorWindow(QMainWindow):
         # Core components
         self.scene = WorkflowMonitorScene()
         self.view = QGraphicsView(self.scene)
+        self.agent_status_widgets = {}
 
         self._init_ui()
         self._apply_style()
 
         # Initialize with a standard layout
         self.scene.setup_standard_workflow()
+
+        # Setup control panel after scene is ready
+        QTimer.singleShot(100, self._setup_control_panel_after_scene)
+
         self.center_view()
 
     def _init_ui(self):
@@ -49,19 +54,27 @@ class WorkflowMonitorWindow(QMainWindow):
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Create control panel on the right
-        control_panel = self._create_control_panel()
+        # Create placeholder for control panel
+        self.control_panel = QWidget()
+        self.control_panel.setMinimumWidth(250)
+        self.control_panel.setMaximumWidth(300)
+        self.control_panel.setStyleSheet(
+            f"background: {Colors.SECONDARY_BG}; border-left: 1px solid {Colors.BORDER_DEFAULT};")
 
-        main_layout.addWidget(self.view, 5)  # Give view more space
-        main_layout.addWidget(control_panel, 1)
+        main_layout.addWidget(self.view, 5)
+        main_layout.addWidget(self.control_panel, 1)
 
-    def _create_control_panel(self) -> QWidget:
-        """Create the right-hand control panel."""
-        panel = QWidget()
-        panel.setMinimumWidth(250)
-        panel.setMaximumWidth(300)
-        panel.setStyleSheet(f"background: {Colors.SECONDARY_BG}; border-left: 1px solid {Colors.BORDER_DEFAULT};")
-        layout = QVBoxLayout(panel)
+    def _setup_control_panel_after_scene(self):
+        """Setup the control panel after the scene has been initialized"""
+        # Clear any existing layout
+        if self.control_panel.layout():
+            for i in reversed(range(self.control_panel.layout().count())):
+                item = self.control_panel.layout().itemAt(i)
+                if item.widget():
+                    item.widget().setParent(None)
+
+        # Create the proper control panel
+        layout = QVBoxLayout(self.control_panel)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
@@ -74,8 +87,8 @@ class WorkflowMonitorWindow(QMainWindow):
         status_header.setFont(Typography.heading_medium())
         status_frame_layout.addWidget(status_header)
 
-        # Agent status displays will go here
-        self.agent_status_widgets: dict[str, QWidget] = {}
+        # Agent status displays - NOW these will exist
+        self.agent_status_widgets = {}
         for agent_id, agent_node in self.scene._agent_nodes.items():
             agent_panel = QFrame()
             agent_panel_layout = QVBoxLayout(agent_panel)
@@ -96,7 +109,6 @@ class WorkflowMonitorWindow(QMainWindow):
             self.agent_status_widgets[agent_id] = status_text
 
         layout.addWidget(status_frame)
-
         layout.addStretch(1)
 
         # Controls Section
@@ -116,15 +128,12 @@ class WorkflowMonitorWindow(QMainWindow):
         refresh_btn.clicked.connect(self.refresh_workflow)
         layout.addWidget(refresh_btn)
 
-        return panel
-
     def _apply_style(self):
         """Apply modern styling."""
         self.setStyleSheet(f"background-color: {Colors.PRIMARY_BG};")
         self.view.setStyleSheet("border: none;")
 
-    # --- Public Slots for AvAApplication to connect to ---
-
+    # Public Slots for AvAApplication to connect to
     @Slot(str, str, str)
     def update_agent_status(self, agent_id: str, status: str, status_text: str):
         self.scene.update_agent_status(agent_id, status, status_text)
@@ -185,7 +194,7 @@ if __name__ == '__main__':
         window.activate_connection("architect", "coder")
 
 
-    timer = window.scene._layout_timer  # Use a timer to test after layout
+    timer = window.scene._layout_timer
     timer.timeout.connect(test_updates)
     timer.start(1000)
 
