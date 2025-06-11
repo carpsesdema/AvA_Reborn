@@ -34,6 +34,7 @@ class AITeamExecutor:
     async def execute_workflow(self, tech_spec: dict) -> dict:
         """
         Runs the full AI team workflow to generate code using parallel processing.
+        This workflow is now strictly bound to the files specified in the tech_spec.
 
         Args:
             tech_spec: The technical specification for the project.
@@ -41,17 +42,23 @@ class AITeamExecutor:
         Returns:
             A dictionary containing the generated files and their content.
         """
-        self.stream_emitter("AITeamExecutor", "stage_start", "AI team is starting the code generation phase.", "1")
+        self.stream_emitter("AITeamExecutor", "stage_start", "AI team is starting focused code generation.", "1")
 
-        # --- NEW: Parallel Execution Logic ---
+        files_to_generate = tech_spec.get("technical_specs", {})
+        if not files_to_generate:
+            self.stream_emitter("AITeamExecutor", "warning",
+                                "Architect provided no files to generate in the tech spec.", "1")
+            return {"generated_files": {}, "final_tech_spec": tech_spec}
 
-        # 1. Build Dependency Graph
+        # 1. Build Dependency Graph ONLY for the files in the current plan
         dependencies, file_map = self._build_dependency_graph(tech_spec)
 
         # 2. Determine Generation Stages
         stages = self._determine_generation_stages(dependencies)
 
-        self.stream_emitter("AITeamExecutor", "info", f"Planned {len(stages)} parallel generation stage(s).", "2")
+        self.stream_emitter("AITeamExecutor", "info",
+                            f"Plan is valid. Executing {len(stages)} generation stage(s) for {len(files_to_generate)} file(s).",
+                            "2")
 
         knowledge_packets: Dict[str, Dict] = {}
         generated_files: Dict[str, str] = {}
@@ -64,16 +71,16 @@ class AITeamExecutor:
 
             tasks = []
             for filename_key in stage_files:
-                # Find the full filename (e.g., with .py) from the original tech spec
                 full_filename = file_map.get(filename_key)
                 if not full_filename:
-                    self.logger.warning(f"Could not find full filename for key '{filename_key}'. Skipping.")
+                    self.logger.warning(f"Could not find full filename for key '{filename_key}' in file map. Skipping.")
                     continue
 
-                file_spec = tech_spec["technical_specs"].get(full_filename)
+                file_spec = files_to_generate.get(full_filename)
                 if not file_spec:
                     self.stream_emitter("AITeamExecutor", "error",
-                                        f"Could not find spec for '{full_filename}'. Skipping.", "3")
+                                        f"Could not find spec for '{full_filename}' in the current plan. Skipping.",
+                                        "3")
                     continue
 
                 # Create a task for each file in the current stage
@@ -91,7 +98,7 @@ class AITeamExecutor:
                         generated_files[fname] = code
                         knowledge_packets[fname] = {"spec": fspec, "source_code": code}
 
-        self.stream_emitter("AITeamExecutor", "success", "AI team has completed code generation.", "1")
+        self.stream_emitter("AITeamExecutor", "success", "AI team has completed focused code generation.", "1")
         return {"generated_files": generated_files, "final_tech_spec": tech_spec}
 
     def _build_dependency_graph(self, tech_spec: dict) -> tuple[dict, dict]:
@@ -100,16 +107,15 @@ class AITeamExecutor:
         file_map = {}  # Maps key (e.g., 'main') to full filename (e.g., 'main.py')
         all_file_keys = set()
 
-        # First pass: collect all file keys and map them
+        # First pass: collect all file keys and map them from the CURRENT spec
         for full_filename in tech_spec.get("technical_specs", {}).keys():
-            key = full_filename.split('.')[0]  # More robust than replace
+            key = full_filename.split('.')[0]
             file_map[key] = full_filename
             all_file_keys.add(key)
 
         # Second pass: build dependencies, ensuring they are valid project files
         for full_filename, spec in tech_spec.get("technical_specs", {}).items():
             key = full_filename.split('.')[0]
-            # Ensure the key itself is in the dependencies map
             dependencies[key] = []
             for dep in spec.get("dependencies", []):
                 dep_key = dep.split('.')[0]
@@ -121,6 +127,9 @@ class AITeamExecutor:
 
     def _determine_generation_stages(self, dependencies: dict) -> List[List[str]]:
         """Determines parallel generation stages using Kahn's algorithm for topological sorting."""
+        if not dependencies:
+            return []
+
         in_degree = {u: 0 for u in dependencies}
         # Correctly calculate in-degrees
         for u in dependencies:

@@ -19,7 +19,7 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     **USER REQUEST**: "{full_requirements}"
 
     **PRIORITY CONTEXT (GDD - Game Design Document):**
-    The following context is from the project's official design document. This is the MOST IMPORTANT source of truth for the project's high-level goals, implemented systems, and development history. You MUST use this to guide your architectural decisions.
+    The following context is from the project's official design document. This is the MOST IMPORTANT source of truth for the project's high-level goals. You MUST use this to guide your architectural decisions.
     ---
     {gdd_context}
     ---
@@ -31,46 +31,47 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     **RELEVANT CONTEXT FROM KNOWLEDGE BASE (RAG):**
     {rag_context}
 
-    **CRITICAL**: Study the team insights above. Use established patterns, avoid repeating past mistakes, and build on successful architectural decisions made by previous iterations.
+    **CRITICAL INSTRUCTIONS:**
+    1.  **Analyze the Request**: Understand the user's goal, whether it's creating a new project or modifying an existing one.
+    2.  **Determine File Structure**: Decide which files need to be created or modified.
+    3.  **Specify Dependencies**: For each file, list the other project files it depends on.
+    4.  **Define API Contracts**: For each file, create a clear `api_contract`. This is the most important step.
+        -   For files defining classes, list the `classes` with their `methods` and `signatures`.
+        -   For utility/function-based files, list the `functions` and their `signatures`.
+        -   For configuration files, list the `variables` with their `name` and `type`.
+    5.  **List Requirements**: Identify all necessary third-party Python libraries (e.g., "ursina", "perlin-noise") and list them in a `requirements` array.
+    6.  **Determine Build Order**: Create a `dependency_order` array listing the filenames in the correct order for generation (dependencies first).
+    7.  **Produce JSON**: Your entire output MUST be a single, valid JSON object containing all the above information.
 
-    Your output MUST be a single, valid JSON object. This object will contain the project name, a description, a list of required libraries, a dependency-sorted build order, and a detailed `technical_specs` dictionary for every file.
-
-    **NEW REQUIREMENT**: You MUST identify any necessary third-party Python libraries (e.g., "flask", "requests", "pygame", "ursina") and list them in a `requirements` array.
-
-    For each file in `technical_specs`, you must define its `purpose`, its `dependencies`, and its `api_contract`.
-    The `api_contract` is the most critical part. It must define:
-    - For config files: A list of all required `variables` with their name and type.
-    - For class-based files: A list of `classes`, each with its name, what it `inherits_from`, and a list of all `methods` with their exact `signature`.
-    - For entry points (`main.py`): A clear `execution_flow` describing the sequence of operations.
-
-    You must also determine the correct `dependency_order` for building the files. Files with no dependencies come first.
+    **CRITICAL FORMATTING RULES:**
+    -   Your entire response MUST be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json.
+    -   Do NOT use complex nested structures like "components" or "micro-tasks". Stick to the simple structure shown in the example.
 
     **EXAMPLE JSON STRUCTURE:**
     {{
-      "project_name": "a-descriptive-snake-case-name",
-      "project_description": "A one-sentence description of the application.",
-      "requirements": ["ursina==0.7.2"],
-      "dependency_order": ["config.py", "player.py", "main.py"],
+      "project_name": "example_project",
+      "project_description": "A brief description of the project.",
+      "requirements": ["requests"],
+      "dependency_order": ["utils.py", "main.py"],
       "technical_specs": {{
-        "config.py": {{
-          "purpose": "Stores all static configuration variables.",
+        "utils.py": {{
+          "purpose": "Provides utility functions for the application.",
           "dependencies": [],
-          "api_contract": {{"variables": [{{"name": "WINDOW_TITLE", "type": "str"}}]}}
-        }},
-        "player.py": {{
-          "purpose": "Defines the Player class.",
-          "dependencies": ["config"],
-          "api_contract": {{"classes": [{{"name": "Player", "inherits_from": "Entity", "methods": [{{"signature": "__init__(self, position=(0,0,0))"}}]}}]}}
+          "api_contract": {{
+            "functions": [
+              {{"name": "helper_function", "signature": "helper_function(param1: str) -> bool"}}
+            ]
+          }}
         }},
         "main.py": {{
-          "purpose": "Entry point for the application.",
-          "dependencies": ["config", "player"],
-          "api_contract": {{"execution_flow": "Initialize Ursina app, create player, start main loop"}}
+          "purpose": "The main entry point for the application.",
+          "dependencies": ["utils"],
+          "api_contract": {{
+            "execution_flow": "Imports helper_function from utils and runs it."
+          }}
         }}
       }}
     }}
-
-    **The system will fail if it receives anything other than the raw, valid JSON object.**
 """)
 
 ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
