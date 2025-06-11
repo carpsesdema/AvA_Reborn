@@ -1,123 +1,150 @@
-# core/workflow_services.py - Enhanced with Team Communication and Improved JSON Parsing
+# core/workflow_services.py - V6.0 with Hybrid Workflow Support
 
-import asyncio
 import json
 import re
 import textwrap
-import ast
-from typing import Callable, Dict, List
+import logging
+from typing import Dict, List, Any, Callable, Optional
 
-from core.llm_client import LLMRole, EnhancedLLMClient
+from core.llm_client import EnhancedLLMClient, LLMRole
 from core.project_state_manager import ProjectStateManager
+from core.enhanced_micro_task_engine import SimpleTaskSpec
 
-# --- Prompt Templates ---
-
-# Enhanced Architect prompt with team context
+# Enhanced prompt templates for hybrid workflow
 ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the ARCHITECT AI. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.
+    You are the ARCHITECT AI. Create a comprehensive technical specification for this project.
 
-    **USER REQUEST**: "{full_requirements}"
+    **USER REQUEST:** {user_prompt}
+    **CONVERSATION CONTEXT:** {conversation_context}
+    **GDD CONTEXT:** {gdd_context}
 
-    **PRIORITY CONTEXT (GDD - Game Design Document):**
-    The following context is from the project's official design document. This is the MOST IMPORTANT source of truth for the project's high-level goals. You MUST use this to guide your architectural decisions.
-    ---
-    {gdd_context}
-    ---
-
-    **TEAM KNOWLEDGE & INSIGHTS:**
-    Your AI teammates have accumulated the following knowledge from previous work:
+    **TEAM INSIGHTS & PATTERNS:**
     {team_context}
 
-    **RELEVANT CONTEXT FROM KNOWLEDGE BASE (RAG):**
+    **KNOWLEDGE BASE CONTEXT:**
     {rag_context}
 
-    **CRITICAL INSTRUCTIONS:**
-    1.  **Analyze the Request**: Understand the user's goal, whether it's creating a new project or modifying an existing one.
-    2.  **Determine File Structure**: Decide which files need to be created or modified.
-    3.  **Specify Dependencies**: For each file, list the other project files it depends on.
-    4.  **Define API Contracts**: For each file, create a clear `api_contract`. This is the most important step.
-        -   For files defining classes, list the `classes` with their `methods` and `signatures`.
-        -   For utility/function-based files, list the `functions` and their `signatures`.
-        -   For configuration files, list the `variables` with their `name` and `type`.
-    5.  **List Requirements**: Identify all necessary third-party Python libraries (e.g., "ursina", "perlin-noise") and list them in a `requirements` array.
-    6.  **Determine Build Order**: Create a `dependency_order` array listing the filenames in the correct order for generation (dependencies first).
-    7.  **Produce JSON**: Your entire output MUST be a single, valid JSON object containing all the above information.
+    Create a detailed technical specification that includes:
+    1. **Project Overview:** Clear description and objectives
+    2. **File Structure:** Complete breakdown of required files with dependencies
+    3. **Component Specifications:** For each file, provide detailed component breakdown including:
+       - task_id: Unique identifier for each component
+       - description: What the component does
+       - component_type: function, class, method, etc.
+       - core_logic_steps: Step-by-step implementation guide
+       - error_conditions_to_handle: Specific error scenarios
+       - interactions: How it connects with other components
+       - critical_notes: Security, performance, or architectural constraints
+    4. **Implementation Standards:** Coding patterns and best practices
+    5. **Quality Criteria:** Review standards and testing requirements
 
-    **CRITICAL FORMATTING RULES:**
-    -   Your entire response MUST be ONLY the JSON object. Do not include any text, conversational filler, or markdown formatting like ```json.
-    -   Do NOT use complex nested structures like "components" or "micro-tasks". Stick to the simple structure shown in the example.
-
-    **EXAMPLE JSON STRUCTURE:**
+    Your response MUST be a valid JSON object with this structure:
     {{
-      "project_name": "example_project",
-      "project_description": "A brief description of the project.",
-      "requirements": ["requests"],
-      "dependency_order": ["utils.py", "main.py"],
+      "project_name": "string",
+      "project_description": "string", 
       "technical_specs": {{
-        "utils.py": {{
-          "purpose": "Provides utility functions for the application.",
-          "dependencies": [],
-          "api_contract": {{
-            "functions": [
-              {{"name": "helper_function", "signature": "helper_function(param1: str) -> bool"}}
+        "files": {{
+          "filename": {{
+            "purpose": "string",
+            "dependencies": ["list", "of", "files"],
+            "components": [
+              {{
+                "task_id": "unique_id",
+                "description": "component description",
+                "component_type": "function|class|method",
+                "core_logic_steps": ["step1", "step2"],
+                "error_conditions_to_handle": ["error1", "error2"],
+                "interactions": ["component1", "component2"],
+                "critical_notes": "security/performance notes"
+              }}
             ]
           }}
         }},
-        "main.py": {{
-          "purpose": "The main entry point for the application.",
-          "dependencies": ["utils"],
-          "api_contract": {{
-            "execution_flow": "Imports helper_function from utils and runs it."
-          }}
-        }}
+        "requirements": ["package1", "package2"],
+        "coding_standards": "PEP 8 compliance, type hints, docstrings",
+        "project_patterns": "Architecture patterns to follow"
       }}
     }}
+
+    Return ONLY the JSON object, no explanations or markdown formatting.
 """)
 
-ARCHITECT_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the ARCHITECT AI. Analyze the existing project structure and create a comprehensive Technical Specification that represents the current state of the project.
+HYBRID_CODER_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the CODER AI in the AvA hybrid system. Execute this micro-task with Gemini Flash efficiency.
+
+    **MICRO-TASK SPECIFICATION:**
+    {task_spec}
 
     **PROJECT CONTEXT:**
-    {project_context_json}
+    {project_context}
 
-    **TEAM INSIGHTS:**
-    Use the team knowledge and established patterns from the project context above.
-
-    Based on the project files, dependencies, and structure, create a complete technical specification that accurately represents this project. Your output MUST be a single, valid JSON object following the same structure as the creation template.
-
-    Include all existing files in the technical_specs, infer the purpose and api_contract from the actual code content, and determine the correct dependency order.
-
-    **CRITICAL**: Return ONLY valid JSON. No explanations, no markdown, no extra text. Just the JSON object.
-
-    **The system will fail if it receives anything other than the raw, valid JSON object.**
-""")
-
-CODER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the CODER AI. Generate a single, complete, professional Python file based on the provided technical specification.
-
-    **FILE TO GENERATE:** {file_path}
-    **FILE PURPOSE:** {file_purpose}
-    **API CONTRACT:** {api_contract}
-    **DEPENDENCIES:** {dependencies}
-
-    **TEAM INSIGHTS & PATTERNS:**
-    Your AI teammates have established these patterns and learnings:
+    **TEAM PATTERNS & STANDARDS:**
     {team_context}
 
-    **RELEVANT CODE EXAMPLES:**
-    {rag_context}
+    **IMPLEMENTATION REQUIREMENTS:**
+    1. Follow the exact specifications in the micro-task
+    2. Implement robust error handling as specified
+    3. Write clean, efficient code optimized for the component type
+    4. Consider integration points with other components
+    5. Follow security best practices (no eval, sanitize inputs)
 
-    **CRITICAL IMPLEMENTATION REQUIREMENTS:**
-    1. **LEARN FROM TEAM**: Study the team insights above. Follow established patterns, coding standards, and architectural decisions from previous work.
-    2. **MIMIC RAG EXAMPLES**: The code examples show the quality and style expected.
-    3. **COMPLETE IMPLEMENTATION**: Generate the ENTIRE file, not just stubs or templates.
-    4. **DEPENDENCY CONTEXT**: Use the provided dependency information to ensure proper imports and integrations.
+    **CRITICAL OUTPUT REQUIREMENT:**
+    You MUST respond with ONLY a valid JSON object in this exact structure:
 
-    **CRITICAL OUTPUT FORMAT**: Your entire response MUST be ONLY the raw Python code for the file. Do NOT include any explanations, markdown formatting like ```python, or any text other than the code itself. The system will fail if it receives anything else.
+    {{
+      "IMPLEMENTED_CODE": "actual_python_code_here_as_string",
+      "IMPLEMENTATION_NOTES": "technical_decisions_and_reasoning",
+      "INTEGRATION_HINTS": "how_to_assemble_with_other_components", 
+      "EDGE_CASES_HANDLED": "list_of_edge_cases_addressed",
+      "TESTING_CONSIDERATIONS": "unit_testing_guidance"
+    }}
+
+    Do not include any text, explanations, or markdown formatting. Return ONLY the JSON object.
+""")
+
+ASSEMBLER_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the ASSEMBLER AI. Combine these micro-task implementations into a complete, professional Python file.
+
+    **FILE TO ASSEMBLE:** {filename}
+    **FILE SPECIFICATIONS:** {file_spec}
+
+    **MICRO-TASK IMPLEMENTATIONS:**
+    {micro_task_results}
+
+    **PROJECT CONTEXT:**
+    {project_context}
+
+    **ASSEMBLY REQUIREMENTS:**
+    1. **Code Organization:**
+       - Organize imports (stdlib, third-party, local)
+       - Place constants and configuration at top
+       - Order classes and functions logically
+       - Add proper file-level docstring
+
+    2. **Integration:**
+       - Extract IMPLEMENTED_CODE from each micro-task result
+       - Ensure consistent naming and style
+       - Add necessary glue code for component interaction
+       - Verify all dependencies are imported
+       - Remove duplicate imports
+
+    3. **Quality Assurance:**
+       - Follow project conventions and patterns
+       - Add comprehensive documentation
+       - Ensure logical flow and organization
+       - Verify completeness against specifications
+
+    4. **Professional Polish:**
+       - Add file header with description
+       - Ensure proper error handling throughout
+       - Format according to PEP 8 standards
+       - Create production-ready code
+
+    Return ONLY the complete, assembled Python code. No explanations or formatting.
 """)
 
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the REVIEWER AI. Conduct a comprehensive code review of the provided Python file.
+    You are the REVIEWER AI. Conduct a comprehensive code review of this Python file.
 
     **FILE:** {file_path}
     **PROJECT DESCRIPTION:** {project_description}
@@ -130,7 +157,7 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     {code}
     ```
 
-    Perform a thorough review checking for:
+    Perform a thorough review checking:
     1. Code quality and best practices
     2. Adherence to team standards and patterns
     3. Security considerations
@@ -139,7 +166,7 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     6. Error handling
     7. Testing considerations
 
-    Your response MUST be a valid JSON object with this structure:
+    Your response MUST be a valid JSON object:
     {{
       "approved": true/false,
       "summary": "Brief overall assessment",
@@ -153,12 +180,11 @@ REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
 """)
 
 
-# --- NEW: Helper function for refinement passes ---
 def create_refinement_prompt(code: str, instruction: str) -> str:
-    """Creates a standardized prompt for a code refinement pass."""
+    """Creates a standardized prompt for code refinement."""
     return textwrap.dedent(f"""
-        You are a code refiner. Your task is to modify the given code based on a specific instruction.
-        **IMPORTANT**: You must ONLY return the complete, modified code. Do not add explanations, markdown, or any other text.
+        You are a code refiner. Modify the given code based on this instruction.
+        **IMPORTANT**: Return ONLY the complete, modified code. No explanations or markdown.
 
         INSTRUCTION: {instruction}
 
@@ -172,16 +198,17 @@ def create_refinement_prompt(code: str, instruction: str) -> str:
 
 
 class BaseAIService:
-    """Base class for AI services with team communication capabilities."""
+    """Base class for AI services with team communication and model selection."""
 
     def __init__(self, llm_client: EnhancedLLMClient, stream_emitter: Callable, rag_manager=None):
         self.llm_client = llm_client
         self.stream_emitter = stream_emitter
         self.rag_manager = rag_manager
         self.project_state: ProjectStateManager = None
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def set_project_state(self, project_state: ProjectStateManager):
-        """Connect this service to the project state for team communication."""
+        """Connect this service to project state for team communication."""
         self.project_state = project_state
 
     def _contribute_team_insight(self, insight_type: str, source_agent: str, content: str,
@@ -201,164 +228,63 @@ class BaseAIService:
         if not self.project_state:
             return "No team context available."
 
-        team_context = self.project_state.get_enhanced_project_context()
-        team_insights = team_context.get("team_insights", {})
-        team_comm = team_context.get("team_communication", {})
-
-        if context_type == "architectural":
-            insights = team_insights.get("architectural_insights", [])
-            return self._format_insights_for_prompt(insights, "Architectural Decisions")
-        elif context_type == "implementation":
-            insights = team_insights.get("implementation_patterns", [])
-            return self._format_insights_for_prompt(insights, "Implementation Patterns")
-        elif context_type == "quality":
-            insights = team_insights.get("quality_standards", [])
-            return self._format_insights_for_prompt(insights, "Quality Standards")
-        else:
-            # Full context
-            formatted_parts = []
-
-            if team_comm.get("recent_priorities"):
-                formatted_parts.append("**RECENT PRIORITIES:**\n" +
-                                       "\n".join(f"- {p}" for p in team_comm["recent_priorities"]))
-
-            if team_comm.get("established_patterns"):
-                formatted_parts.append("**ESTABLISHED PATTERNS:**\n" +
-                                       "\n".join(f"- {p}" for p in team_comm["established_patterns"]))
-
-            if team_comm.get("quality_focus_areas"):
-                formatted_parts.append("**QUALITY FOCUS:**\n" +
-                                       "\n".join(f"- {q}" for q in team_comm["quality_focus_areas"]))
-
-            if team_comm.get("lessons_learned"):
-                formatted_parts.append("**LESSONS LEARNED:**\n" +
-                                       "\n".join(f"- {l}" for l in team_comm["lessons_learned"]))
-
-            return "\n\n".join(
-                formatted_parts) if formatted_parts else "No team insights yet - this is the first iteration."
-
-    def _format_insights_for_prompt(self, insights: List[Dict], title: str) -> str:
-        """Format insights for inclusion in prompts."""
-        if not insights:
-            return f"**{title}:** None established yet."
-
-        formatted = f"**{title}:**\n"
-        for insight in insights[-5:]:  # Last 5 insights
-            formatted += f"- {insight.get('content', '')}\n"
-        return formatted
-
-    def _parse_json_from_response(self, text: str, agent_name: str) -> dict:
-        """Enhanced JSON parsing with better error handling and multiple strategies."""
-        original_text = text.strip()
-
-        # Strategy 1: Look for markdown JSON blocks
-        json_patterns = [
-            (r'```json\s*(.*?)\s*```', "markdown JSON block"),
-            (r'```\s*(.*?)\s*```', "generic markdown block"),
-            (r'(?s)\{.*\}', "JSON object pattern")
-        ]
-
-        for pattern, description in json_patterns:
-            matches = re.findall(pattern, original_text, re.DOTALL)
-            if matches:
-                json_text = matches[0].strip() if isinstance(matches[0], str) else matches[0]
-                self.stream_emitter(agent_name, "parsing", f"Found {description}. Parsing...", 3)
-
-                try:
-                    parsed = json.loads(json_text)
-                    self.stream_emitter(agent_name, "success", f"Successfully parsed JSON from {description}", 3)
-                    return parsed
-                except json.JSONDecodeError as e:
-                    self.stream_emitter(agent_name, "warning", f"JSON parse failed for {description}: {e}", 3)
-                    continue
-
-        # Strategy 2: Look for object boundaries manually
-        start = original_text.find('{')
-        end = original_text.rfind('}')
-
-        if start != -1 and end != -1 and end > start:
-            json_text = original_text[start:end + 1]
-            self.stream_emitter(agent_name, "fallback", "Extracting content between first and last braces", 3)
-
-            try:
-                parsed = json.loads(json_text)
-                self.stream_emitter(agent_name, "success", "Successfully parsed JSON from brace extraction", 3)
-                return parsed
-            except json.JSONDecodeError as e:
-                self.stream_emitter(agent_name, "warning", f"Brace extraction parse failed: {e}", 3)
-
-        # Strategy 3: Try to clean and fix common JSON issues
-        cleaned_text = self._attempt_json_cleanup(original_text, agent_name)
-        if cleaned_text:
-            try:
-                parsed = json.loads(cleaned_text)
-                self.stream_emitter(agent_name, "success", "Successfully parsed JSON after cleanup", 3)
-                return parsed
-            except json.JSONDecodeError as e:
-                self.stream_emitter(agent_name, "warning", f"Cleanup attempt failed: {e}", 3)
-
-        # Final failure
-        self.stream_emitter(agent_name, "error", "All JSON parsing strategies failed", 3)
-        self.stream_emitter(agent_name, "debug", f"Response preview: {original_text[:500]}...", 4)
-        return {}
-
-    def _attempt_json_cleanup(self, text: str, agent_name: str) -> str:
-        """Attempt to clean and fix common JSON formatting issues."""
         try:
-            # Remove common prefixes/suffixes that LLMs add
-            cleaned = text.strip()
+            insights = self.project_state.get_team_insights(context_type)
+            if not insights:
+                return "No team insights available yet."
 
-            # Remove markdown language indicators
-            cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.MULTILINE)
-            cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
+            context_parts = []
+            for insight in insights[:10]:  # Limit to recent insights
+                context_parts.append(
+                    f"- {insight.get('insight_type', 'general').upper()}: {insight.get('content', '')}"
+                )
 
-            # Remove common AI response prefixes
-            prefixes_to_remove = [
-                r'^Here\'s the.*?:\s*',
-                r'^The.*?is:\s*',
-                r'^Based on.*?:\s*',
-                r'^After.*?:\s*'
-            ]
-
-            for prefix in prefixes_to_remove:
-                cleaned = re.sub(prefix, '', cleaned, flags=re.IGNORECASE | re.MULTILINE)
-
-            # Find the JSON object
-            start = cleaned.find('{')
-            end = cleaned.rfind('}')
-
-            if start != -1 and end != -1 and end > start:
-                cleaned = cleaned[start:end + 1]
-
-                # Fix common JSON issues
-                # Fix trailing commas
-                cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
-
-                # Fix unquoted keys (simple cases)
-                cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
-
-                # Fix single quotes to double quotes
-                cleaned = cleaned.replace("'", '"')
-
-                self.stream_emitter(agent_name, "info", "Attempted JSON cleanup", 4)
-                return cleaned
-
+            return "\n".join(context_parts)
         except Exception as e:
-            self.stream_emitter(agent_name, "debug", f"JSON cleanup failed: {e}", 4)
+            self.logger.warning(f"Failed to get team context: {e}")
+            return "Team context unavailable."
 
-        return ""
+    def _parse_json_from_response(self, response_text: str, agent_name: str) -> dict:
+        """Parse JSON from LLM response with enhanced error handling."""
+        try:
+            # Try direct JSON parsing first
+            return json.loads(response_text.strip())
+        except json.JSONDecodeError:
+            # Try to extract JSON from markdown or other formatting
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+            # Try to find JSON object in the text
+            brace_start = response_text.find('{')
+            brace_end = response_text.rfind('}')
+            if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                try:
+                    return json.loads(response_text[brace_start:brace_end + 1])
+                except json.JSONDecodeError:
+                    pass
+
+            self.stream_emitter(agent_name, "error",
+                                f"Failed to parse JSON response. Raw response: {response_text[:200]}...", 3)
+            return {}
 
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
-        self.stream_emitter(agent_name, "thought", f"Generating {role.value} response...", 2)
-        all_chunks = []
+        """Stream response and collect into JSON with error handling."""
         try:
-            async for chunk in self.llm_client.stream_chat(prompt, role):
-                all_chunks.append(chunk)
-                self.stream_emitter(agent_name, "llm_chunk", chunk, 3)
+            all_chunks = []
 
-            response_text = "".join(all_chunks)
-            if not response_text.strip():
-                self.stream_emitter(agent_name, "error", "LLM returned an empty response.", 2)
+            async for chunk in self.llm_client.stream_chat(prompt, role=role):
+                if chunk:
+                    all_chunks.append(chunk)
+                    self.stream_emitter(agent_name, "stream", chunk, 4)
+
+            response_text = "".join(all_chunks).strip()
+
+            if not response_text:
+                self.stream_emitter(agent_name, "error", "Empty response from LLM", 2)
                 return {}
 
             self.stream_emitter(agent_name, "info", f"Received {len(response_text)} characters from LLM", 3)
@@ -374,80 +300,87 @@ class BaseAIService:
             return {}
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
+        """Get intelligent RAG context for the query."""
         if not self.rag_manager or not self.rag_manager.is_ready:
             return "No RAG context available."
+
         self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
         dynamic_query = f"Python code example for {query}"
+
         try:
             results = self.rag_manager.query_context(dynamic_query, k=k)
             self.stream_emitter("RAG", "success", "Context retrieval complete.", 4)
+
             if not results:
                 return "No specific examples found in the knowledge base."
+
             return "\n\n---\n\n".join([
                 f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
-                for r in results if r.get('content')])
+                for r in results if r.get('content')
+            ])
         except Exception as e:
             self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
             return "Could not query knowledge base due to an error."
 
 
 class ArchitectService(BaseAIService):
+    """Enhanced Architect Service for hybrid workflow planning."""
 
     async def create_tech_spec(self, user_prompt: str, conversation_context: List[Dict] = None) -> dict:
+        """Create technical specification with detailed component breakdown."""
         self.stream_emitter("Architect", "thought",
-                            "Phase 1: Architecting the complete project technical specification...", 0)
+                            "Phase 1: Creating comprehensive project architecture with micro-task breakdown...", 0)
 
-        # --- FIX: Ensure we get the string, not a list ---
+        # Parse user prompt and GDD context
         prompt_parts = user_prompt.split("\n\n--- GDD CONTEXT ---\n")
         actual_user_prompt = prompt_parts[0]
         gdd_context = prompt_parts[1] if len(prompt_parts) > 1 else "No GDD provided."
 
-        requirements = [msg.get("message", "") for msg in (conversation_context or []) if msg.get("role") == "user"]
-        requirements.append(actual_user_prompt)
-
-        # Filter out any potential non-string elements just in case
-        str_requirements = [str(req) for req in requirements if req]
-        full_requirements = " ".join(req.strip() for req in str_requirements if req.strip())
-
         # Get team context and RAG context
-        team_context = self._get_team_context_string("architectural")
-        rag_context = await self._get_intelligent_rag_context(full_requirements, k=1)
+        team_context = self._get_team_context_string()
+        rag_context = await self._get_intelligent_rag_context(actual_user_prompt)
 
-        plan_prompt = ARCHITECT_PROMPT_TEMPLATE.format(
-            full_requirements=full_requirements,
+        # Build conversation context string
+        conversation_str = ""
+        if conversation_context:
+            conversation_str = "\n".join([
+                f"{msg.get('role', 'user')}: {msg.get('message', '')}"
+                for msg in conversation_context[-3:]  # Last 3 messages for context
+            ])
+
+        # Create architecture prompt
+        architecture_prompt = ARCHITECT_PROMPT_TEMPLATE.format(
+            user_prompt=actual_user_prompt,
+            conversation_context=conversation_str,
             gdd_context=gdd_context,
             team_context=team_context,
             rag_context=rag_context
         )
 
-        tech_spec = await self._stream_and_collect_json(plan_prompt, LLMRole.ARCHITECT, "Architect")
+        self.stream_emitter("Architect", "info",
+                            f"Sending architecture prompt ({len(architecture_prompt)} chars) to big model", 2)
+
+        # Use big model for architecture
+        tech_spec = await self._stream_and_collect_json(architecture_prompt, LLMRole.ARCHITECT, "Architect")
+
         if not tech_spec or not tech_spec.get("technical_specs"):
             self.stream_emitter("Architect", "error",
-                                "Architecting failed. Could not produce a valid technical specification.", 1)
+                                "Architecture failed. Could not produce valid technical specification.", 1)
             return {}
 
         # Contribute architectural insights
-        if tech_spec.get("project_description"):
-            self._contribute_team_insight(
-                "architectural",
-                "Architect",
-                f"Project architecture: {tech_spec['project_description']}",
-                "high"
-            )
+        self._contribute_team_insight(
+            "architectural",
+            "Architect",
+            f"Created architecture for project: {tech_spec.get('project_name', 'Unknown')}",
+            "high"
+        )
 
-        if tech_spec.get("dependency_order"):
-            self._contribute_team_insight(
-                "architectural",
-                "Architect",
-                f"Dependency structure: {' -> '.join(tech_spec['dependency_order'])}",
-                "medium"
-            )
-
-        self.stream_emitter("Architect", "success", "Master Technical Specification created successfully!", 0)
+        self.stream_emitter("Architect", "success", "Architecture complete with detailed component breakdown!", 1)
         return tech_spec
 
     async def analyze_and_create_spec_from_project(self, project_state: ProjectStateManager) -> dict:
-        """Analyzes an existing project and creates a tech spec for it."""
+        """Analyze existing project and create technical specification."""
         self.stream_emitter("Architect", "thought",
                             "Analyzing existing project to reverse-engineer its architecture...", 1)
 
@@ -468,9 +401,24 @@ class ArchitectService(BaseAIService):
                                 f"Failed to serialize project context: {e}", 1)
             return {}
 
-        analysis_prompt = ARCHITECT_ANALYSIS_PROMPT_TEMPLATE.format(
-            project_context_json=json.dumps(serializable_context, indent=2)
-        )
+        # Create analysis prompt using the template
+        analysis_prompt = textwrap.dedent(f"""
+            You are the ARCHITECT AI. Analyze the existing project structure and create a comprehensive Technical Specification that represents the current state of the project.
+
+            **PROJECT CONTEXT:**
+            {json.dumps(serializable_context, indent=2)}
+
+            **TEAM INSIGHTS:**
+            Use the team knowledge and established patterns from the project context above.
+
+            Based on the project files, dependencies, and structure, create a complete technical specification that accurately represents this project. Your output MUST be a single, valid JSON object following the same structure as the creation template.
+
+            Include all existing files in the technical_specs, infer the purpose and api_contract from the actual code content, and determine the correct dependency order.
+
+            **CRITICAL**: Return ONLY valid JSON. No explanations, no markdown, no extra text. Just the JSON object.
+
+            **The system will fail if it receives anything other than the raw, valid JSON object.**
+        """)
 
         self.stream_emitter("Architect", "info",
                             f"Sending {len(analysis_prompt)} character prompt to LLM", 2)
@@ -494,212 +442,268 @@ class ArchitectService(BaseAIService):
         self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
         return tech_spec
 
+        self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
+        return tech_spec
+
 
 class CoderService(BaseAIService):
-    """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
+    """Enhanced Coder Service with hybrid workflow and model selection support."""
+
+    async def execute_micro_task_with_gemini_flash(self, task: SimpleTaskSpec) -> Dict[str, Any]:
+        """Execute a micro-task using Gemini Flash for cost efficiency."""
+        try:
+            self.stream_emitter("Coder", "info",
+                                f"🚀 Executing micro-task {task.id} with Gemini Flash", 3)
+
+            # Get team context and project patterns
+            team_context = self._get_team_context_string()
+
+            # Prepare task specification
+            task_spec_json = {
+                "id": task.id,
+                "description": task.description,
+                "component_type": task.component_type,
+                "context": task.context,
+                "requirements": task.exact_requirements,
+                "expected_lines": task.expected_lines
+            }
+
+            # Build project context
+            project_context = {
+                "file_path": task.file_path,
+                "component_type": task.component_type,
+                "coding_standards": "PEP 8, type hints, comprehensive docstrings",
+                "security_requirements": "No eval(), sanitize inputs, handle errors"
+            }
+
+            # Create hybrid coder prompt
+            prompt = HYBRID_CODER_PROMPT_TEMPLATE.format(
+                task_spec=json.dumps(task_spec_json, indent=2),
+                project_context=json.dumps(project_context, indent=2),
+                team_context=team_context
+            )
+
+            self.stream_emitter("Coder", "info",
+                                f"Sending micro-task to Gemini Flash ({len(prompt)} chars)", 4)
+
+            # Use Gemini Flash (fast, cost-effective model) for implementation
+            # Note: This assumes LLMRole.CODER is configured to use Gemini Flash
+            result = await self._stream_and_collect_json(prompt, LLMRole.CODER, "Coder")
+
+            if not result or "IMPLEMENTED_CODE" not in result:
+                raise Exception("Micro-task execution failed - no code generated")
+
+            # Validate JSON structure
+            required_keys = ["IMPLEMENTED_CODE", "IMPLEMENTATION_NOTES", "INTEGRATION_HINTS",
+                             "EDGE_CASES_HANDLED", "TESTING_CONSIDERATIONS"]
+
+            for key in required_keys:
+                if key not in result:
+                    result[key] = f"Not provided for {key}"
+
+            self.stream_emitter("Coder", "success",
+                                f"✅ Micro-task {task.id} completed successfully", 3)
+
+            # Contribute implementation insights
+            self._contribute_team_insight(
+                "implementation",
+                "Coder",
+                f"Implemented {task.component_type}: {task.description[:50]}...",
+                "low",
+                [task.file_path] if task.file_path else []
+            )
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Micro-task execution failed for {task.id}: {e}")
+            self.stream_emitter("Coder", "error",
+                                f"❌ Micro-task {task.id} failed: {str(e)}", 3)
+            raise
+
+    async def generate_file_from_spec(self, file_path: str, file_spec: dict,
+                                      project_context: dict, dependency_context: str) -> str:
+        """Generate complete file from specification (fallback method)."""
+        self.stream_emitter("Coder", "info", f"Generating {file_path} using traditional approach", 2)
+
+        # Build comprehensive context
+        team_context = self._get_team_context_string()
+        rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}")
+
+        # Create traditional file generation prompt
+        prompt = f"""
+        Generate a complete Python file based on this specification.
+
+        **FILE:** {file_path}
+        **PURPOSE:** {file_spec.get('purpose', 'No purpose specified')}
+        **DEPENDENCIES:** {dependency_context}
+
+        **TEAM PATTERNS:**
+        {team_context}
+
+        **RAG CONTEXT:**
+        {rag_context}
+
+        **SPECIFICATION:**
+        {json.dumps(file_spec, indent=2)}
+
+        Generate complete, production-ready Python code following all specifications.
+        Return ONLY the Python code, no explanations or markdown formatting.
+        """
+
+        # Use big model for complex file generation
+        response = await self.llm_client.chat(prompt, role=LLMRole.CODER)
+
+        # Clean code output
+        cleaned_code = self._clean_code_output(response)
+
+        self.stream_emitter("Coder", "success", f"✅ Generated {file_path} ({len(cleaned_code)} chars)", 2)
+
+        return cleaned_code
 
     def _clean_code_output(self, code: str) -> str:
-        """
-        More robustly removes markdown fences and other chatter from code output.
-        It prioritizes finding a python code block, but will fall back to cleaning the raw text.
-        """
-        # Look for a Python code block using a non-greedy search
-        match = re.search(r"```(?:python|py)?\s*(.*?)\s*```", code, re.DOTALL)
+        """Remove markdown fences and clean code output."""
+        # Handle markdown fences
+        match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
         if match:
-            # If a code block is found, return its content, stripped.
             return match.group(1).strip()
 
-        # Fallback for when the LLM forgets the markdown fences
-        # This is more risky but necessary for inconsistent models.
-        # We can try to remove common conversational prefixes.
-        lines = code.strip().split('\n')
+        # Fallback for code without language specifier
+        match = re.search(r"```\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
 
-        # If the first line looks like a conversational intro, remove it.
-        # This is a heuristic and might need adjustment.
-        common_intros = ["here is the code", "certainly, here's the python code", "```"]
-        if lines and any(intro in lines[0].lower() for intro in common_intros):
-            lines.pop(0)
+        return code.strip()
 
-        # Re-join and strip again
-        return '\n'.join(lines).strip()
 
-    async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
-                                      dependency_context: str = "") -> str:
-        """
-        Generate a file with a two-pass refinement process for better responsiveness.
-        """
-        self.stream_emitter("Coder", "thought", f"Starting 2-pass generation for {file_path}...", 1)
+class AssemblerService(BaseAIService):
+    """New Assembler Service for combining micro-task outputs."""
 
-        # === PASS 1: Initial Code Draft (Streaming) ===
-        self.stream_emitter("Coder", "refinement_pass", "1/2: Generating initial code draft...", 2)
-        initial_code = await self._initial_draft_pass(file_path, file_spec, project_context, dependency_context)
-        if not initial_code:
-            self.stream_emitter("Coder", "error", f"Initial draft failed for {file_path}", 2)
-            return ""
-        self.stream_emitter("Coder", "info", "Initial draft complete. Now polishing.", 3)
-
-        # === PASS 2: Consolidated Polishing Pass (Blocking) ===
-        self.stream_emitter("Coder", "refinement_pass", "2/2: Polishing code (error handling & docs)...", 2)
-        polished_code = await self._final_refinement_pass(initial_code)
-        if not polished_code:
-            self.stream_emitter("Coder", "warning", f"Polishing pass failed for {file_path}. Using initial draft.", 3)
-            final_code = initial_code
-        else:
-            final_code = polished_code
-
-        self.stream_emitter("Coder", "success", f"Multi-pass generation finished for {file_path}!", 1)
-
-        # Clean the final code before returning
-        clean_final_code = self._clean_code_output(final_code)
-
-        # Analyze the final generated code and contribute insights
-        self._analyze_and_contribute_code_insights(file_path, clean_final_code)
-
-        return clean_final_code
-
-    async def _initial_draft_pass(self, file_path: str, file_spec: dict, project_context: dict,
-                                  dependency_context: str) -> str:
-        """Generates the first functional version of the code and streams it."""
-        self.stream_emitter("Coder", "thought_detail", "Gathering context for initial draft...", 3)
-        team_context = self._get_team_context_string("implementation")
-        rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}", k=3)
-
-        generation_prompt = CODER_PROMPT_TEMPLATE.format(
-            file_path=file_path,
-            file_purpose=file_spec.get("purpose", ""),
-            api_contract=json.dumps(file_spec.get("api_contract", {}), indent=2),
-            dependencies=", ".join(file_spec.get("dependencies", [])),
-            team_context=team_context,
-            rag_context=rag_context,
-        )
-        if dependency_context:
-            generation_prompt += f"\n\n**DEPENDENCY CONTEXT:**\n{dependency_context}"
-
-        self.stream_emitter("Coder", "thought_detail", "Prompt assembled. Waiting for LLM to start writing...", 3)
-        all_chunks = []
+    async def assemble_file_from_micro_tasks(self, filename: str, file_spec: dict,
+                                             micro_task_results: List[Dict[str, Any]],
+                                             project_context: dict) -> str:
+        """Assemble micro-task results into a complete, professional file."""
         try:
-            async for chunk in self.llm_client.stream_chat(generation_prompt, LLMRole.CODER):
-                all_chunks.append(chunk)
-                self.stream_emitter("Coder", "llm_chunk", chunk, 3)
-            return "".join(all_chunks).strip()
-        except Exception as e:
-            self.stream_emitter("Coder", "error", f"Error during initial draft for {file_path}: {e}", 2)
-            return ""
+            self.stream_emitter("Assembler", "info",
+                                f"🔧 Assembling {len(micro_task_results)} micro-tasks for {filename}", 2)
 
-    async def _final_refinement_pass(self, code: str) -> str:
-        """
-        Performs a single, consolidated refinement pass for error handling and documentation.
-        """
-        if not code.strip(): return ""
-        self.stream_emitter("Coder", "thought_detail", "Adding error handling, docstrings, and type hints...", 3)
-        instruction = "Review this code. First, add comprehensive error handling (try-except blocks, input validation). Second, add professional, Google-style docstrings to all classes and functions, including type hints. Return only the complete, final code."
-        prompt = create_refinement_prompt(code, instruction)
-        # Using a non-streaming call for the consolidated internal pass
-        return await self.llm_client.chat(prompt, LLMRole.CODER)
+            # Prepare micro-task results for prompt
+            results_text = []
+            for i, result in enumerate(micro_task_results):
+                results_text.append(f"=== Micro-Task {i + 1} ===")
+                results_text.append(json.dumps(result, indent=2))
+                results_text.append("")
 
-    def _analyze_and_contribute_code_insights(self, file_path: str, code: str):
-        """Analyze generated code and contribute implementation insights."""
-        try:
-            # Quick analysis for patterns
-            lines = code.split('\n')
+            # Build assembly prompt
+            prompt = ASSEMBLER_PROMPT_TEMPLATE.format(
+                filename=filename,
+                file_spec=json.dumps(file_spec, indent=2),
+                micro_task_results="\n".join(results_text),
+                project_context=json.dumps(project_context, indent=2)
+            )
 
-            # Detect patterns
-            if any('dataclass' in line for line in lines):
-                self._contribute_team_insight(
-                    "implementation",
-                    "Coder",
-                    "Using dataclasses for data structures",
-                    "medium",
-                    [file_path]
-                )
+            self.stream_emitter("Assembler", "info",
+                                f"Sending assembly request ({len(prompt)} chars) to medium model", 3)
 
-            if any('async def' in line for line in lines):
-                self._contribute_team_insight(
-                    "implementation",
-                    "Coder",
-                    "Implementing async patterns for performance",
-                    "medium",
-                    [file_path]
-                )
+            # Use medium model for assembly (balance of capability and cost)
+            assembled_code = await self.llm_client.chat(prompt, role=LLMRole.ASSEMBLER)
 
-            if any('logging' in line for line in lines):
-                self._contribute_team_insight(
-                    "implementation",
-                    "Coder",
-                    "Using proper logging for debugging",
-                    "low",
-                    [file_path]
-                )
+            # Clean the assembled code
+            cleaned_code = self._clean_code_output(assembled_code)
 
-            # Count complexity
-            function_count = len([line for line in lines if line.strip().startswith('def ')])
-            if function_count > 10:
-                self._contribute_team_insight(
-                    "implementation",
-                    "Coder",
-                    f"High complexity file with {function_count} functions - consider splitting",
-                    "medium",
-                    [file_path]
-                )
+            if not cleaned_code or len(cleaned_code) < 50:
+                raise Exception("Assembly produced insufficient code")
+
+            self.stream_emitter("Assembler", "success",
+                                f"✅ Assembly complete for {filename} ({len(cleaned_code)} chars)", 2)
+
+            # Contribute assembly insights
+            self._contribute_team_insight(
+                "assembly",
+                "Assembler",
+                f"Assembled {len(micro_task_results)} components into {filename}",
+                "medium",
+                [filename]
+            )
+
+            return cleaned_code
 
         except Exception as e:
-            # Don't fail on analysis errors
-            self.stream_emitter("Coder", "debug", f"Code analysis failed: {e}", 4)
+            self.logger.error(f"Assembly failed for {filename}: {e}")
+            self.stream_emitter("Assembler", "error",
+                                f"❌ Assembly failed for {filename}: {str(e)}", 2)
+            raise
+
+    def _clean_code_output(self, code: str) -> str:
+        """Clean assembled code output."""
+        # Remove markdown fences
+        match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        return code.strip()
 
 
 class ReviewerService(BaseAIService):
-    """Enhanced Reviewer Service with team learning and feedback."""
+    """Enhanced Reviewer Service with team learning."""
 
-    async def review_code(self, file_path: str, code: str, project_description: str = "") -> tuple:
-        self.stream_emitter("Reviewer", "thought", f"Conducting comprehensive review of {file_path}...", 1)
-
-        # Get team context focused on quality standards
-        team_context = self._get_team_context_string("quality")
-
-        review_prompt = REVIEWER_PROMPT_TEMPLATE.format(
-            file_path=file_path,
-            project_description=project_description,
-            team_context=team_context,
-            code=code
-        )
-
+    async def review_code(self, file_path: str, code: str, project_description: str = "") -> dict:
+        """Review code and provide comprehensive feedback."""
         try:
-            review_data = await self._stream_and_collect_json(review_prompt, LLMRole.REVIEWER, "Reviewer")
+            self.stream_emitter("Reviewer", "info", f"🧐 Reviewing {file_path}", 2)
 
-            if not review_data:
-                self.stream_emitter("Reviewer", "warning", "Review failed to parse, approving by default.", 2)
-                return {"approved": True, "summary": "Review failed to parse, approved by default."}, True
+            # Get team quality standards
+            team_context = self._get_team_context_string("quality")
 
-            # Extract key information
-            approved = review_data.get("approved", True)
-            summary = review_data.get("summary", "No summary provided")
+            # Build review prompt
+            prompt = REVIEWER_PROMPT_TEMPLATE.format(
+                file_path=file_path,
+                project_description=project_description,
+                team_context=team_context,
+                code=code
+            )
 
-            # Contribute quality insights based on review
-            if review_data.get("strengths"):
-                for strength in review_data["strengths"][:2]:  # Top 2 strengths
-                    self._contribute_team_insight(
-                        "quality",
-                        "Reviewer",
-                        f"Code strength identified: {strength}",
-                        "low",
-                        [file_path]
-                    )
+            self.stream_emitter("Reviewer", "info", "Conducting comprehensive code review...", 3)
 
-            if review_data.get("issues"):
-                for issue in review_data["issues"][:2]:  # Top 2 issues
-                    self._contribute_team_insight(
-                        "quality",
-                        "Reviewer",
-                        f"Code issue to watch: {issue}",
-                        "medium",
-                        [file_path]
-                    )
+            # Use big model for thorough review
+            review_result = await self._stream_and_collect_json(prompt, LLMRole.REVIEWER, "Reviewer")
 
-            result_msg = f"{'✅ Approved' if approved else '❌ Needs work'}: {summary}"
-            self.stream_emitter("Reviewer", "success" if approved else "warning", result_msg, 1)
+            if not review_result:
+                raise Exception("Review failed to produce results")
 
-            return review_data, approved
+            # Contribute review insights
+            if review_result.get("approved"):
+                self._contribute_team_insight(
+                    "quality",
+                    "Reviewer",
+                    f"Code approved for {file_path}: {review_result.get('summary', '')}",
+                    "medium",
+                    [file_path]
+                )
+            else:
+                self._contribute_team_insight(
+                    "quality",
+                    "Reviewer",
+                    f"Code issues found in {file_path}: {', '.join(review_result.get('issues', []))}",
+                    "high",
+                    [file_path]
+                )
+
+            self.stream_emitter("Reviewer", "success",
+                                f"✅ Review complete for {file_path} - {'Approved' if review_result.get('approved') else 'Needs work'}",
+                                2)
+
+            return review_result
 
         except Exception as e:
-            self.stream_emitter("Reviewer", "error", f"Review process failed: {e}", 2)
-            return {"approved": True, "summary": f"Review failed due to error: {e}"}, True
+            self.logger.error(f"Review failed for {file_path}: {e}")
+            self.stream_emitter("Reviewer", "error",
+                                f"❌ Review failed for {file_path}: {str(e)}", 2)
+            return {
+                "approved": False,
+                "summary": f"Review failed due to error: {str(e)}",
+                "strengths": [],
+                "issues": [f"Review process failed: {str(e)}"],
+                "suggestions": ["Fix review process errors"],
+                "confidence": 0.0
+            }
