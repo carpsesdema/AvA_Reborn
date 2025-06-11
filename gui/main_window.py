@@ -75,9 +75,6 @@ class AvAMainWindow(QMainWindow):
         self.ava_app.error_occurred.connect(self.on_app_error_occurred)
         self.ava_app.project_loaded.connect(self.update_project_display)
 
-        # Connect the application's RAG status signal to the main window's slot
-        self.ava_app.rag_status_changed.connect(self.update_rag_status_display)
-
     @Slot(str)
     def handle_user_message(self, message: str):
         self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history)
@@ -107,8 +104,9 @@ class AvAMainWindow(QMainWindow):
     def update_all_status_displays(self):
         self._update_model_config_display()
         if self.ava_app and self.ava_app.rag_manager:
-            status_key = "ready" if self.ava_app.rag_manager.is_ready else "working"
-            self.update_rag_status_display(self.ava_app.rag_manager.current_status, status_key)
+            # RAG status is now handled internally by the RAGManager's signals to the app,
+            # which no longer needs to propagate to the main window's sidebar.
+            pass
 
     @Slot(dict)
     def _on_model_configuration_applied(self, config_summary: dict):
@@ -130,11 +128,6 @@ class AvAMainWindow(QMainWindow):
     @Slot(str)
     def update_project_display(self, project_name: str):
         self.sidebar.update_project_display(project_name)
-
-    @Slot(str, str)
-    def update_rag_status_display(self, status_text: str, status_color_key: str):
-        """Updates the RAG status display. (This is now a no-op)."""
-        pass
 
     @Slot(str, str)
     def on_workflow_started(self, workflow_type: str, description: str = ""):

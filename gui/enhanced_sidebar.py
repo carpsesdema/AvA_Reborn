@@ -72,10 +72,6 @@ class AvALeftSidebar(QWidget):
     def update_model_status_display(self, config_summary: dict):
         self.model_config_panel.update_model_status_display(config_summary)
 
-    def update_rag_status_display(self, status_text: str):
-        # This method is now a no-op as the display has been removed.
-        pass
-
 
 class AIModelConfigPanel(StyledPanel):
     """Modern AI Model Configuration panel showing V4 roles."""
