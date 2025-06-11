@@ -101,6 +101,7 @@ class AIModelConfigPanel(StyledPanel):
         specialists = [
             ("🏛️ Architect", "architect_status"),
             ("⚙️ Coder", "coder_status"),
+            ("🧩 Assembler", "assembler_status"),
             ("🧐 Reviewer", "reviewer_status"),
             ("💬 Chat", "chat_status")
         ]
@@ -128,6 +129,7 @@ class AIModelConfigPanel(StyledPanel):
         status_map = {
             "architect": (self.architect_status, self.architect_status_indicator, "🏛️ Architect"),
             "coder": (self.coder_status, self.coder_status_indicator, "⚙️ Coder"),
+            "assembler": (self.assembler_status, self.assembler_status_indicator, "🧩 Assembler"),
             "reviewer": (self.reviewer_status, self.reviewer_status_indicator, "🧐 Reviewer"),
             "chat": (self.chat_status, self.chat_status_indicator, "💬 Chat")
         }

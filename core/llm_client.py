@@ -12,6 +12,7 @@ class LLMRole(Enum):
     """The core AI specialist roles for the V4 workflow."""
     ARCHITECT = "architect"
     CODER = "coder"
+    ASSEMBLER = "assembler"
     REVIEWER = "reviewer"
     CHAT = "chat"
 
@@ -57,7 +58,11 @@ class EnhancedLLMClient:
                         if role_str in ["planner", "structurer", "architect"]:
                             role_enum = LLMRole.ARCHITECT
                         elif role_str in ["assembler", "coder"]:
-                            role_enum = LLMRole.CODER
+                            # Handle both old and new role names from config
+                            if role_str == "assembler":
+                                role_enum = LLMRole.ASSEMBLER
+                            else:
+                                role_enum = LLMRole.CODER
                         else:
                             role_enum = LLMRole(role_str)
 
@@ -75,6 +80,7 @@ class EnhancedLLMClient:
         default_personalities_map = {
             LLMRole.ARCHITECT: "You are the ARCHITECT AI, a master software architect. Your task is to create a complete, comprehensive, and machine-readable Technical Specification Sheet for an entire software project based on a user's request. This sheet will be the single source of truth for all other AI agents.",
             LLMRole.CODER: "You are an expert Python developer. Your task is to generate a single, complete, and production-ready Python file based on a strict Technical Specification and the full source code of its dependencies.",
+            LLMRole.ASSEMBLER: "You are the ASSEMBLER AI. Combine these micro-task implementations into a complete, professional Python file.",
             LLMRole.REVIEWER: "You are a senior code reviewer. Your primary goal is to ensure the generated code is of high quality, correct, and adheres to the technical specification. Provide a final 'approved' status and a brief summary.",
             LLMRole.CHAT: "You are AvA, a friendly and helpful AI development assistant."
         }
@@ -89,7 +95,7 @@ class EnhancedLLMClient:
             base_url = os.getenv("OPENAI_API_BASE")
             self.models["gpt-4o"] = ModelConfig(
                 "openai", "gpt-4o", api_key, base_url, 0.5, 8000,
-                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
+                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             self.models["gpt-4o-mini"] = ModelConfig(
                 "openai", "gpt-4o-mini", api_key, base_url, 0.7, 16000, [LLMRole.CHAT]
@@ -101,7 +107,7 @@ class EnhancedLLMClient:
             base_url = os.getenv("ANTHROPIC_API_BASE")
             self.models["claude-3-5-sonnet-20240620"] = ModelConfig(
                 "anthropic", "claude-3-5-sonnet-20240620", api_key, base_url, 0.5, 8000,
-                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
+                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.REVIEWER, LLMRole.CHAT]
             )
             self.models["claude-3-opus-20240229"] = ModelConfig(
                 "anthropic", "claude-3-opus-20240229", api_key, base_url, 0.5, 8000,
@@ -157,6 +163,7 @@ class EnhancedLLMClient:
         preferences = {
             LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229", "gpt-4o"],
             LLMRole.CODER: ["deepseek-reasoner", "claude-3-5-sonnet-20240620", "gpt-4o"],
+            LLMRole.ASSEMBLER: ["claude-3-5-sonnet-20240620", "gpt-4o"],
             LLMRole.REVIEWER: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini"],
             LLMRole.CHAT: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini", "deepseek-chat"]
         }

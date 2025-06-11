@@ -73,6 +73,9 @@ class PersonalityManager:
             LLMRole.CODER.value: [
                 PersonalityPreset(name="Spec-Driven Coder", description="Writes a complete file based on a strict technical spec.", personality="You are an expert Python developer...", temperature=0.1, role=LLMRole.CODER.value, author="AvA Built-in")
             ],
+            LLMRole.ASSEMBLER.value: [
+                PersonalityPreset(name="Seamless Integrator", description="Combines code components into a complete file.", personality="You are the ASSEMBLER AI. Combine these micro-task implementations into a complete, professional Python file.", temperature=0.3, role=LLMRole.ASSEMBLER.value, author="AvA Built-in")
+            ],
             LLMRole.REVIEWER.value: [
                 PersonalityPreset(name="Quality Guardian", description="Focuses on code quality, correctness, and adherence to the spec.", personality="You are a senior code reviewer...", temperature=0.4, role=LLMRole.REVIEWER.value, author="AvA Built-in")
             ],
@@ -196,7 +199,7 @@ class PersonalityEditor(QFrame):
         layout.addWidget(self.preset_widget); self.setLayout(layout)
 
     def _get_default_personality(self) -> str:
-        return {LLMRole.ARCHITECT.value: "You are the ARCHITECT AI...", LLMRole.CODER.value: "You are an expert Python developer...", LLMRole.REVIEWER.value: "You are a senior code reviewer...", LLMRole.CHAT.value: "You are AvA, a friendly AI assistant..."}.get(self.role_value_str, "You are a helpful AI assistant.")
+        return {LLMRole.ARCHITECT.value: "You are the ARCHITECT AI...", LLMRole.CODER.value: "You are an expert Python developer...", LLMRole.ASSEMBLER.value: "You are the ASSEMBLER AI. Combine these micro-task implementations into a complete, professional Python file.", LLMRole.REVIEWER.value: "You are a senior code reviewer...", LLMRole.CHAT.value: "You are AvA, a friendly AI assistant..."}.get(self.role_value_str, "You are a helpful AI assistant.")
     def _apply_preset(self, preset: PersonalityPreset):
         self.personality_text.setPlainText(preset.personality)
         if hasattr(self.parent_section, 'set_temperature'): self.parent_section.set_temperature(preset.temperature)
@@ -261,11 +264,13 @@ class ModelConfigurationDialog(QDialog):
 
         self.architect_section = RoleSection("🏛️ Architect", LLMRole.ARCHITECT, 0.2, self.personality_manager)
         self.coder_section = RoleSection("⚙️ Coder", LLMRole.CODER, 0.1, self.personality_manager)
+        self.assembler_section = RoleSection("🧩 Assembler", LLMRole.ASSEMBLER, 0.3, self.personality_manager)
         self.reviewer_section = RoleSection("🧐 Reviewer", LLMRole.REVIEWER, 0.4, self.personality_manager)
         self.chat_section = RoleSection("💬 General Chat", LLMRole.CHAT, 0.7, self.personality_manager)
 
         content_layout.addWidget(self.architect_section)
         content_layout.addWidget(self.coder_section)
+        content_layout.addWidget(self.assembler_section)
         content_layout.addWidget(self.reviewer_section)
         content_layout.addWidget(self.chat_section)
 
@@ -281,7 +286,7 @@ class ModelConfigurationDialog(QDialog):
 
     def _populate_models(self):
         available_models = {key: f"{config.provider}/{config.model}" for key, config in self.llm_client.models.items()}
-        all_sections = [self.architect_section, self.coder_section, self.reviewer_section, self.chat_section]
+        all_sections = [self.architect_section, self.coder_section, self.assembler_section, self.reviewer_section, self.chat_section]
         for section in all_sections:
             section.model_combo.clear()
             for key, name in available_models.items():
@@ -290,7 +295,7 @@ class ModelConfigurationDialog(QDialog):
 
     def _load_current_config(self):
         assignments = self.llm_client.role_assignments; personalities = self.llm_client.personalities
-        sections_map = {LLMRole.ARCHITECT: self.architect_section, LLMRole.CODER: self.coder_section, LLMRole.REVIEWER: self.reviewer_section, LLMRole.CHAT: self.chat_section}
+        sections_map = {LLMRole.ARCHITECT: self.architect_section, LLMRole.CODER: self.coder_section, LLMRole.ASSEMBLER: self.assembler_section, LLMRole.REVIEWER: self.reviewer_section, LLMRole.CHAT: self.chat_section}
         for role_enum, section_widget in sections_map.items():
             model_key = assignments.get(role_enum)
             if model_key:
@@ -309,7 +314,7 @@ class ModelConfigurationDialog(QDialog):
         QMessageBox.information(self, "Defaults Restored", "Configuration has been reset to smart defaults.")
 
     def _apply_configuration(self):
-        all_sections = {LLMRole.ARCHITECT: self.architect_section, LLMRole.CODER: self.coder_section, LLMRole.REVIEWER: self.reviewer_section, LLMRole.CHAT: self.chat_section}
+        all_sections = {LLMRole.ARCHITECT: self.architect_section, LLMRole.CODER: self.coder_section, LLMRole.ASSEMBLER: self.assembler_section, LLMRole.REVIEWER: self.reviewer_section, LLMRole.CHAT: self.chat_section}
         new_assignments = {}; new_personalities = {}
         for role_enum, section_widget in all_sections.items():
             selected_model_key = section_widget.get_selected_model()

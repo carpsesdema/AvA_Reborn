@@ -133,6 +133,27 @@ class ProjectStateManager:
         self._invalidate_context_cache()
         self.save_state()
 
+    def get_team_insights(self, context_type: str = "full", limit: int = 10) -> List[TeamInsight]:
+        """
+        Get team insights, sorted by relevance and impact, with a limit.
+        This prevents the context from becoming too large.
+        """
+        # Sort insights by impact level (critical first) and then by timestamp (most recent first)
+        impact_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        sorted_insights = sorted(
+            self.team_insights,
+            key=lambda i: (impact_order.get(i.impact_level, 4), i.timestamp),
+            reverse=True
+        )
+
+        if context_type != "full":
+            # Filter by type if a specific type is requested
+            filtered_insights = [i for i in sorted_insights if i.insight_type == context_type]
+            return filtered_insights[:limit]
+
+        # Return the most relevant insights up to the limit
+        return sorted_insights[:limit]
+
     def get_team_insights_by_type(self, insight_type: str) -> List[TeamInsight]:
         """Get all team insights of a specific type."""
         return [i for i in self.team_insights if i.insight_type == insight_type]
@@ -167,10 +188,10 @@ class ProjectStateManager:
 
         # Add team insights
         context["team_insights"] = {
-            "architectural_insights": [i.to_dict() for i in self.get_team_insights_by_type("architectural")],
-            "implementation_patterns": [i.to_dict() for i in self.get_team_insights_by_type("implementation")],
-            "quality_standards": [i.to_dict() for i in self.get_team_insights_by_type("quality")],
-            "integration_learnings": [i.to_dict() for i in self.get_team_insights_by_type("integration")],
+            "architectural_insights": [i.to_dict() for i in self.get_team_insights("architectural", limit=5)],
+            "implementation_patterns": [i.to_dict() for i in self.get_team_insights("implementation", limit=5)],
+            "quality_standards": [i.to_dict() for i in self.get_team_insights("quality", limit=5)],
+            "integration_learnings": [i.to_dict() for i in self.get_team_insights("integration", limit=5)],
             "applicable_to_current": [i.to_dict() for i in self.get_applicable_insights(for_file)]
         }
 
@@ -187,11 +208,11 @@ class ProjectStateManager:
                            (datetime.now() - i.timestamp).days < 7]  # Last week
 
         return {
-            "recent_priorities": [i.content for i in recent_insights if i.impact_level in ["critical", "high"]],
-            "established_patterns": [i.content for i in self.team_insights if i.insight_type == "implementation"],
-            "quality_focus_areas": [i.content for i in recent_insights if i.insight_type == "quality"],
-            "architectural_decisions": [i.content for i in self.team_insights if i.insight_type == "architectural"],
-            "lessons_learned": [i.content for i in recent_insights if "lesson" in i.content.lower()]
+            "recent_priorities": [i.content for i in recent_insights if i.impact_level in ["critical", "high"]][:5],
+            "established_patterns": [i.content for i in self.team_insights if i.insight_type == "implementation"][:5],
+            "quality_focus_areas": [i.content for i in recent_insights if i.insight_type == "quality"][:5],
+            "architectural_decisions": [i.content for i in self.team_insights if i.insight_type == "architectural"][:5],
+            "lessons_learned": [i.content for i in recent_insights if "lesson" in i.content.lower()][:3]
         }
 
     # All existing methods remain unchanged - just adding new functionality

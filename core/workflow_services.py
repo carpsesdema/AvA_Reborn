@@ -235,8 +235,9 @@ class BaseAIService:
 
             context_parts = []
             for insight in insights[:10]:  # Limit to recent insights
+                # *** FIX: Use attribute access instead of .get() ***
                 context_parts.append(
-                    f"- {insight.get('insight_type', 'general').upper()}: {insight.get('content', '')}"
+                    f"- {insight.insight_type.upper()}: {insight.content}"
                 )
 
             return "\n".join(context_parts)
@@ -273,9 +274,8 @@ class BaseAIService:
 
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
         """Stream response and collect into JSON with error handling."""
+        all_chunks = []
         try:
-            all_chunks = []
-
             async for chunk in self.llm_client.stream_chat(prompt, role=role):
                 if chunk:
                     all_chunks.append(chunk)
