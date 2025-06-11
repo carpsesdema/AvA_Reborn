@@ -191,27 +191,31 @@ class FileTree(QTreeWidget):
             return
 
         try:
-            items = []
-            # Directories first
-            for item_path in sorted(path.iterdir()):
-                if item_path.name.startswith('.') or item_path.name == '__pycache__':
-                    continue
+            # More robust ignore list, matching ProjectStateManager
+            ignore_list = {'.git', 'venv', '.venv', '__pycache__', 'node_modules', 'build', 'dist', '.idea', '.vscode'}
 
-                if item_path.is_dir():
-                    dir_item = QTreeWidgetItem([f"📁 {item_path.name}"])
-                    dir_item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
-                    parent_item.addChild(dir_item)
-                    self._populate_tree(dir_item, item_path)
-                    items.append((dir_item, True))
-                else:
-                    # File icons based on extension
-                    icon = self._get_file_icon(item_path.suffix)
-                    file_item = QTreeWidgetItem([f"{icon} {item_path.name}"])
-                    file_item.setData(0, Qt.ItemDataRole.UserRole, str(item_path))
-                    parent_item.addChild(file_item)
-                    items.append((file_item, False))
+            # Separate and sort dirs and files for cleaner display and processing
+            all_items = list(path.iterdir())
+            dirs = sorted([p for p in all_items if p.is_dir() and p.name not in ignore_list and not p.name.startswith('.')])
+            files = sorted([p for p in all_items if p.is_file() and not p.name.startswith('.')])
+
+            # Process directories first
+            for dir_path in dirs:
+                dir_item = QTreeWidgetItem([f"📁 {dir_path.name}"])
+                dir_item.setData(0, Qt.ItemDataRole.UserRole, str(dir_path))
+                parent_item.addChild(dir_item)
+                # Recurse into the directory
+                self._populate_tree(dir_item, dir_path)
+
+            # Then process files
+            for file_path in files:
+                icon = self._get_file_icon(file_path.suffix)
+                file_item = QTreeWidgetItem([f"{icon} {file_path.name}"])
+                file_item.setData(0, Qt.ItemDataRole.UserRole, str(file_path))
+                parent_item.addChild(file_item)
+
         except PermissionError:
-            pass
+            pass # Silently ignore directories we can't read
 
     def _get_file_icon(self, extension: str) -> str:
         icon_map = {
