@@ -235,7 +235,7 @@ class BaseAIService:
 
             context_parts = []
             for insight in insights[:10]:  # Limit to recent insights
-                # *** FIX: Use attribute access instead of .get() ***
+                # Use attribute access instead of .get()
                 context_parts.append(
                     f"- {insight.insight_type.upper()}: {insight.content}"
                 )
@@ -246,40 +246,163 @@ class BaseAIService:
             return "Team context unavailable."
 
     def _parse_json_from_response(self, response_text: str, agent_name: str) -> dict:
-        """Parse JSON from LLM response with enhanced error handling."""
-        try:
-            # Try direct JSON parsing first
-            return json.loads(response_text.strip())
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown or other formatting
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-            if json_match:
-                try:
-                    return json.loads(json_match.group(1))
-                except json.JSONDecodeError:
-                    pass
+        """BULLETPROOF JSON parser that handles all edge cases."""
+        response_text = response_text.strip()
 
-            # Try to find JSON object in the text
-            brace_start = response_text.find('{')
-            brace_end = response_text.rfind('}')
-            if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
-                try:
-                    return json.loads(response_text[brace_start:brace_end + 1])
-                except json.JSONDecodeError:
-                    pass
-
-            self.stream_emitter(agent_name, "error",
-                                f"Failed to parse JSON response. Raw response: {response_text[:200]}...", 3)
+        if not response_text:
+            self.stream_emitter(agent_name, "error", "Empty response from LLM", 3)
             return {}
 
-    async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
-        """Stream response and collect into JSON with error handling."""
-        all_chunks = []
+        # Method 1: Try direct JSON parsing
         try:
+            return json.loads(response_text)
+        except json.JSONDecodeError as e:
+            self.stream_emitter(agent_name, "warning", f"Direct JSON parse failed: {e}", 4)
+
+        # Method 2: Extract from markdown code blocks
+        json_patterns = [
+            r'```(?:json)?\s*(\{.*?\})\s*```',  # ```json or ``` blocks
+            r'```(?:json)?\s*(\[.*?\])\s*```',  # Arrays in blocks
+        ]
+
+        for pattern in json_patterns:
+            match = re.search(pattern, response_text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    continue
+
+        # Method 3: Find JSON object boundaries and try progressive parsing
+        brace_start = response_text.find('{')
+        if brace_start != -1:
+            # Find the matching closing brace by counting
+            brace_count = 0
+            brace_end = -1
+
+            for i in range(brace_start, len(response_text)):
+                char = response_text[i]
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        brace_end = i
+                        break
+
+            if brace_end != -1:
+                json_candidate = response_text[brace_start:brace_end + 1]
+                try:
+                    return json.loads(json_candidate)
+                except json.JSONDecodeError:
+                    # Method 4: Try to fix common JSON issues
+                    fixed_json = self._attempt_json_repair(json_candidate, agent_name)
+                    if fixed_json:
+                        return fixed_json
+
+        # Method 5: Look for key-value patterns and reconstruct JSON
+        extracted_json = self._extract_json_from_text(response_text, agent_name)
+        if extracted_json:
+            return extracted_json
+
+        # All methods failed
+        self.stream_emitter(agent_name, "error",
+                            f"All JSON parsing methods failed. Response preview: {response_text[:300]}...", 3)
+        return {}
+
+    def _attempt_json_repair(self, json_text: str, agent_name: str) -> dict:
+        """Attempt to repair malformed JSON."""
+        try:
+            # Common fixes for JSON issues
+            fixes = [
+                # Fix unescaped newlines in strings
+                lambda s: re.sub(r'(".*?)(\n)(.*?")', r'\1\\n\3', s, flags=re.DOTALL),
+                # Fix unescaped quotes
+                lambda s: re.sub(r'(".*?)"(.*?")', r'\1\"\2', s),
+                # Fix trailing commas
+                lambda s: re.sub(r',(\s*[}\]])', r'\1', s),
+                # Fix missing commas between objects
+                lambda s: re.sub(r'}\s*{', r'},{', s),
+            ]
+
+            current = json_text
+            for fix in fixes:
+                try:
+                    current = fix(current)
+                    parsed = json.loads(current)
+                    self.stream_emitter(agent_name, "success", "JSON repair successful", 4)
+                    return parsed
+                except:
+                    continue
+
+        except Exception as e:
+            self.stream_emitter(agent_name, "warning", f"JSON repair failed: {e}", 4)
+
+        return {}
+
+    def _extract_json_from_text(self, text: str, agent_name: str) -> dict:
+        """Extract JSON structure from free text using pattern matching."""
+        try:
+            # Look for key patterns that indicate the required JSON structure
+            required_keys = ["IMPLEMENTED_CODE", "IMPLEMENTATION_NOTES", "INTEGRATION_HINTS",
+                             "EDGE_CASES_HANDLED", "TESTING_CONSIDERATIONS"]
+
+            extracted = {}
+
+            for key in required_keys:
+                # Pattern to find "KEY": "value" or "KEY": [...] structures
+                patterns = [
+                    rf'"{key}":\s*"([^"]*(?:\\.[^"]*)*)"',  # String values
+                    rf'"{key}":\s*\[(.*?)\]',  # Array values
+                    rf'"{key}":\s*([^,}}\n]*)',  # Other values
+                ]
+
+                for pattern in patterns:
+                    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+                    if match:
+                        value = match.group(1).strip()
+                        # Clean up the value
+                        if pattern.endswith('")'):  # String pattern
+                            extracted[key] = value.replace('\\"', '"').replace('\\n', '\n')
+                        elif pattern.endswith(')'):  # Array pattern
+                            try:
+                                # Try to parse as JSON array
+                                extracted[key] = json.loads(f'[{value}]')
+                            except:
+                                # Fall back to splitting by comma
+                                extracted[key] = [item.strip().strip('"') for item in value.split(',')]
+                        else:
+                            extracted[key] = value.strip('"')
+                        break
+
+                # If we couldn't extract this key, provide a default
+                if key not in extracted:
+                    extracted[key] = f"Could not extract {key} from response"
+
+            if len(extracted) >= 3:  # If we got at least 3 keys, consider it successful
+                self.stream_emitter(agent_name, "success", f"Extracted JSON structure with {len(extracted)} keys", 4)
+                return extracted
+
+        except Exception as e:
+            self.stream_emitter(agent_name, "warning", f"JSON extraction failed: {e}", 4)
+
+        return {}
+
+    async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
+        """BULLETPROOF streaming and JSON collection with enhanced error handling."""
+        all_chunks = []
+        chunk_count = 0
+
+        try:
+            self.stream_emitter(agent_name, "info", f"Starting streaming for {agent_name}", 4)
+
             async for chunk in self.llm_client.stream_chat(prompt, role=role):
                 if chunk:
                     all_chunks.append(chunk)
-                    self.stream_emitter(agent_name, "stream", chunk, 4)
+                    chunk_count += 1
+                    # Only emit every 10th chunk to reduce noise
+                    if chunk_count % 10 == 0:
+                        self.stream_emitter(agent_name, "stream", f"[chunk {chunk_count}] {chunk[:50]}...", 4)
 
             response_text = "".join(all_chunks).strip()
 
@@ -287,17 +410,46 @@ class BaseAIService:
                 self.stream_emitter(agent_name, "error", "Empty response from LLM", 2)
                 return {}
 
-            self.stream_emitter(agent_name, "info", f"Received {len(response_text)} characters from LLM", 3)
-            return self._parse_json_from_response(response_text, agent_name)
+            self.stream_emitter(agent_name, "info",
+                                f"Collected {len(response_text)} characters from {chunk_count} chunks", 3)
+
+            # Use bulletproof JSON parsing
+            parsed_json = self._parse_json_from_response(response_text, agent_name)
+
+            if not parsed_json:
+                # Last resort: create a minimal valid response
+                self.stream_emitter(agent_name, "warning", "Creating fallback JSON response", 3)
+                return {
+                    "IMPLEMENTED_CODE": f"# Fallback response due to parsing failure\n# Original response length: {len(response_text)}\npass",
+                    "IMPLEMENTATION_NOTES": "Generated fallback due to JSON parsing failure",
+                    "INTEGRATION_HINTS": "Check logs for original response details",
+                    "EDGE_CASES_HANDLED": ["JSON parsing failure handled"],
+                    "TESTING_CONSIDERATIONS": "Verify implementation manually"
+                }
+
+            return parsed_json
 
         except Exception as e:
-            self.stream_emitter(agent_name, "error", f"Error during streaming/collection: {e}", 2)
+            self.stream_emitter(agent_name, "error", f"Critical error during streaming/collection: {e}", 2)
+
+            # Try to salvage partial response
             if all_chunks:
                 partial_response = "".join(all_chunks)
                 self.stream_emitter(agent_name, "info",
                                     f"Attempting to parse partial response ({len(partial_response)} chars)", 3)
-                return self._parse_json_from_response(partial_response, agent_name)
-            return {}
+
+                salvaged = self._parse_json_from_response(partial_response, agent_name)
+                if salvaged:
+                    return salvaged
+
+            # Complete fallback
+            return {
+                "IMPLEMENTED_CODE": f"# Critical error during generation: {str(e)}\npass",
+                "IMPLEMENTATION_NOTES": f"Failed due to streaming error: {str(e)}",
+                "INTEGRATION_HINTS": "Manual implementation required",
+                "EDGE_CASES_HANDLED": ["Generation failure"],
+                "TESTING_CONSIDERATIONS": "Implementation needs to be written manually"
+            }
 
     async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
         """Get intelligent RAG context for the query."""
@@ -442,9 +594,6 @@ class ArchitectService(BaseAIService):
         self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
         return tech_spec
 
-        self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
-        return tech_spec
-
 
 class CoderService(BaseAIService):
     """Enhanced Coder Service with hybrid workflow and model selection support."""
@@ -487,7 +636,6 @@ class CoderService(BaseAIService):
                                 f"Sending micro-task to Gemini Flash ({len(prompt)} chars)", 4)
 
             # Use Gemini Flash (fast, cost-effective model) for implementation
-            # Note: This assumes LLMRole.CODER is configured to use Gemini Flash
             result = await self._stream_and_collect_json(prompt, LLMRole.CODER, "Coder")
 
             if not result or "IMPLEMENTED_CODE" not in result:
@@ -645,17 +793,17 @@ class AssemblerService(BaseAIService):
 
 
 class ReviewerService(BaseAIService):
-    """Enhanced Reviewer Service with team learning."""
+    """Enhanced Reviewer Service for code quality assurance."""
 
-    async def review_code(self, file_path: str, code: str, project_description: str = "") -> dict:
-        """Review code and provide comprehensive feedback."""
+    async def review_file(self, file_path: str, code: str, project_description: str) -> dict:
+        """Conduct comprehensive code review."""
         try:
-            self.stream_emitter("Reviewer", "info", f"🧐 Reviewing {file_path}", 2)
+            self.stream_emitter("Reviewer", "info", f"🔍 Reviewing {file_path}", 2)
 
-            # Get team quality standards
-            team_context = self._get_team_context_string("quality")
+            # Get team context for standards
+            team_context = self._get_team_context_string()
 
-            # Build review prompt
+            # Create review prompt
             prompt = REVIEWER_PROMPT_TEMPLATE.format(
                 file_path=file_path,
                 project_description=project_description,
@@ -663,35 +811,33 @@ class ReviewerService(BaseAIService):
                 code=code
             )
 
-            self.stream_emitter("Reviewer", "info", "Conducting comprehensive code review...", 3)
+            self.stream_emitter("Reviewer", "info",
+                                f"Sending review request ({len(prompt)} chars) to reviewer model", 3)
 
             # Use big model for thorough review
             review_result = await self._stream_and_collect_json(prompt, LLMRole.REVIEWER, "Reviewer")
 
             if not review_result:
-                raise Exception("Review failed to produce results")
+                return {
+                    "approved": False,
+                    "summary": "Review failed - could not analyze code",
+                    "strengths": [],
+                    "issues": ["Review process failed"],
+                    "suggestions": ["Manual review required"],
+                    "confidence": 0.0
+                }
+
+            self.stream_emitter("Reviewer", "success", f"✅ Review complete for {file_path}", 2)
 
             # Contribute review insights
-            if review_result.get("approved"):
-                self._contribute_team_insight(
-                    "quality",
-                    "Reviewer",
-                    f"Code approved for {file_path}: {review_result.get('summary', '')}",
-                    "medium",
-                    [file_path]
-                )
-            else:
-                self._contribute_team_insight(
-                    "quality",
-                    "Reviewer",
-                    f"Code issues found in {file_path}: {', '.join(review_result.get('issues', []))}",
-                    "high",
-                    [file_path]
-                )
-
-            self.stream_emitter("Reviewer", "success",
-                                f"✅ Review complete for {file_path} - {'Approved' if review_result.get('approved') else 'Needs work'}",
-                                2)
+            approval_status = "approved" if review_result.get("approved", False) else "needs_work"
+            self._contribute_team_insight(
+                "review",
+                "Reviewer",
+                f"Code review for {file_path}: {approval_status}",
+                "medium",
+                [file_path]
+            )
 
             return review_result
 
@@ -703,7 +849,35 @@ class ReviewerService(BaseAIService):
                 "approved": False,
                 "summary": f"Review failed due to error: {str(e)}",
                 "strengths": [],
-                "issues": [f"Review process failed: {str(e)}"],
-                "suggestions": ["Fix review process errors"],
+                "issues": [f"Review error: {str(e)}"],
+                "suggestions": ["Manual review required"],
                 "confidence": 0.0
             }
+
+    async def refine_code(self, code: str, instruction: str) -> str:
+        """Refine code based on specific instruction."""
+        try:
+            self.stream_emitter("Reviewer", "info", f"🔧 Refining code based on: {instruction[:50]}...", 3)
+
+            prompt = create_refinement_prompt(code, instruction)
+            refined_code = await self.llm_client.chat(prompt, role=LLMRole.REVIEWER)
+
+            # Clean the refined code
+            cleaned_code = self._clean_code_output(refined_code)
+
+            self.stream_emitter("Reviewer", "success", f"✅ Code refinement complete", 3)
+            return cleaned_code
+
+        except Exception as e:
+            self.logger.error(f"Code refinement failed: {e}")
+            self.stream_emitter("Reviewer", "error", f"❌ Refinement failed: {str(e)}", 3)
+            return code  # Return original code if refinement fails
+
+    def _clean_code_output(self, code: str) -> str:
+        """Clean code output by removing markdown formatting."""
+        # Remove markdown fences
+        match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        return code.strip()

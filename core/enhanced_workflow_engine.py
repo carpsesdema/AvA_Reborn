@@ -110,6 +110,9 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "stage_start",
                                          f"🔍 Starting project analysis for: {project_path.name}", "0")
 
+            # FIXED: IMMEDIATELY emit project_loaded so code viewer gets populated right away
+            self.project_loaded.emit(project_path_str)
+
             # Initialize project state manager for this project
             if not self.project_state_manager:
                 self.project_state_manager = ProjectStateManager(project_path)
@@ -145,7 +148,19 @@ class HybridWorkflowEngine(QObject):
             self.logger.error(f"Analysis failed: {e}", exc_info=True)
             self.detailed_log_event.emit("HybridEngine", "error",
                                          f"❌ Analysis failed: {str(e)}", "0")
-            self.analysis_completed.emit(project_path_str, {})
+
+            # FIXED: Even if analysis fails, still load the project for manual editing
+            try:
+                project_path = Path(project_path_str)
+                self.current_tech_spec = self._create_basic_tech_spec_from_files(project_path)
+                self.is_existing_project_loaded = True
+                self.original_project_path = project_path
+                self.detailed_log_event.emit("HybridEngine", "info",
+                                             "Using fallback tech spec for future modifications", "0")
+            except Exception as fallback_error:
+                self.logger.error(f"Failed to create fallback tech spec: {fallback_error}")
+
+            self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
         """Execute the V6.0 Hybrid workflow combining architecture and micro-task orchestration."""
