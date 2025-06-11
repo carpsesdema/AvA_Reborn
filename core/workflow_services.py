@@ -498,16 +498,16 @@ class CoderService(BaseAIService):
     """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
 
     def _clean_code_output(self, code: str) -> str:
-        """Removes markdown fences from code output."""
+        """Removes markdown fences and inline backticks from code output."""
         # This regex handles optional language specifier and leading/trailing whitespace
         match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
         if match:
-            return match.group(1).strip()
-        # Fallback for code that might not have the language specifier but has fences
-        match = re.search(r"```\s*\n(.*?)\n\s*```", code, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        return code.strip()
+            cleaned_code = match.group(1)
+        else:
+            cleaned_code = code
+
+        # Remove any rogue inline backticks and strip whitespace
+        return cleaned_code.replace('`', '').strip()
 
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:
@@ -535,7 +535,7 @@ class CoderService(BaseAIService):
 
         self.stream_emitter("Coder", "success", f"Multi-pass generation finished for {file_path}!", 1)
 
-        # --- MODIFIED: Clean the final code before returning ---
+        # Clean the final code before returning
         clean_final_code = self._clean_code_output(final_code)
 
         # Analyze the final generated code and contribute insights

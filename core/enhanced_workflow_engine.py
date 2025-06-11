@@ -42,10 +42,11 @@ class EnhancedWorkflowEngine(QObject):
         self.rag_manager = rag_manager
         self.logger = logging.getLogger(__name__)
 
-        self.project_state_manager: ProjectStateManager = None
-        self.current_tech_spec: dict = None
+        self.project_state_manager: Optional[ProjectStateManager] = None
+        self.current_tech_spec: Optional[dict] = None
         self.is_existing_project_loaded = False
         self.original_project_path: Optional[Path] = None
+        self.active_working_path: Optional[Path] = None  # NEW: Tracks the current directory for modifications
         self.original_user_prompt: str = ""
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
@@ -111,9 +112,13 @@ class EnhancedWorkflowEngine(QObject):
 
             self.current_tech_spec = tech_spec
             self.is_existing_project_loaded = True
-            self.original_project_path = Path(project_path_str)
 
-            self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Handing off to UI.", "0")
+            # Set both original and active paths to the loaded project
+            self.original_project_path = Path(project_path_str)
+            self.active_working_path = Path(project_path_str)
+
+            self.detailed_log_event.emit("WorkflowEngine", "success", "✅ Analysis complete! Ready for modification.",
+                                         "0")
             self.analysis_completed.emit(project_path_str, self.current_tech_spec)
             self.project_loaded.emit(project_path_str)
 
@@ -129,10 +134,11 @@ class EnhancedWorkflowEngine(QObject):
         gdd_context = ""
 
         try:
-            if self.is_existing_project_loaded:
+            # Determine if this is a modification and get necessary context
+            if self.is_existing_project_loaded and self.active_working_path:
                 self.workflow_started.emit("Project Modification", user_prompt[:60] + '...')
-                project_name = self.current_tech_spec.get("project_name", self.original_project_path.name)
-                gdd_context = self._read_gdd_context(self.original_project_path, project_name)
+                project_name = self.current_tech_spec.get("project_name", self.active_working_path.name)
+                gdd_context = self._read_gdd_context(self.active_working_path, project_name)
             else:
                 self.workflow_started.emit("New Project", user_prompt[:60] + '...')
 
@@ -142,16 +148,31 @@ class EnhancedWorkflowEngine(QObject):
             if not tech_spec or 'technical_specs' not in tech_spec:
                 raise Exception("Architecture failed. Could not produce a valid tech spec.")
 
-            # STAGE 2: Build Project Directory
             project_name = tech_spec.get("project_name", "ai_project")
+
+            # STAGE 2: Build Project Directory (with new iterative logic)
             builder = ProjectBuilder("./workspace", self.detailed_log_event.emit, self.logger)
-            project_dir = builder.setup_project_directory(
-                project_name, self.is_existing_project_loaded, user_prompt, self.original_project_path
-            )
+
+            # --- NEW ITERATIVE WORKFLOW LOGIC ---
+            if self.is_existing_project_loaded and self.active_working_path == self.original_project_path:
+                # First modification: Copy the original project to a new working directory
+                self.active_working_path = builder.setup_project_directory(
+                    project_name, True, user_prompt, self.original_project_path
+                )
+            elif self.is_existing_project_loaded:
+                # Subsequent modification: Use the existing active directory
+                self.detailed_log_event.emit("WorkflowEngine", "info",
+                                             f"Iterating on existing directory: {self.active_working_path.name}", "1")
+            else:
+                # New project from scratch
+                self.active_working_path = builder.setup_project_directory(
+                    project_name, False, user_prompt
+                )
+            # --- END OF NEW LOGIC ---
 
             # STAGE 3: Execute AI Team
-            self._setup_project_state_and_services(project_dir)
-            self.project_loaded.emit(str(project_dir))
+            self._setup_project_state_and_services(self.active_working_path)
+            self.project_loaded.emit(str(self.active_working_path))
 
             executor = AITeamExecutor(self.coder_service, self.reviewer_service, self.detailed_log_event.emit,
                                       self.logger)
@@ -160,7 +181,7 @@ class EnhancedWorkflowEngine(QObject):
 
             # STAGE 4: Finalize Project
             finalizer = ProjectFinalizer(self.detailed_log_event.emit, self.logger)
-            finalizer.finalize_project(project_dir, ai_results.get("generated_files", {}), tech_spec,
+            finalizer.finalize_project(self.active_working_path, ai_results.get("generated_files", {}), tech_spec,
                                        self.project_state_manager, user_prompt)
 
             # Announce completion
@@ -168,7 +189,7 @@ class EnhancedWorkflowEngine(QObject):
             final_result = {
                 "success": True,
                 "project_name": project_name,
-                "project_dir": str(project_dir),
+                "project_dir": str(self.active_working_path),
                 "num_files": len(ai_results.get("generated_files", {})),
                 "files_created": list(ai_results.get("generated_files", {}).keys()),
                 "elapsed_time": elapsed_time,
