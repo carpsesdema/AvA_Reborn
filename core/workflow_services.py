@@ -112,7 +112,7 @@ CODER_PROMPT_TEMPLATE = textwrap.dedent("""
     3. **COMPLETE IMPLEMENTATION**: Generate the ENTIRE file, not just stubs or templates.
     4. **DEPENDENCY CONTEXT**: Use the provided dependency information to ensure proper imports and integrations.
 
-    Generate high-quality, production-ready Python code. Return ONLY the complete source code, no explanations or markdown formatting.
+    **CRITICAL OUTPUT FORMAT**: Your entire response MUST be ONLY the raw Python code for the file. Do NOT include any explanations, markdown formatting like ```python, or any text other than the code itself. The system will fail if it receives anything else.
 """)
 
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
@@ -498,16 +498,29 @@ class CoderService(BaseAIService):
     """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
 
     def _clean_code_output(self, code: str) -> str:
-        """Removes markdown fences from code output, making it more robust."""
-        # Use a more forgiving regex to find code blocks, matching across newlines
-        match = re.search(r"```(?:python|py)?\s*(.*?)```", code, re.DOTALL)
+        """
+        More robustly removes markdown fences and other chatter from code output.
+        It prioritizes finding a python code block, but will fall back to cleaning the raw text.
+        """
+        # Look for a Python code block using a non-greedy search
+        match = re.search(r"```(?:python|py)?\s*(.*?)\s*```", code, re.DOTALL)
         if match:
-            # If fences are found, return the content inside them, stripped of whitespace.
+            # If a code block is found, return its content, stripped.
             return match.group(1).strip()
-        else:
-            # If no fences are found, return the original code, stripped of whitespace.
-            # This handles cases where the LLM returns code without fences.
-            return code.strip()
+
+        # Fallback for when the LLM forgets the markdown fences
+        # This is more risky but necessary for inconsistent models.
+        # We can try to remove common conversational prefixes.
+        lines = code.strip().split('\n')
+
+        # If the first line looks like a conversational intro, remove it.
+        # This is a heuristic and might need adjustment.
+        common_intros = ["here is the code", "certainly, here's the python code", "```"]
+        if lines and any(intro in lines[0].lower() for intro in common_intros):
+            lines.pop(0)
+
+        # Re-join and strip again
+        return '\n'.join(lines).strip()
 
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:
