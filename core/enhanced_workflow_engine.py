@@ -185,6 +185,14 @@ class EnhancedWorkflowEngine(QObject):
             finalizer.finalize_project(self.active_working_path, ai_results.get("generated_files", {}), tech_spec,
                                        self.project_state_manager, user_prompt)
 
+            # --- KEY CHANGE: Notify the UI about each generated file ---
+            self.detailed_log_event.emit("WorkflowEngine", "info", "Notifying UI of file updates...", "1")
+            generated_files_dict = ai_results.get("generated_files", {})
+            for filename in generated_files_dict.keys():
+                full_path = self.active_working_path / filename
+                self.file_generated.emit(str(full_path))
+            # --- END KEY CHANGE ---
+
             # Announce completion
             elapsed_time = (datetime.now() - workflow_start_time).total_seconds()
             final_result = {
