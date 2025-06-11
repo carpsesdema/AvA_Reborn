@@ -498,16 +498,16 @@ class CoderService(BaseAIService):
     """Enhanced Coder Service with a more efficient Multi-Pass Refinement."""
 
     def _clean_code_output(self, code: str) -> str:
-        """Removes markdown fences and inline backticks from code output."""
-        # This regex handles optional language specifier and leading/trailing whitespace
-        match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        """Removes markdown fences from code output, making it more robust."""
+        # Use a more forgiving regex to find code blocks, matching across newlines
+        match = re.search(r"```(?:python|py)?\s*(.*?)```", code, re.DOTALL)
         if match:
-            cleaned_code = match.group(1)
+            # If fences are found, return the content inside them, stripped of whitespace.
+            return match.group(1).strip()
         else:
-            cleaned_code = code
-
-        # Remove any rogue inline backticks and strip whitespace
-        return cleaned_code.replace('`', '').strip()
+            # If no fences are found, return the original code, stripped of whitespace.
+            # This handles cases where the LLM returns code without fences.
+            return code.strip()
 
     async def generate_file_from_spec(self, file_path: str, file_spec: dict, project_context: dict = None,
                                       dependency_context: str = "") -> str:

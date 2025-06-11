@@ -98,45 +98,63 @@ class AITeamExecutor:
         """Builds a dependency graph from the tech spec."""
         dependencies = defaultdict(list)
         file_map = {}  # Maps key (e.g., 'main') to full filename (e.g., 'main.py')
+        all_file_keys = set()
 
-        for full_filename, spec in tech_spec.get("technical_specs", {}).items():
-            key = full_filename.replace('.py', '')
+        # First pass: collect all file keys and map them
+        for full_filename in tech_spec.get("technical_specs", {}).keys():
+            key = full_filename.split('.')[0]  # More robust than replace
             file_map[key] = full_filename
-            # Ensure dependencies are also stored with the base key
+            all_file_keys.add(key)
+
+        # Second pass: build dependencies, ensuring they are valid project files
+        for full_filename, spec in tech_spec.get("technical_specs", {}).items():
+            key = full_filename.split('.')[0]
+            # Ensure the key itself is in the dependencies map
+            dependencies[key] = []
             for dep in spec.get("dependencies", []):
-                dependencies[key].append(dep.replace('.py', ''))
+                dep_key = dep.split('.')[0]
+                # Only add dependency if it's a known file in the project
+                if dep_key in all_file_keys:
+                    dependencies[key].append(dep_key)
 
         return dict(dependencies), file_map
 
     def _determine_generation_stages(self, dependencies: dict) -> List[List[str]]:
         """Determines parallel generation stages using Kahn's algorithm for topological sorting."""
         in_degree = {u: 0 for u in dependencies}
+        # Correctly calculate in-degrees
         for u in dependencies:
             for v in dependencies[u]:
-                in_degree[v] = in_degree.get(v, 0) + 1
+                if v in in_degree:  # Ensure dependency is a node in our graph
+                    in_degree[v] += 1
 
         # Queue for all nodes with in-degree 0
         queue = deque([u for u, deg in in_degree.items() if deg == 0])
 
         stages = []
+        count = 0
         while queue:
             current_stage = list(queue)
             stages.append(current_stage)
 
             for _ in range(len(current_stage)):
                 u = queue.popleft()
+                count += 1
                 for v in dependencies.get(u, []):
-                    # This check is important because a dependency might not be a key in the graph (e.g., external library)
                     if v in in_degree:
                         in_degree[v] -= 1
                         if in_degree[v] == 0:
                             queue.append(v)
 
-        # Check for cycles (if not all nodes are in stages)
-        if len([item for sublist in stages for item in sublist]) != len(dependencies):
-            self.logger.error("A cycle was detected in the dependency graph. Parallel execution may fail.")
-            # Fallback to a simpler, potentially incorrect order to avoid crashing
-            return [list(dependencies.keys())]
+        # Check for cycles: if count doesn't match total nodes, there's a cycle.
+        if count != len(dependencies):
+            cycle_nodes = {node for node, deg in in_degree.items() if deg > 0}
+            self.logger.error(
+                f"A cycle was detected in the dependency graph involving nodes: {cycle_nodes}. Execution order may be incorrect.")
+            # Add remaining nodes in a final stage to attempt recovery
+            remaining_nodes = list(cycle_nodes)
+            if remaining_nodes:
+                stages.append(remaining_nodes)
 
         return stages
 

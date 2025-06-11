@@ -46,7 +46,7 @@ class EnhancedWorkflowEngine(QObject):
         self.current_tech_spec: Optional[dict] = None
         self.is_existing_project_loaded = False
         self.original_project_path: Optional[Path] = None
-        self.active_working_path: Optional[Path] = None  # NEW: Tracks the current directory for modifications
+        self.active_working_path: Optional[Path] = None  # Tracks the current directory for modifications
         self.original_user_prompt: str = ""
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
@@ -137,8 +137,9 @@ class EnhancedWorkflowEngine(QObject):
             # Determine if this is a modification and get necessary context
             if self.is_existing_project_loaded and self.active_working_path:
                 self.workflow_started.emit("Project Modification", user_prompt[:60] + '...')
-                project_name = self.current_tech_spec.get("project_name", self.active_working_path.name)
-                gdd_context = self._read_gdd_context(self.active_working_path, project_name)
+                project_name_for_gdd = self.current_tech_spec.get("project_name", self.active_working_path.name)
+                # Read GDD from the active working path, which might be the dev branch
+                gdd_context = self._read_gdd_context(self.active_working_path, project_name_for_gdd)
             else:
                 self.workflow_started.emit("New Project", user_prompt[:60] + '...')
 
@@ -150,25 +151,25 @@ class EnhancedWorkflowEngine(QObject):
 
             project_name = tech_spec.get("project_name", "ai_project")
 
-            # STAGE 2: Build Project Directory (with new iterative logic)
+            # STAGE 2: Build Project Directory (with new simplified logic)
             builder = ProjectBuilder("./workspace", self.detailed_log_event.emit, self.logger)
 
-            # --- NEW ITERATIVE WORKFLOW LOGIC ---
-            if self.is_existing_project_loaded and self.active_working_path == self.original_project_path:
-                # First modification: Copy the original project to a new working directory
+            if self.is_existing_project_loaded:
+                # Let the builder handle creating the dev branch if it doesn't exist
                 self.active_working_path = builder.setup_project_directory(
-                    project_name, True, user_prompt, self.original_project_path
+                    project_name, is_modification=True, original_user_prompt=user_prompt,
+                    original_project_path=self.original_project_path
                 )
-            elif self.is_existing_project_loaded:
-                # Subsequent modification: Use the existing active directory
-                self.detailed_log_event.emit("WorkflowEngine", "info",
-                                             f"Iterating on existing directory: {self.active_working_path.name}", "1")
             else:
-                # New project from scratch
+                # This is a new project from scratch
                 self.active_working_path = builder.setup_project_directory(
-                    project_name, False, user_prompt
+                    project_name, is_modification=False, original_user_prompt=user_prompt
                 )
-            # --- END OF NEW LOGIC ---
+
+            # This is a new project, so update state to reflect it's now "loaded"
+            if not self.is_existing_project_loaded:
+                self.is_existing_project_loaded = True
+                self.original_project_path = self.active_working_path
 
             # STAGE 3: Execute AI Team
             self._setup_project_state_and_services(self.active_working_path)

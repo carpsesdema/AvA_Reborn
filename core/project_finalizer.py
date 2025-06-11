@@ -119,12 +119,15 @@ class ProjectFinalizer:
 
     def _update_gdd_log(self, project_path: Path, project_name: str, user_prompt: str, results: Dict[str, Any]):
         """Updates the project's GDD with the latest workflow results."""
-        sanitized_name = "".join(c for c in project_name if c.isalnum() or c in ('_', '-')).rstrip() or "ava_project"
-        gdd_file_path = project_path / f"{sanitized_name}_GDD.md"
 
-        if not gdd_file_path.exists():
-            self.logger.error(f"Could not find GDD file to update at {gdd_file_path}.")
+        # --- KEY CHANGE: Find the GDD file instead of constructing its name ---
+        gdd_files = list(project_path.glob("*_GDD.md"))
+        if not gdd_files:
+            self.logger.warning(f"Could not find a GDD file to update in {project_path}.")
             return
+
+        gdd_file_path = gdd_files[0]  # Use the first one found
+        # --- END CHANGE ---
 
         self.stream_emitter("ProjectFinalizer", "file_op", f"Updating GDD log: {gdd_file_path.name}", "2")
         files_created = ", ".join(results.get("files_created", []))

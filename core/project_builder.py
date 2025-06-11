@@ -24,6 +24,7 @@ class ProjectBuilder:
                                 original_project_path: Optional[Path] = None) -> Path:
         """
         Creates the project directory, copying existing files if necessary.
+        For modifications, it creates a stable '_dev' directory branch once.
 
         Args:
             project_name: The name for the new project or modification.
@@ -34,29 +35,36 @@ class ProjectBuilder:
         Returns:
             The path to the newly created and prepared project directory.
         """
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-
         if is_modification:
             if not original_project_path:
                 raise ValueError("Original project path must be provided for modifications.")
-            dir_name = f"{original_project_path.name}_MOD_{timestamp}"
-            project_dir = self.workspace_root / dir_name
 
-            self.stream_emitter("ProjectBuilder", "file_op", f"Copying original project to '{project_dir}'...", "1")
-            try:
-                shutil.copytree(original_project_path, project_dir, dirs_exist_ok=True,
-                                ignore=shutil.ignore_patterns('venv', '__pycache__', '.git'))
-                self.stream_emitter("ProjectBuilder", "success", "Project copy complete.", "1")
-            except Exception as e:
-                self.logger.error(f"Failed to copy project: {e}", exc_info=True)
-                raise IOError(f"Failed to create a copy of the existing project: {e}")
-        else:
+            # Create a predictable "development branch" directory name
+            dev_dir_name = f"{original_project_path.name}_dev"
+            project_dir = self.workspace_root / dev_dir_name
+
+            # --- KEY CHANGE: Only copy if the dev directory doesn't already exist ---
+            if not project_dir.exists():
+                self.stream_emitter("ProjectBuilder", "file_op", f"Creating development branch at '{project_dir}'...",
+                                    "1")
+                try:
+                    # Use dirs_exist_ok=False to be safe, since we check for existence first.
+                    shutil.copytree(original_project_path, project_dir, dirs_exist_ok=False,
+                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git', '.idea', '.vscode'))
+                    self.stream_emitter("ProjectBuilder", "success", "Branch created successfully.", "1")
+                except Exception as e:
+                    self.logger.error(f"Failed to copy project to dev branch: {e}", exc_info=True)
+                    raise IOError(f"Failed to create development branch: {e}")
+            else:
+                self.stream_emitter("ProjectBuilder", "info", f"Using existing development branch: '{project_dir}'",
+                                    "1")
+
+        else:  # This is a new project from scratch
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             dir_name = f"{project_name}_{timestamp}"
             project_dir = self.workspace_root / dir_name
             project_dir.mkdir(parents=True, exist_ok=True)
             self.stream_emitter("ProjectBuilder", "file_op", f"New project directory created: {project_dir}", "1")
-
-            # For new projects, ensure the GDD is created right away.
             self._ensure_gdd_exists(project_dir, project_name, original_user_prompt)
 
         return project_dir
