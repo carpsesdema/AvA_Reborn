@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, Signal
 from core.workflow_services import ArchitectService, CoderService, ReviewerService, AssemblerService
 from core.project_state_manager import ProjectStateManager
 from core.enhanced_micro_task_engine import StreamlinedMicroTaskEngine, SimpleTaskSpec
+from core.project_builder import ProjectBuilder  # FIXED: Import the proper ProjectBuilder
 
 
 class HybridWorkflowEngine(QObject):
@@ -63,6 +64,15 @@ class HybridWorkflowEngine(QObject):
             self.llm_client,
             self.project_state_manager,
             self.rag_manager
+        )
+
+        # FIXED: Initialize ProjectBuilder for proper sandbox/branching
+        from core.config import ConfigManager
+        config = ConfigManager()
+        self.project_builder = ProjectBuilder(
+            workspace_root=config.app_config.workspace_path,
+            stream_emitter=service_log_emitter,
+            logger=self.logger
         )
 
         self._connect_terminal_signals()
@@ -127,31 +137,18 @@ class HybridWorkflowEngine(QObject):
             self._ensure_gdd_exists(project_path, project_name, project_description)
 
             self.detailed_log_event.emit("HybridEngine", "success",
-                                         "✅ Analysis complete! Technical spec created.", "0")
+                                         "✅ Analysis complete! Technical spec created. Ready for modifications!", "0")
 
             self.analysis_completed.emit(project_path_str, self.current_tech_spec)
-            self.project_loaded.emit(project_path_str)
 
         except Exception as e:
-            self.logger.error(f"❌ Analysis failed: {e}", exc_info=True)
-            self.detailed_log_event.emit("HybridEngine", "error", f"❌ Analysis Error: {str(e)}", "0")
+            self.logger.error(f"Analysis failed: {e}", exc_info=True)
+            self.detailed_log_event.emit("HybridEngine", "error",
+                                         f"❌ Analysis failed: {str(e)}", "0")
+            self.analysis_completed.emit(project_path_str, {})
 
-            # Create fallback tech spec
-            try:
-                project_path = Path(project_path_str)
-                self.current_tech_spec = self._create_basic_tech_spec_from_files(project_path)
-                self.is_existing_project_loaded = True
-                self.original_project_path = project_path
-                self.detailed_log_event.emit("HybridEngine", "info",
-                                             "Using fallback tech spec for future modifications", "0")
-            except Exception as fallback_error:
-                self.logger.error(f"Failed to create fallback tech spec: {fallback_error}")
-
-            # Still emit project_loaded signal
-            self.project_loaded.emit(project_path_str)
-
-    async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: List[Dict] = None):
-        """Execute the hybrid workflow with micro-task orchestration."""
+    async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
+        """Execute the V6.0 Hybrid workflow combining architecture and micro-task orchestration."""
         self.logger.info(f"🚀 Starting V6.0 Hybrid workflow: {user_prompt[:100]}...")
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
@@ -170,7 +167,7 @@ class HybridWorkflowEngine(QObject):
                                          "🚀 Initializing HYBRID NEW PROJECT workflow...", "0")
 
         try:
-            # Phase 1: Architecture (Big Model)
+            # Phase 1: Architecture (Big Model) - This creates detailed component specs
             full_user_prompt = f"{user_prompt}\n\n--- GDD CONTEXT ---\n{gdd_context}"
             self.workflow_progress.emit("planning", "🧠 Architecting project with big model...")
 
@@ -181,7 +178,7 @@ class HybridWorkflowEngine(QObject):
 
             self.current_tech_spec = tech_spec
 
-            # Phase 2: Project Setup
+            # Phase 2: Project Setup - FIXED: Use ProjectBuilder for proper branching
             project_dir = await self._setup_project_directory(tech_spec)
 
             # Initialize project state if not already done
@@ -189,7 +186,7 @@ class HybridWorkflowEngine(QObject):
                 self.project_state_manager = ProjectStateManager(project_dir)
                 self.set_project_state(self.project_state_manager)
 
-            # Phase 3: Hybrid File Generation
+            # Phase 3: Hybrid File Generation - The core micro-task system
             await self._execute_hybrid_file_generation(tech_spec, project_dir)
 
             # Phase 4: Finalization
@@ -199,161 +196,248 @@ class HybridWorkflowEngine(QObject):
             self.workflow_progress.emit("complete", "✅ Hybrid workflow complete!")
 
         except Exception as e:
-            self.logger.error(f"❌ Hybrid Workflow failed: {e}", exc_info=True)
-            self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow Error: {str(e)}", "0")
-
-            # Emit failure result
-            self.workflow_completed.emit({
-                "success": False,
-                "error": str(e),
-                "files_created": [],
-                "project_directory": None
-            })
+            self.logger.error(f"Hybrid workflow failed: {e}", exc_info=True)
+            self.detailed_log_event.emit("HybridEngine", "error",
+                                         f"❌ Workflow failed: {str(e)}", "0")
+            self.workflow_completed.emit({"success": False, "error": str(e)})
 
     async def _execute_hybrid_file_generation(self, tech_spec: dict, project_dir: Path):
-        """Execute the hybrid approach: micro-tasks + assembly for each file."""
-        technical_specs = tech_spec.get("technical_specs", {})
-        files_to_generate = technical_specs.get("files", {})
+        """Execute hybrid file generation using micro-task orchestration."""
+        self.workflow_progress.emit("generation", "⚡ Generating files with micro-task orchestration...")
 
+        files_to_generate = tech_spec.get("technical_specs", {}).get("files", {})
         if not files_to_generate:
-            self.detailed_log_event.emit("HybridEngine", "warning", "No files specified for generation", "1")
+            self.detailed_log_event.emit("HybridEngine", "warning", "No files specified in tech spec", "2")
             return
 
-        self.detailed_log_event.emit("HybridEngine", "stage_start",
-                                     f"🔄 Starting HYBRID generation for {len(files_to_generate)} files", "1")
-
         generated_files = {}
+        file_count = len(files_to_generate)
 
-        for filename, file_spec in files_to_generate.items():
-            if not file_spec or file_spec.get("skip_generation", False):
+        for idx, (filename, file_spec) in enumerate(files_to_generate.items(), 1):
+            self.task_progress.emit(idx, file_count)
+
+            # Skip files marked for skipping (existing files in modifications)
+            if file_spec.get("skip_generation", False):
                 self.detailed_log_event.emit("HybridEngine", "info",
-                                             f"Skipping {filename} - marked for skip", "2")
+                                             f"⏭️ Skipping {filename} (exists in project)", "3")
                 continue
 
-            self.detailed_log_event.emit("HybridEngine", "info",
-                                         f"🎯 Processing {filename} with hybrid approach", "2")
-
             try:
-                # Step 1: Break file into micro-tasks (Big Model Planning)
-                micro_tasks = await self._create_micro_tasks_for_file(filename, file_spec, tech_spec)
-
-                if not micro_tasks:
-                    self.detailed_log_event.emit("HybridEngine", "warning",
-                                                 f"No micro-tasks generated for {filename}, using fallback", "3")
-                    # Fallback to traditional approach
-                    code = await self.coder_service.generate_file_from_spec(
-                        filename, file_spec,
-                        {"description": tech_spec.get("project_description", "")},
-                        self._build_dependency_context(file_spec.get("dependencies", []), generated_files)
-                    )
-                    generated_files[filename] = {"spec": file_spec, "source_code": code}
-                    self._write_file(project_dir, filename, code)
-                    continue
-
-                # Step 2: Execute micro-tasks in parallel (Gemini Flash)
                 self.detailed_log_event.emit("HybridEngine", "info",
-                                             f"🚀 Executing {len(micro_tasks)} micro-tasks in parallel", "3")
+                                             f"🎯 Processing {filename} with hybrid micro-task approach", "3")
 
-                micro_task_results = await self._execute_micro_tasks_parallel(micro_tasks)
-
-                # Step 3: Assemble results (Medium Model)
-                self.detailed_log_event.emit("HybridEngine", "info",
-                                             f"🔧 Assembling {len(micro_task_results)} components", "3")
-
-                assembled_code = await self._assemble_micro_task_results(
-                    filename, file_spec, micro_task_results, tech_spec
+                # Generate file using micro-task approach
+                assembled_code = await self._generate_file_with_micro_tasks(
+                    filename, file_spec, tech_spec, generated_files
                 )
 
-                # Step 4: Write file
-                full_filename = filename if filename.endswith('.py') else f"{filename}.py"
-                self._write_file(project_dir, full_filename, assembled_code)
+                if assembled_code and len(assembled_code.strip()) > 0:
+                    # Write the assembled file
+                    self._write_file(project_dir, filename, assembled_code)
+                    generated_files[filename] = {"source_code": assembled_code}
 
-                # Store for dependency context
-                generated_files[filename] = {"spec": file_spec, "source_code": assembled_code}
-
-                # Update project state
-                if self.project_state_manager:
-                    self.project_state_manager.add_file(
-                        str(project_dir / full_filename),
-                        assembled_code,
-                        "hybrid_workflow",
-                        f"Generated {full_filename} via hybrid micro-task approach"
-                    )
-
-                self.detailed_log_event.emit("HybridEngine", "success",
-                                             f"✅ {filename} completed via hybrid approach", "2")
+                    self.detailed_log_event.emit("HybridEngine", "success",
+                                                 f"✅ {filename} completed successfully ({len(assembled_code)} chars)",
+                                                 "3")
+                else:
+                    self.detailed_log_event.emit("HybridEngine", "warning",
+                                                 f"⚠️ {filename} generated but content is empty", "3")
 
             except Exception as e:
-                self.logger.error(f"❌ Hybrid generation failed for {filename}: {e}")
+                self.logger.error(f"Failed to generate {filename}: {e}")
                 self.detailed_log_event.emit("HybridEngine", "error",
-                                             f"❌ Failed to generate {filename}: {str(e)}", "2")
+                                             f"❌ Failed to generate {filename}: {str(e)}", "3")
 
-    async def _create_micro_tasks_for_file(self, filename: str, file_spec: dict, tech_spec: dict) -> List[
-        SimpleTaskSpec]:
-        """Create micro-tasks for a file using the Planner's component breakdown."""
+    async def _generate_file_with_micro_tasks(self, filename: str, file_spec: dict,
+                                              tech_spec: dict, generated_files: dict) -> str:
+        """Generate a file using micro-task orchestration with ACTUAL working methods."""
         try:
-            components = file_spec.get("components", [])
-            if not components:
-                self.detailed_log_event.emit("HybridEngine", "warning",
-                                             f"No components defined for {filename}", "4")
-                return []
+            self.detailed_log_event.emit("HybridEngine", "info",
+                                         f"🔧 Breaking down {filename} into micro-tasks...", "4")
 
-            micro_tasks = []
+            # Step 1: Create micro-tasks from architect's component specifications
+            micro_tasks = self._create_micro_tasks_from_components(filename, file_spec, tech_spec)
 
-            for component in components:
-                task_spec = SimpleTaskSpec(
-                    id=component.get("task_id", f"{filename}_{len(micro_tasks)}"),
-                    description=component.get("description", "Implement component"),
-                    expected_lines=component.get("estimated_lines", 20),
-                    context=f"File: {filename}, Component: {component.get('component_type', 'unknown')}",
-                    exact_requirements=json.dumps(component, indent=2),
-                    component_type=component.get("component_type", "function"),
-                    file_path=filename
+            if not micro_tasks:
+                self.detailed_log_event.emit("HybridEngine", "info",
+                                             f"No micro-tasks for {filename}, using traditional generation", "4")
+
+                # Fallback to traditional generation
+                return await self.coder_service.generate_file_from_spec(
+                    filename, file_spec,
+                    {"description": tech_spec.get("project_description", "")},
+                    self._build_dependency_context(file_spec.get("dependencies", []), generated_files)
                 )
-                micro_tasks.append(task_spec)
+
+            self.detailed_log_event.emit("HybridEngine", "info",
+                                         f"📋 Created {len(micro_tasks)} micro-tasks for {filename}", "4")
+
+            # Step 2: Execute micro-tasks in parallel using REAL method
+            micro_task_results = await self._execute_micro_tasks_in_parallel(micro_tasks)
+
+            if not micro_task_results:
+                self.detailed_log_event.emit("HybridEngine", "error",
+                                             f"All micro-tasks failed for {filename}", "4")
+                return ""
+
+            self.detailed_log_event.emit("HybridEngine", "info",
+                                         f"🔧 Assembling {len(micro_task_results)} components for {filename}", "4")
+
+            # Step 3: Assemble results using REAL assembler method
+            project_context = {
+                "description": tech_spec.get("project_description", ""),
+                "coding_standards": tech_spec.get("coding_standards", "Follow PEP 8"),
+                "project_patterns": tech_spec.get("project_patterns", "Standard Python patterns"),
+                "file_purpose": file_spec.get("purpose", "Generated file"),
+                "integration_requirements": file_spec.get("dependencies", [])
+            }
+
+            # Use the ACTUAL assembler service method
+            assembled_code = await self.assembler_service.assemble_file_from_micro_tasks(
+                filename, file_spec, micro_task_results, project_context
+            )
 
             self.detailed_log_event.emit("HybridEngine", "success",
-                                         f"Created {len(micro_tasks)} micro-tasks for {filename}", "4")
-            return micro_tasks
+                                         f"✅ Assembly complete for {filename}", "4")
+
+            return assembled_code
 
         except Exception as e:
-            self.logger.error(f"Failed to create micro-tasks for {filename}: {e}")
+            self.logger.error(f"Micro-task generation failed for {filename}: {e}")
+            self.detailed_log_event.emit("HybridEngine", "error",
+                                         f"❌ Micro-task generation failed for {filename}: {str(e)}", "4")
+            return ""
+
+    def _create_micro_tasks_from_components(self, filename: str, file_spec: dict, tech_spec: dict) -> List[
+        SimpleTaskSpec]:
+        """Create micro-tasks from architect's component specifications."""
+        components = file_spec.get("components", [])
+
+        # If architect didn't provide detailed components, create smart fallback tasks
+        if not components:
+            components = self._create_intelligent_fallback_components(filename, file_spec)
+
+        micro_tasks = []
+        for component in components:
+            task_spec = SimpleTaskSpec(
+                id=component.get("task_id", f"{filename}_{len(micro_tasks)}"),
+                description=component.get("description", "Implement component"),
+                expected_lines=component.get("estimated_lines", 30),
+                context=f"File: {filename}\nPurpose: {file_spec.get('purpose', 'Unknown')}\nProject: {tech_spec.get('project_description', '')}",
+                exact_requirements=json.dumps(component, indent=2),
+                component_type=component.get("component_type", "function"),
+                file_path=filename
+            )
+            micro_tasks.append(task_spec)
+
+        return micro_tasks
+
+    def _create_intelligent_fallback_components(self, filename: str, file_spec: dict) -> List[Dict]:
+        """Create intelligent fallback components when architect doesn't provide detailed breakdown."""
+        purpose = file_spec.get("purpose", "").lower()
+        components = []
+
+        if "terrain" in purpose or "world" in purpose or "generator" in purpose:
+            components = [
+                {
+                    "task_id": f"{filename}_imports_setup",
+                    "description": "Import required libraries and set up module constants",
+                    "component_type": "imports_and_constants",
+                    "estimated_lines": 10,
+                    "core_logic_steps": ["Import noise library", "Define terrain constants", "Set up configuration"]
+                },
+                {
+                    "task_id": f"{filename}_terrain_function",
+                    "description": "Create main terrain generation function using Perlin noise",
+                    "component_type": "function",
+                    "estimated_lines": 40,
+                    "core_logic_steps": ["Generate Perlin noise", "Map height to block types",
+                                         "Return appropriate block"]
+                },
+                {
+                    "task_id": f"{filename}_block_types",
+                    "description": "Define block type mapping based on height",
+                    "component_type": "function",
+                    "estimated_lines": 20,
+                    "core_logic_steps": ["Map low heights to sand", "Map mid heights to grass",
+                                         "Map high heights to stone"]
+                }
+            ]
+        elif "main" in filename:
+            components = [
+                {
+                    "task_id": f"{filename}_imports",
+                    "description": "Import necessary modules and libraries",
+                    "component_type": "imports",
+                    "estimated_lines": 5
+                },
+                {
+                    "task_id": f"{filename}_terrain_integration",
+                    "description": "Replace flat terrain with procedural generation",
+                    "component_type": "modification",
+                    "estimated_lines": 30
+                },
+                {
+                    "task_id": f"{filename}_player_spawn",
+                    "description": "Update player spawn logic for generated terrain",
+                    "component_type": "function",
+                    "estimated_lines": 20
+                }
+            ]
+        else:
+            # Generic fallback
+            components = [
+                {
+                    "task_id": f"{filename}_implementation",
+                    "description": f"Implement {purpose}",
+                    "component_type": "function",
+                    "estimated_lines": 50
+                }
+            ]
+
+        return components
+
+    async def _execute_micro_tasks_in_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
+        """Execute micro-tasks in parallel using the REAL coder service method."""
+        if not micro_tasks:
             return []
 
-    async def _execute_micro_tasks_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
-        """Execute micro-tasks in parallel using Gemini Flash."""
-        results = []
+        # Limit concurrent tasks to avoid API rate limits
+        semaphore = asyncio.Semaphore(3)
+        successful_results = []
 
-        # Create semaphore to limit concurrent tasks (avoid overwhelming the API)
-        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent tasks
-
-        async def execute_single_task(task: SimpleTaskSpec) -> Dict[str, Any]:
+        async def execute_single_micro_task(task: SimpleTaskSpec) -> Optional[Dict[str, Any]]:
             async with semaphore:
                 try:
                     self.detailed_log_event.emit("HybridEngine", "info",
                                                  f"🔄 Executing micro-task: {task.id}", "5")
 
-                    # Execute micro-task with Gemini Flash (fast/cheap model)
+                    # Use the ACTUAL working method from CoderService
                     result = await self.coder_service.execute_micro_task_with_gemini_flash(task)
 
-                    self.detailed_log_event.emit("HybridEngine", "success",
-                                                 f"✅ Completed micro-task: {task.id}", "5")
-                    return result
+                    if result and "IMPLEMENTED_CODE" in result:
+                        self.detailed_log_event.emit("HybridEngine", "success",
+                                                     f"✅ Completed micro-task: {task.id}", "5")
+                        return result
+                    else:
+                        self.detailed_log_event.emit("HybridEngine", "error",
+                                                     f"❌ Micro-task {task.id} returned invalid result", "5")
+                        return None
 
                 except Exception as e:
                     self.logger.error(f"Micro-task {task.id} failed: {e}")
                     self.detailed_log_event.emit("HybridEngine", "error",
                                                  f"❌ Micro-task {task.id} failed: {str(e)}", "5")
-                    return {"error": str(e), "task_id": task.id}
+                    return None
 
-        # Execute all micro-tasks in parallel
+        # Execute all micro-tasks concurrently
         self.detailed_log_event.emit("HybridEngine", "info",
                                      f"🚀 Starting parallel execution of {len(micro_tasks)} micro-tasks", "4")
 
-        results = await asyncio.gather(*[execute_single_task(task) for task in micro_tasks])
+        results = await asyncio.gather(*[execute_single_micro_task(task) for task in micro_tasks])
 
-        # Filter out failed tasks
-        successful_results = [r for r in results if "error" not in r]
+        # Filter out None results
+        successful_results = [r for r in results if r is not None]
         failed_count = len(results) - len(successful_results)
 
         if failed_count > 0:
@@ -366,90 +450,31 @@ class HybridWorkflowEngine(QObject):
 
         return successful_results
 
-    async def _assemble_micro_task_results(self, filename: str, file_spec: dict,
-                                           micro_task_results: List[Dict[str, Any]], tech_spec: dict) -> str:
-        """Assemble micro-task results into a complete file using the Assembler service."""
-        try:
-            self.detailed_log_event.emit("HybridEngine", "info",
-                                         f"🔧 Assembling {len(micro_task_results)} components for {filename}", "4")
-
-            # Prepare context for assembler
-            project_context = {
-                "description": tech_spec.get("project_description", ""),
-                "coding_standards": tech_spec.get("coding_standards", "Follow PEP 8"),
-                "project_patterns": tech_spec.get("project_patterns", "Standard Python patterns"),
-                "file_purpose": file_spec.get("purpose", "Generated file"),
-                "integration_requirements": file_spec.get("dependencies", [])
-            }
-
-            # Use assembler service to combine micro-task results
-            assembled_code = await self.assembler_service.assemble_file_from_micro_tasks(
-                filename, file_spec, micro_task_results, project_context
-            )
-
-            self.detailed_log_event.emit("HybridEngine", "success",
-                                         f"✅ Assembly complete for {filename}", "4")
-
-            return assembled_code
-
-        except Exception as e:
-            self.logger.error(f"Assembly failed for {filename}: {e}")
-            self.detailed_log_event.emit("HybridEngine", "error",
-                                         f"❌ Assembly failed for {filename}: {str(e)}", "4")
-
-            # Fallback: concatenate code directly
-            fallback_code = self._fallback_assembly(micro_task_results)
-            return fallback_code
-
-    def _fallback_assembly(self, micro_task_results: List[Dict[str, Any]]) -> str:
-        """Fallback assembly method - simple concatenation with basic organization."""
-        code_parts = []
-
-        # Add imports first
-        imports = set()
-        for result in micro_task_results:
-            code = result.get("IMPLEMENTED_CODE", "")
-            for line in code.split('\n'):
-                if line.strip().startswith(('import ', 'from ')):
-                    imports.add(line.strip())
-
-        if imports:
-            code_parts.extend(sorted(imports))
-            code_parts.append("")  # Empty line after imports
-
-        # Add implementation code
-        for result in micro_task_results:
-            code = result.get("IMPLEMENTED_CODE", "")
-            # Remove import lines since we handled them above
-            filtered_lines = []
-            for line in code.split('\n'):
-                if not line.strip().startswith(('import ', 'from ')):
-                    filtered_lines.append(line)
-
-            if filtered_lines:
-                code_parts.extend(filtered_lines)
-                code_parts.append("")  # Empty line between components
-
-        return '\n'.join(code_parts)
-
     async def _setup_project_directory(self, tech_spec: dict) -> Path:
-        """Set up project directory structure."""
+        """Set up project directory structure using ProjectBuilder for proper branching."""
         project_name = tech_spec.get("project_name", "generated_project")
 
+        # FIXED: Use ProjectBuilder for proper sandbox/branching behavior
         if self.is_existing_project_loaded and self.original_project_path:
-            # Use existing project directory
-            project_dir = self.original_project_path
             self.detailed_log_event.emit("HybridEngine", "info",
-                                         f"Using existing project directory: {project_dir}", "1")
+                                         f"Setting up development branch for project modification...", "1")
+            # Use ProjectBuilder to create proper development branch
+            project_dir = self.project_builder.setup_project_directory(
+                project_name=project_name,
+                is_modification=True,
+                original_user_prompt=self.original_user_prompt,
+                original_project_path=self.original_project_path
+            )
         else:
-            # Create new project directory
-            from core.config import ConfigManager
-            config = ConfigManager()
-            workspace_path = Path(config.app_config.workspace_path)
-            project_dir = workspace_path / project_name
-            project_dir.mkdir(parents=True, exist_ok=True)
             self.detailed_log_event.emit("HybridEngine", "info",
-                                         f"Created project directory: {project_dir}", "1")
+                                         f"Creating new project directory: {project_name}", "1")
+            # Use ProjectBuilder for new projects too
+            project_dir = self.project_builder.setup_project_directory(
+                project_name=project_name,
+                is_modification=False,
+                original_user_prompt=self.original_user_prompt,
+                original_project_path=None
+            )
 
         return project_dir
 
