@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy
 )
 
 from gui.components import ModernButton, StatusIndicator, Colors, Typography
@@ -199,5 +199,6 @@ class ChatActionsPanel(StyledPanel):
 
             for text, action in buttons:
                 btn = ModernButton(text, button_type="secondary")
+                btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
                 btn.clicked.connect(lambda checked, a=action: self.action_triggered.emit(a))
                 self.add_widget(btn)

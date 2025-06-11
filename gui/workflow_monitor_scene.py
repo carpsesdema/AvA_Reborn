@@ -1,7 +1,7 @@
 # gui/workflow_monitor_scene.py - Graphics Scene for Workflow Visualization
 
 from typing import Dict, List, Optional, Tuple
-from PySide6.QtCore import Qt, QPointF, QTimer, QPropertyAnimation, QEasingCurve, Property, QByteArray, QRectF
+from PySide6.QtCore import Qt, QPointF, QTimer, QPropertyAnimation, QEasingCurve, Property, QByteArray, QRectF, Signal
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsPathItem, QGraphicsObject
 
@@ -68,17 +68,17 @@ class ConnectionArrow(QGraphicsObject):
         self.prepareGeometryChange()
 
         # Get connection points
-        start_pos = self.start_node.pos() + QPointF(AgentNode.WIDTH, AgentNode.HEIGHT // 2)
-        end_pos = self.end_node.pos() + QPointF(0, AgentNode.HEIGHT // 2)
+        start_pos = self.start_node.pos() + QPointF(AgentNode.WIDTH / 2, AgentNode.HEIGHT)
+        end_pos = self.end_node.pos() + QPointF(AgentNode.WIDTH / 2, 0)
 
         # Create smooth curved path
         path = QPainterPath()
         path.moveTo(start_pos)
 
         # Calculate control points for smooth curve
-        dx = end_pos.x() - start_pos.x()
-        control1 = QPointF(start_pos.x() + dx * 0.5, start_pos.y())
-        control2 = QPointF(end_pos.x() - dx * 0.5, end_pos.y())
+        dy = end_pos.y() - start_pos.y()
+        control1 = QPointF(start_pos.x(), start_pos.y() + dy * 0.5)
+        control2 = QPointF(end_pos.x(), end_pos.y() - dy * 0.5)
 
         path.cubicTo(control1, control2, end_pos)
 
@@ -159,6 +159,8 @@ class WorkflowMonitorScene(QGraphicsScene):
     Graphics scene that manages the visual layout of agent nodes and connections.
     Provides automatic layout and real-time updates.
     """
+
+    layout_updated = Signal()
 
     # Layout constants
     NODE_SPACING_X = 220
@@ -276,6 +278,10 @@ class WorkflowMonitorScene(QGraphicsScene):
                 connection.set_active(active)
                 break
 
+    def deactivate_connection(self, from_agent_id: str, to_agent_id: str):
+        """A convenience method to deactivate a connection's animation."""
+        self.activate_connection(from_agent_id, to_agent_id, active=False)
+
     def update_agent_status(self, agent_id: str, status: str, status_text: str = ""):
         """Update the status of an agent node"""
         if agent_id in self._agent_nodes:
@@ -301,31 +307,48 @@ class WorkflowMonitorScene(QGraphicsScene):
         self._workflow_layout.clear()
 
     def setup_standard_workflow(self):
-        """Setup the standard AvA workflow with Architect -> Coders -> Reviewer"""
+        """Setup the standard AvA workflow: Architect -> Coder -> Assembler -> Reviewer"""
         self.clear_workflow()
 
-        # Add agent nodes in workflow order
-        architect = self.add_agent_node("architect", "Architect", "🏛️", 0, 1)
-        coder1 = self.add_agent_node("coder", "Coder", "⚙️", 1, 0)
-        reviewer = self.add_agent_node("reviewer", "Reviewer", "🧐", 2, 1)
+        # Add agent nodes in a simple vertical stack
+        col = 0
+        architect = self.add_agent_node("architect", "Architect", "🏛️", 0, col)
+        coder = self.add_agent_node("coder", "Coder", "⚙️", 1, col)
+        assembler = self.add_agent_node("assembler", "Assembler", "🧩", 2, col)
+        reviewer = self.add_agent_node("reviewer", "Reviewer", "🧐", 3, col)
 
         # Add connections
         self.add_connection("architect", "coder")
-        self.add_connection("coder", "reviewer")
+        self.add_connection("coder", "assembler")
+        self.add_connection("assembler", "reviewer")
 
         # Update layout
-        self._update_layout()
+        self._schedule_layout_update()
+
+    def refresh_workflow(self):
+        """Resets all agent nodes to their default 'idle' state and deactivates connections."""
+        for node in self._agent_nodes.values():
+            node.set_status("idle", "Ready")
+        for conn in self._connections:
+            conn.set_active(False)
+        self.update()
 
     def _ensure_layout_size(self, row: int, col: int):
-        """Ensure the layout grid is large enough for the given position"""
+        """Ensure the layout grid is rectangular and large enough."""
         # Expand rows if needed
         while len(self._workflow_layout) <= row:
             self._workflow_layout.append([])
 
-        # Expand columns if needed
-        for i in range(len(self._workflow_layout)):
-            while len(self._workflow_layout[i]) <= col:
-                self._workflow_layout[i].append("")
+        # Determine the maximum width needed so far
+        max_cols = 0
+        if self._workflow_layout:
+            max_cols = max(len(r) for r in self._workflow_layout)
+        max_cols = max(max_cols, col + 1)
+
+        # Ensure all rows have the same number of columns
+        for r in self._workflow_layout:
+            while len(r) < max_cols:
+                r.append("")
 
     def _remove_from_layout(self, agent_id: str):
         """Remove agent ID from layout grid"""
@@ -361,14 +384,17 @@ class WorkflowMonitorScene(QGraphicsScene):
         # Update scene size
         self.setSceneRect(0, 0, max(total_width, 800), max(total_height, 600))
 
-        # Position nodes according to grid
+        # Position nodes according to grid, centering the whole grid
+        grid_width = (max_cols - 1) * self.NODE_SPACING_X if max_cols > 0 else 0
+        offset_x = (self.width() - grid_width) / 2 - self.SCENE_MARGIN
+
         for row_idx, row in enumerate(self._workflow_layout):
             for col_idx, agent_id in enumerate(row):
                 if agent_id and agent_id in self._agent_nodes:
                     node = self._agent_nodes[agent_id]
 
                     # Calculate position
-                    x = self.SCENE_MARGIN + col_idx * self.NODE_SPACING_X
+                    x = offset_x + col_idx * self.NODE_SPACING_X
                     y = self.SCENE_MARGIN + row_idx * self.NODE_SPACING_Y
 
                     node.setPos(x, y)

@@ -58,22 +58,25 @@ class AvAMainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.chat_interface.message_sent.connect(self.handle_user_message)
+        # This is the main point of delegation to the application controller
+        self.sidebar.action_triggered.connect(self._handle_sidebar_action)
         self.sidebar.new_project_requested.connect(self.new_project_requested.emit)
         self.sidebar.load_project_requested.connect(self.load_project_requested.emit)
         self.sidebar.model_config_requested.connect(self._open_model_config_dialog)
-        self.sidebar.action_triggered.connect(self._handle_sidebar_action)
         self.sidebar.scan_directory_requested.connect(self._handle_rag_scan_request)
 
     def _connect_ava_signals(self):
         if not self.ava_app: return
 
         if self.ava_app.workflow_engine:
+            # The AvAApplication class will now handle showing the monitor.
+            # This class (the view) just needs to update its own chat.
             self.ava_app.workflow_engine.workflow_started.connect(self.on_workflow_started)
-            self.ava_app.workflow_engine.workflow_progress.connect(self.on_workflow_progress)
             self.ava_app.workflow_engine.workflow_completed.connect(self.on_workflow_completed)
 
         self.ava_app.error_occurred.connect(self.on_app_error_occurred)
         self.ava_app.project_loaded.connect(self.update_project_display)
+
 
     @Slot(str)
     def handle_user_message(self, message: str):
@@ -104,8 +107,6 @@ class AvAMainWindow(QMainWindow):
     def update_all_status_displays(self):
         self._update_model_config_display()
         if self.ava_app and self.ava_app.rag_manager:
-            # RAG status is now handled internally by the RAGManager's signals to the app,
-            # which no longer needs to propagate to the main window's sidebar.
             pass
 
     @Slot(dict)
@@ -132,10 +133,6 @@ class AvAMainWindow(QMainWindow):
     @Slot(str, str)
     def on_workflow_started(self, workflow_type: str, description: str = ""):
         self.chat_interface.add_workflow_status(f"Starting {workflow_type}: {description}")
-
-    @Slot(str, str)
-    def on_workflow_progress(self, stage: str, description: str):
-        self.chat_interface.add_workflow_status(f"Progress: {description}")
 
     @Slot(dict)
     def on_workflow_completed(self, result: dict):

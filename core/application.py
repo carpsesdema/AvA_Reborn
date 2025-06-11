@@ -89,7 +89,7 @@ class AvAApplication(QObject):
         self.main_window = AvAMainWindow(ava_app=self)
         self.code_viewer = CodeViewerWindow()
         self.streaming_terminal = StreamingTerminal()
-        self.workflow_monitor = WorkflowMonitorWindow()  # Create instance
+        self.workflow_monitor = WorkflowMonitorWindow()  # Create instance of the window
         self._initialize_core_services()
         self.main_window.show()
         await asyncio.sleep(0.01)
