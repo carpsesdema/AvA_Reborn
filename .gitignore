@@ -19,3 +19,4 @@ __pycache__/
 /dist/AvA_Launcher_Distribution/
 /launcher.spec
 /main_app.spec
+/config/role_assignments.json

@@ -1,4 +1,4 @@
-# gui/workflow_monitor_scene.py - Graphics Scene for Workflow Visualization
+# gui/workflow_monitor_scene.py - Now with ExecutionEngine visualization!
 
 from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import Qt, QPointF, QTimer, QPropertyAnimation, QEasingCurve, Property, QByteArray, QRectF, Signal
@@ -33,7 +33,7 @@ class ConnectionArrow(QGraphicsObject):
 
         # Setup flow animation - 'self' is now a QObject, so this will work.
         self._flow_animation = QPropertyAnimation(self, QByteArray(b"flowProgress"))
-        self._flow_animation.setDuration(2000)
+        self._flow_animation.setDuration(1500)  # Faster flow
         self._flow_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self._flow_animation.setLoopCount(-1)  # Infinite loop
 
@@ -46,7 +46,7 @@ class ConnectionArrow(QGraphicsObject):
     def boundingRect(self) -> QRectF:
         """Required for QGraphicsObject: return the bounding rect of the item."""
         pen_width = self._pen.widthF()
-        margin = pen_width / 2 + 2  # Add a small buffer
+        margin = pen_width / 2 + 5  # Add a small buffer
         return self._path.boundingRect().adjusted(-margin, -margin, margin, margin)
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -59,91 +59,84 @@ class ConnectionArrow(QGraphicsObject):
         self._pen = QPen(QColor(Colors.BORDER_DEFAULT), 2)
         self._pen.setCapStyle(Qt.PenCapStyle.RoundCap)
 
-    def _update_path(self):
+    def _update_path(self, control_point_offset=80.0):
         """Update the path between nodes with smooth curve"""
         if not (self.start_node and self.end_node):
             return
 
-        # Inform the scene that the geometry is about to change
         self.prepareGeometryChange()
 
-        # Get connection points
-        start_pos = self.start_node.pos() + QPointF(AgentNode.WIDTH / 2, AgentNode.HEIGHT)
-        end_pos = self.end_node.pos() + QPointF(AgentNode.WIDTH / 2, 0)
+        start_pos = self.mapFromItem(self.start_node, AgentNode.WIDTH / 2, AgentNode.HEIGHT)
+        end_pos = self.mapFromItem(self.end_node, AgentNode.WIDTH / 2, 0)
 
-        # Create smooth curved path
+        # A special case for the correction loop arrow going "backwards"
+        is_correction_loop = self.start_node.agent_id == "execution_engine" and self.end_node.agent_id == "reviewer"
+
         path = QPainterPath()
         path.moveTo(start_pos)
 
-        # Calculate control points for smooth curve
-        dy = end_pos.y() - start_pos.y()
-        control1 = QPointF(start_pos.x(), start_pos.y() + dy * 0.5)
-        control2 = QPointF(end_pos.x(), end_pos.y() - dy * 0.5)
+        if is_correction_loop:
+            # Draw a different kind of curve for the feedback loop
+            mid_x = (start_pos.x() + end_pos.x()) / 2
+            mid_y = (start_pos.y() + end_pos.y()) / 2
+            control1 = QPointF(mid_x + control_point_offset, start_pos.y())
+            control2 = QPointF(mid_x + control_point_offset, end_pos.y())
+            path.cubicTo(control1, control2, end_pos)
+        else:
+            # Normal vertical flow
+            dy = end_pos.y() - start_pos.y()
+            control1 = QPointF(start_pos.x(), start_pos.y() + dy * 0.5)
+            control2 = QPointF(end_pos.x(), end_pos.y() - dy * 0.5)
+            path.cubicTo(control1, control2, end_pos)
 
-        path.cubicTo(control1, control2, end_pos)
-
-        # Add arrowhead
-        self._add_arrowhead(path, end_pos, start_pos)
-
+        self._add_arrowhead(path, end_pos, path.pointAtPercent(0.95))
         self._path = path
-        self.update()  # Schedule a repaint
+        self.update()
 
     def _add_arrowhead(self, path: QPainterPath, tip: QPointF, from_point: QPointF):
         """Add arrowhead to the path"""
-        # Calculate arrow direction
         direction = tip - from_point
         length = (direction.x() ** 2 + direction.y() ** 2) ** 0.5
-        if length == 0:
-            return
+        if length < 0.1: return
 
-        direction = QPointF(direction.x() / length, direction.y() / length)
+        direction /= length
+        arrow_size = 10.0
+        angle = 25.0
 
-        # Arrowhead geometry
-        arrow_length = 8
-        arrow_width = 4
+        p1 = tip - direction * arrow_size
+        p2 = QPointF(p1.x() + direction.y() * arrow_size * 0.4, p1.y() - direction.x() * arrow_size * 0.4)
+        p3 = QPointF(p1.x() - direction.y() * arrow_size * 0.4, p1.y() + direction.x() * arrow_size * 0.4)
 
-        # Calculate arrowhead points
-        base = tip - QPointF(direction.x() * arrow_length, direction.y() * arrow_length)
-        perpendicular = QPointF(-direction.y(), direction.x())
-
-        arrow_point1 = base + QPointF(perpendicular.x() * arrow_width, perpendicular.y() * arrow_width)
-        arrow_point2 = base - QPointF(perpendicular.x() * arrow_width, perpendicular.y() * arrow_width)
-
-        # Add arrowhead to path
-        path.moveTo(arrow_point1)
+        path.moveTo(p2)
         path.lineTo(tip)
-        path.lineTo(arrow_point2)
+        path.lineTo(p3)
 
-    def set_active(self, active: bool):
+    def set_active(self, active: bool, is_error: bool = False):
         """Activate or deactivate flow animation"""
-        if active == self._is_active:
+        if active == self._is_active and self._pen.color() == (Colors.ACCENT_RED if is_error else Colors.ACCENT_BLUE):
             return
 
         self._is_active = active
+        color = Colors.ACCENT_RED if is_error else Colors.ACCENT_BLUE
 
         if active:
-            # Animate to show data flow
-            self._pen = QPen(QColor(Colors.ACCENT_BLUE), 3)
+            self._pen = QPen(QColor(color), 3)
             self._pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-
-            # Start flow animation
             self._flow_animation.setStartValue(0.0)
             self._flow_animation.setEndValue(1.0)
             self._flow_animation.start()
         else:
-            # Return to default appearance
             self._flow_animation.stop()
             self._pen = QPen(QColor(Colors.BORDER_DEFAULT), 2)
             self._pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             self._flow_progress = 0.0
 
-        self.update()  # Schedule repaint
+        self.update()
 
     def update_positions(self):
         """Update arrow path when nodes move"""
         self._update_path()
 
-    # Property for flow animation
     def get_flow_progress(self):
         return self._flow_progress
 
@@ -159,253 +152,144 @@ class WorkflowMonitorScene(QGraphicsScene):
     Graphics scene that manages the visual layout of agent nodes and connections.
     Provides automatic layout and real-time updates.
     """
-
     layout_updated = Signal()
 
-    # Layout constants
     NODE_SPACING_X = 220
     NODE_SPACING_Y = 130
     SCENE_MARGIN = 50
 
     def __init__(self):
         super().__init__()
-
-        # Storage for nodes and connections
         self._agent_nodes: Dict[str, AgentNode] = {}
-        self._connections: List[ConnectionArrow] = []
-        self._workflow_layout: List[List[str]] = []  # 2D grid of agent IDs
-
-        # Setup scene
+        self._connections: Dict[Tuple[str, str], ConnectionArrow] = {}
+        self._workflow_layout: List[List[str]] = []
         self._setup_scene()
 
-        # Layout timer for smooth repositioning
         self._layout_timer = QTimer()
         self._layout_timer.timeout.connect(self._update_layout)
         self._layout_timer.setSingleShot(True)
 
     def _setup_scene(self):
-        """Setup the scene with dark background"""
         self.setBackgroundBrush(QBrush(QColor(Colors.PRIMARY_BG)))
-
-        # Set initial scene size
         self.setSceneRect(0, 0, 800, 600)
 
     def add_agent_node(self, agent_id: str, agent_name: str, icon: str, row: int = 0, col: int = 0) -> AgentNode:
-        """Add a new agent node to the scene"""
         if agent_id in self._agent_nodes:
             return self._agent_nodes[agent_id]
-
-        # Create node
         node = AgentNode(agent_id, agent_name, icon)
         self.addItem(node)
         self._agent_nodes[agent_id] = node
-
-        # Update layout grid
         self._ensure_layout_size(row, col)
         self._workflow_layout[row][col] = agent_id
-
-        # Schedule layout update
         self._schedule_layout_update()
-
         return node
 
-    def remove_agent_node(self, agent_id: str):
-        """Remove an agent node from the scene"""
-        if agent_id not in self._agent_nodes:
-            return
-
-        node = self._agent_nodes[agent_id]
-
-        # Remove connections involving this node
-        self._remove_connections_for_node(node)
-
-        # Remove from scene and storage
-        self.removeItem(node)
-        del self._agent_nodes[agent_id]
-
-        # Update layout grid
-        self._remove_from_layout(agent_id)
-
-        # Schedule layout update
-        self._schedule_layout_update()
-
-    def add_connection(self, from_agent_id: str, to_agent_id: str) -> Optional[ConnectionArrow]:
-        """Add a connection arrow between two agent nodes"""
-        if from_agent_id not in self._agent_nodes or to_agent_id not in self._agent_nodes:
+    def add_connection(self, from_id: str, to_id: str) -> Optional[ConnectionArrow]:
+        if from_id not in self._agent_nodes or to_id not in self._agent_nodes:
             return None
+        if (from_id, to_id) in self._connections:
+            return self._connections[(from_id, to_id)]
 
-        start_node = self._agent_nodes[from_agent_id]
-        end_node = self._agent_nodes[to_agent_id]
-
-        # Check if connection already exists
-        for connection in self._connections:
-            if connection.start_node == start_node and connection.end_node == end_node:
-                return connection
-
-        # Create new connection
-        arrow = ConnectionArrow(start_node, end_node)
+        arrow = ConnectionArrow(self._agent_nodes[from_id], self._agent_nodes[to_id])
         self.addItem(arrow)
-        self._connections.append(arrow)
-
+        self._connections[(from_id, to_id)] = arrow
         return arrow
 
-    def remove_connection(self, from_agent_id: str, to_agent_id: str):
-        """Remove a connection between two agents"""
-        if from_agent_id not in self._agent_nodes or to_agent_id not in self._agent_nodes:
-            return
+    def activate_connection(self, from_id: str, to_id: str, active: bool = True, is_error: bool = False):
+        conn = self._connections.get((from_id, to_id))
+        if conn:
+            conn.set_active(active, is_error)
 
-        start_node = self._agent_nodes[from_agent_id]
-        end_node = self._agent_nodes[to_agent_id]
-
-        # Find and remove connection
-        for connection in self._connections[:]:  # Copy list for safe iteration
-            if connection.start_node == start_node and connection.end_node == end_node:
-                self.removeItem(connection)
-                self._connections.remove(connection)
-                break
-
-    def activate_connection(self, from_agent_id: str, to_agent_id: str, active: bool = True):
-        """Activate or deactivate connection animation"""
-        if from_agent_id not in self._agent_nodes or to_agent_id not in self._agent_nodes:
-            return
-
-        start_node = self._agent_nodes[from_agent_id]
-        end_node = self._agent_nodes[to_agent_id]
-
-        # Find connection and set active state
-        for connection in self._connections:
-            if connection.start_node == start_node and connection.end_node == end_node:
-                connection.set_active(active)
-                break
-
-    def deactivate_connection(self, from_agent_id: str, to_agent_id: str):
-        """A convenience method to deactivate a connection's animation."""
-        self.activate_connection(from_agent_id, to_agent_id, active=False)
+    def deactivate_connection(self, from_id: str, to_id: str):
+        self.activate_connection(from_id, to_id, active=False)
 
     def update_agent_status(self, agent_id: str, status: str, status_text: str = ""):
-        """Update the status of an agent node"""
         if agent_id in self._agent_nodes:
             self._agent_nodes[agent_id].set_status(status, status_text)
 
-    def get_agent_node(self, agent_id: str) -> Optional[AgentNode]:
-        """Get an agent node by ID"""
-        return self._agent_nodes.get(agent_id)
-
     def clear_workflow(self):
-        """Clear all nodes and connections"""
-        # Remove all connections
-        for connection in self._connections[:]:
-            self.removeItem(connection)
-        self._connections.clear()
-
-        # Remove all nodes
-        for node in self._agent_nodes.values():
-            self.removeItem(node)
+        self.clear()
         self._agent_nodes.clear()
-
-        # Clear layout
+        self._connections.clear()
         self._workflow_layout.clear()
 
+    # --- MODIFIED: The new standard workflow! ---
     def setup_standard_workflow(self):
-        """Setup the standard AvA workflow: Architect -> Coder -> Assembler -> Reviewer"""
+        """Setup the standard AvA workflow with the self-correction loop."""
         self.clear_workflow()
 
-        # Add agent nodes in a simple vertical stack
-        col = 0
-        architect = self.add_agent_node("architect", "Architect", "🏛️", 0, col)
-        coder = self.add_agent_node("coder", "Coder", "⚙️", 1, col)
-        assembler = self.add_agent_node("assembler", "Assembler", "🧩", 2, col)
-        reviewer = self.add_agent_node("reviewer", "Reviewer", "🧐", 3, col)
+        # Add agent nodes in a logical flow
+        # Row 0
+        self.add_agent_node("architect", "Architect", "🏛️", 0, 0)
 
-        # Add connections
+        # Row 1
+        self.add_agent_node("coder", "Coder", "⚙️", 1, 0)
+
+        # Row 2
+        self.add_agent_node("assembler", "Assembler", "🧩", 2, 0)
+
+        # Row 3 - The correction loop level
+        self.add_agent_node("execution_engine", "Execution Engine", "🚀", 3, 0)
+        self.add_agent_node("reviewer", "Reviewer", "🧐", 3, 1)
+
+        # Add primary connections
         self.add_connection("architect", "coder")
         self.add_connection("coder", "assembler")
-        self.add_connection("assembler", "reviewer")
+        self.add_connection("assembler", "execution_engine")
 
-        # Update layout
+        # Add the self-correction loop connections
+        self.add_connection("execution_engine", "reviewer")
+        # Let's add a visual loop back from reviewer to assembler
+        self.add_connection("reviewer", "assembler")
+
         self._schedule_layout_update()
 
     def refresh_workflow(self):
-        """Resets all agent nodes to their default 'idle' state and deactivates connections."""
         for node in self._agent_nodes.values():
             node.set_status("idle", "Ready")
-        for conn in self._connections:
+        for conn in self._connections.values():
             conn.set_active(False)
         self.update()
 
     def _ensure_layout_size(self, row: int, col: int):
-        """Ensure the layout grid is rectangular and large enough."""
-        # Expand rows if needed
         while len(self._workflow_layout) <= row:
             self._workflow_layout.append([])
-
-        # Determine the maximum width needed so far
-        max_cols = 0
-        if self._workflow_layout:
-            max_cols = max(len(r) for r in self._workflow_layout)
+        max_cols = max(len(r) for r in self._workflow_layout) if self._workflow_layout else 0
         max_cols = max(max_cols, col + 1)
-
-        # Ensure all rows have the same number of columns
         for r in self._workflow_layout:
             while len(r) < max_cols:
-                r.append("")
-
-    def _remove_from_layout(self, agent_id: str):
-        """Remove agent ID from layout grid"""
-        for row in self._workflow_layout:
-            for i, cell in enumerate(row):
-                if cell == agent_id:
-                    row[i] = ""
-
-    def _remove_connections_for_node(self, node: AgentNode):
-        """Remove all connections involving the given node"""
-        for connection in self._connections[:]:  # Copy list for safe iteration
-            if connection.start_node == node or connection.end_node == node:
-                self.removeItem(connection)
-                self._connections.remove(connection)
+                r.append(None)
 
     def _schedule_layout_update(self):
-        """Schedule a layout update with small delay for batching"""
-        self._layout_timer.start(100)  # 100ms delay
+        self._layout_timer.start(50)
 
     def _update_layout(self):
-        """Update the visual layout of all nodes and connections"""
-        if not self._workflow_layout:
-            return
+        if not self._workflow_layout: return
 
-        # Calculate grid dimensions
-        max_cols = max(len(row) for row in self._workflow_layout) if self._workflow_layout else 0
-        max_rows = len(self._workflow_layout)
+        # Calculate grid dimensions and center offset
+        num_rows = len(self._workflow_layout)
+        num_cols = max(len(row) for row in self._workflow_layout) if num_rows > 0 else 0
+        grid_width = (num_cols - 1) * self.NODE_SPACING_X
+        offset_x = (self.width() - grid_width) / 2
 
-        # Calculate total scene size needed
-        total_width = max_cols * self.NODE_SPACING_X + 2 * self.SCENE_MARGIN
-        total_height = max_rows * self.NODE_SPACING_Y + 2 * self.SCENE_MARGIN
-
-        # Update scene size
-        self.setSceneRect(0, 0, max(total_width, 800), max(total_height, 600))
-
-        # Position nodes according to grid, centering the whole grid
-        grid_width = (max_cols - 1) * self.NODE_SPACING_X if max_cols > 0 else 0
-        offset_x = (self.width() - grid_width) / 2 - self.SCENE_MARGIN
-
-        for row_idx, row in enumerate(self._workflow_layout):
-            for col_idx, agent_id in enumerate(row):
+        # Position nodes
+        for r, row_data in enumerate(self._workflow_layout):
+            row_width = (len(row_data) - 1) * self.NODE_SPACING_X
+            row_offset_x = (self.width() - row_width) / 2
+            for c, agent_id in enumerate(row_data):
                 if agent_id and agent_id in self._agent_nodes:
                     node = self._agent_nodes[agent_id]
-
-                    # Calculate position
-                    x = offset_x + col_idx * self.NODE_SPACING_X
-                    y = self.SCENE_MARGIN + row_idx * self.NODE_SPACING_Y
-
+                    x = row_offset_x + c * self.NODE_SPACING_X
+                    y = self.SCENE_MARGIN + r * self.NODE_SPACING_Y
                     node.setPos(x, y)
 
         # Update all connection paths
-        for connection in self._connections:
-            connection.update_positions()
+        for (from_id, to_id), conn in self._connections.items():
+            start_node = self._agent_nodes.get(from_id)
+            end_node = self._agent_nodes.get(to_id)
+            if start_node and end_node:
+                # Add a special offset for the loopback arrow
+                offset = 100.0 if from_id == "reviewer" and to_id == "assembler" else 80.0
+                conn._update_path(control_point_offset=offset)
 
-    def get_workflow_status_summary(self) -> Dict[str, str]:
-        """Get a summary of all agent statuses"""
-        return {
-            agent_id: node.get_status()
-            for agent_id, node in self._agent_nodes.items()
-        }
+        self.setSceneRect(self.itemsBoundingRect().adjusted(-20, -20, 20, 20))

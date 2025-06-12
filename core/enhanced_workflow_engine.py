@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V6.4 - Robust state management and failure handling
+# core/enhanced_workflow_engine.py - V6.5 - Self-Correction Loop Integrated!
 
 import asyncio
 import json
@@ -18,11 +18,13 @@ from core.project_state_manager import ProjectStateManager
 from core.enhanced_micro_task_engine import StreamlinedMicroTaskEngine, SimpleTaskSpec
 from core.project_builder import ProjectBuilder
 from core.domain_context_manager import DomainContextManager
+# --- NEW IMPORT ---
+from core.execution_engine import ExecutionEngine, ExecutionResult
 
 
 class HybridWorkflowEngine(QObject):
     """
-    🚀 V6.4 Hybrid Workflow Engine: Robust state management and failure handling.
+    🚀 V6.5 Hybrid Workflow Engine: Now with a self-correction loop!
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -55,6 +57,8 @@ class HybridWorkflowEngine(QObject):
         self.original_project_path: Optional[Path] = None
         self.original_user_prompt: str = ""
         self.micro_task_engine: Optional[StreamlinedMicroTaskEngine] = None
+        # --- NEW: Instantiate ExecutionEngine ---
+        self.execution_engine: Optional[ExecutionEngine] = None
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
             self.detailed_log_event.emit(agent_name, type_key, content, str(indent_level))
@@ -80,13 +84,11 @@ class HybridWorkflowEngine(QObject):
             except Exception as e:
                 self.logger.error(f"❌ Failed to connect terminal signals: {e}")
 
-    # --- THIS IS THE KEY FIX FOR MICRO-TASK FAILURES! ---
     def set_project_state(self, project_state_manager: ProjectStateManager):
         """Connects the project state to all services and initializes dependent components."""
         self.project_state_manager = project_state_manager
         self.domain_context_manager = DomainContextManager(project_state_manager.project_root)
 
-        # Make sure ALL services that need state get it!
         self.architect_service.set_project_state(project_state_manager)
         self.coder_service.set_project_state(project_state_manager)
         self.assembler_service.set_project_state(project_state_manager)
@@ -96,7 +98,13 @@ class HybridWorkflowEngine(QObject):
             llm_client=self.llm_client,
             domain_context_manager=self.domain_context_manager
         )
-        self.logger.info("Project state correctly set for all AI services.")
+        # --- NEW: Initialize ExecutionEngine with the project state ---
+        self.execution_engine = ExecutionEngine(
+            project_state_manager=project_state_manager,
+            stream_emitter=lambda agent, type_key, content, level: self.detailed_log_event.emit(agent, type_key,
+                                                                                                content, str(level))
+        )
+        self.logger.info("Project state correctly set for all AI services, including ExecutionEngine.")
 
     async def _prepare_and_set_domain_context(self):
         """Analyzes the project's domain context ONCE and stores it in the state manager."""
@@ -157,8 +165,8 @@ class HybridWorkflowEngine(QObject):
             self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
-        """Execute the V6.4 Hybrid workflow combining architecture and micro-task orchestration."""
-        self.logger.info(f"🚀 Starting V6.4 Hybrid workflow: {user_prompt[:100]}...")
+        """Execute the V6.5 Hybrid workflow with self-correction."""
+        self.logger.info(f"🚀 Starting V6.5 Hybrid workflow: {user_prompt[:100]}...")
         self.workflow_reset.emit()
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
@@ -186,7 +194,6 @@ class HybridWorkflowEngine(QObject):
             project_context_for_tasks = {"project_name": tech_spec.get("project_name", ""),
                                          "project_description": tech_spec.get("project_description", "")}
 
-            # --- Corrected logic to handle the new tech_spec structure ---
             files_to_plan = tech_spec.get("technical_specs", {}).get("files", {})
             all_micro_tasks = await self.micro_task_engine.create_smart_tasks(files_to_plan, project_context_for_tasks)
 
@@ -201,7 +208,8 @@ class HybridWorkflowEngine(QObject):
             if not self.project_state_manager:
                 self.set_project_state(ProjectStateManager(str(project_dir)))
 
-            await self._execute_hybrid_file_generation(tech_spec, project_dir, tasks_by_file)
+            # --- MODIFIED: Call the new file generation method ---
+            await self._execute_self_correcting_file_generation(tech_spec, project_dir, tasks_by_file)
             await self._finalize_hybrid_project(tech_spec, project_dir, workflow_start_time)
 
         except Exception as e:
@@ -209,45 +217,81 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow failed: {str(e)}", "0")
             self.workflow_completed.emit({"success": False, "error": str(e)})
 
-    async def _execute_hybrid_file_generation(self, tech_spec: dict, project_dir: Path,
-                                              tasks_by_file: Dict[str, List[SimpleTaskSpec]]):
-        self.workflow_progress.emit("generation", "⚡ Generating files...")
+    # --- ENTIRELY NEW METHOD ---
+    async def _execute_self_correcting_file_generation(self, tech_spec: dict, project_dir: Path,
+                                                       tasks_by_file: Dict[str, List[SimpleTaskSpec]]):
+        """Generates files using the new self-correction loop."""
+        self.workflow_progress.emit("generation", "⚡ Generating & Validating Files...")
         files_to_generate = tech_spec.get("technical_specs", {}).get("files", {})
         if not files_to_generate: return
 
-        generated_files = {}
-        self.node_status_changed.emit("coder", "working", f"Generating {len(files_to_generate)} files...")
-
+        generated_files_content = {}
         for idx, (filename, file_spec) in enumerate(files_to_generate.items(), 1):
             self.task_progress.emit(idx, len(files_to_generate))
             if file_spec.get("skip_generation", False): continue
+
             try:
+                # Initial Code Generation
+                self.node_status_changed.emit("coder", "working", f"Generating {filename}...")
                 micro_tasks_for_file = tasks_by_file.get(filename, [])
+
+                # --- Non-truncation change: Pass full generated_files_content ---
                 assembled_code = await self._generate_file_with_micro_tasks(filename, file_spec, tech_spec,
-                                                                            generated_files, micro_tasks_for_file)
-                if assembled_code:
-                    self.node_status_changed.emit("reviewer", "working", f"Reviewing {filename}...")
-                    self.data_flow_started.emit("assembler", "reviewer")  # Data flows from assembler to reviewer
-                    await asyncio.sleep(0.1)
-                    self.data_flow_completed.emit("assembler", "reviewer")
-                    self.node_status_changed.emit("reviewer", "success", f"{filename} approved.")
-                    self._write_file(project_dir, filename, assembled_code)
-                    generated_files[filename] = {"source_code": assembled_code, "spec": file_spec}
+                                                                            generated_files_content,
+                                                                            micro_tasks_for_file)
+                if not assembled_code:
+                    self.logger.warning(f"No code was assembled for {filename}. Skipping.")
+                    continue
+
+                # Self-Correction Loop
+                max_retries = 3
+                for i in range(max_retries):
+                    self.node_status_changed.emit("execution_engine", "working",
+                                                  f"Validating {filename} (Attempt {i + 1})")
+                    self.data_flow_started.emit("assembler", "execution_engine")
+                    await asyncio.sleep(0.1)  # UI breath
+                    validation_result = await self.execution_engine.validate_code(filename, assembled_code)
+                    self.data_flow_completed.emit("assembler", "execution_engine")
+
+                    if validation_result.result == ExecutionResult.SUCCESS:
+                        self.node_status_changed.emit("execution_engine", "success", f"{filename} is valid.")
+                        break  # Exit loop if successful
+                    else:
+                        self.node_status_changed.emit("execution_engine", "error", f"Validation failed")
+                        self.detailed_log_event.emit("HybridEngine", "warning",
+                                                     f"[{filename}] {validation_result.error}", "2")
+                        if i == max_retries - 1:
+                            self.logger.error(f"Exceeded max retries for {filename}. Using last generated code.")
+                            self.detailed_log_event.emit("HybridEngine", "error",
+                                                         f"Could not fix {filename} after {max_retries} attempts.", "1")
+                            break
+
+                        # Refinement Step
+                        self.node_status_changed.emit("reviewer", "working", f"Refining {filename}...")
+                        self.data_flow_started.emit("execution_engine", "reviewer")
+
+                        instruction = f"The code for {filename} failed validation with this error: '{validation_result.error}'. Please fix the code and return only the complete, corrected code."
+                        assembled_code = await self.reviewer_service.refine_code(assembled_code, instruction)
+
+                        self.data_flow_completed.emit("execution_engine", "reviewer")
+                        self.node_status_changed.emit("reviewer", "success", f"{filename} refined.")
+
+                # Final step: write the (hopefully) corrected code and log for dependency context
+                self._write_file(project_dir, filename, assembled_code)
+                generated_files_content[filename] = assembled_code
+
             except Exception as e:
                 self.logger.error(f"Failed to generate {filename}: {e}", exc_info=True)
-
-        self.node_status_changed.emit("coder", "success", "Generated all files.")
 
     async def _generate_file_with_micro_tasks(self, filename: str, file_spec: dict, tech_spec: dict,
                                               generated_files: dict, micro_tasks: List[SimpleTaskSpec]) -> str:
         if not micro_tasks:
-            # Fallback for simple files without detailed components
+            # Use the full, untruncated dependency context for fallback
+            dependency_context = self._build_dependency_context(file_spec.get("dependencies", []), generated_files)
             return await self.coder_service.generate_file_from_spec(filename, file_spec, {
-                "description": tech_spec.get("project_description", "")}, self._build_dependency_context(
-                file_spec.get("dependencies", []), generated_files))
+                "description": tech_spec.get("project_description", "")}, dependency_context)
 
         micro_task_results = await self._execute_micro_tasks_in_parallel(micro_tasks)
-
         if not micro_task_results:
             self.logger.warning(f"Skipping assembly of {filename} as all its micro-tasks failed.")
             self.detailed_log_event.emit("Assembler", "warning", f"Skipping {filename}: no completed micro-tasks.", "2")
@@ -265,8 +309,7 @@ class HybridWorkflowEngine(QObject):
         return assembled_code
 
     async def _execute_micro_tasks_in_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
-        if not micro_tasks:
-            return []
+        if not micro_tasks: return []
         semaphore = asyncio.Semaphore(5)
 
         async def execute_task(task: SimpleTaskSpec):
@@ -277,7 +320,7 @@ class HybridWorkflowEngine(QObject):
                     self.logger.error(f"Micro-task {task.id} failed permanently: {e}", exc_info=False)
                     self.detailed_log_event.emit("HybridEngine", "error", f"❌ Failed to execute micro-task {task.id}.",
                                                  "2")
-                    return None  # Return None on failure
+                    return None
 
         results = await asyncio.gather(*[execute_task(task) for task in micro_tasks])
         return [res for res in results if res is not None]
@@ -302,9 +345,17 @@ class HybridWorkflowEngine(QObject):
             self.logger.error(f"Failed to write file {filename}: {e}", exc_info=True)
 
     def _build_dependency_context(self, dependencies: List[str], generated_files: Dict[str, Any]) -> str:
-        return "\n\n".join(
-            [f"=== {dep} ===\n{generated_files[dep].get('source_code', '')[:500]}..." for dep in dependencies if
-             dep in generated_files]) or "No dependencies available."
+        # --- NO TRUNCATION CHANGE ---
+        # Provide the FULL source code of dependencies
+        context = []
+        for dep_filename in dependencies:
+            if dep_filename in generated_files:
+                context.append(f"--- DEPENDENCY: {dep_filename} ---\n\n```python\n{generated_files[dep_filename]}\n```")
+
+        if not context:
+            return "This file has no generated dependencies."
+
+        return "\n\n".join(context)
 
     async def _finalize_hybrid_project(self, tech_spec: dict, project_dir: Path, start_time: datetime):
         self.workflow_progress.emit("finalization", "🎯 Finalizing project...")
