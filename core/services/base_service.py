@@ -84,7 +84,7 @@ class BaseAIService:
     ):
         """Contributes a new insight to the project state."""
         if self.project_state_manager:
-            self.project_state_manager.add_insight(
+            self.project_state_manager.add_team_insight(
                 insight_type, source_agent, content, relevance_score, related_files
             )
 
@@ -95,7 +95,7 @@ class BaseAIService:
         if not self.rag_manager:
             return "RAG system not available."
         try:
-            results = await self.rag_manager.query(query, n_results=3)
+            results = await self.rag_manager.query_context_async(query, k=3)
             if not results or not results.get("documents"):
                 return "No relevant information found in the knowledge base."
 
