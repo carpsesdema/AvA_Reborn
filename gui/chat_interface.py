@@ -357,7 +357,7 @@ class ModernChatInput(QFrame):
 class ChatInterface(QWidget):
     """Main modern chat interface"""
 
-    message_sent = Signal(str)
+    # Simplified signal: Emits the user prompt and the current conversation history.
     workflow_requested = Signal(str, list)
 
     def __init__(self):
@@ -430,7 +430,7 @@ class ChatInterface(QWidget):
 🚀 **Ready to build something amazing?**
 
 I use specialized AI agents:
-- **Planner** - Creates smart project architecture
+- **Architect** - Creates smart project architecture
 - **Coder** - Generates clean, professional code  
 - **Assembler** - Integrates everything seamlessly
 - **Reviewer** - Ensures quality and best practices
@@ -448,7 +448,6 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
 
     def _handle_message_sent(self, message: str):
         """Handle sent messages"""
-        # Add user message
         self.add_user_message(message)
 
         # Store in history
@@ -458,12 +457,12 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
             "timestamp": datetime.now().isoformat()
         })
 
-        # Keep last 10 messages
+        # Keep last 10 messages for context
         if len(self.conversation_history) > 10:
             self.conversation_history.pop(0)
 
-        # Emit signal
-        self.message_sent.emit(message)
+        # Emit signal to the application controller
+        self.workflow_requested.emit(message, self.conversation_history)
 
     def add_user_message(self, message: str):
         """Add a user message bubble"""
@@ -511,6 +510,7 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
                 item.widget().deleteLater()
         content_layout.addStretch()
         self.conversation_history = []
+        self._add_welcome_message()  # Add welcome message back after clearing
 
     def load_history(self, history: list):
         """Clears the chat and loads a new history."""
@@ -521,7 +521,6 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         for message_data in history:
             role = message_data.get("role")
             message = message_data.get("message")
-            # Parse timestamp if available, otherwise use now()
             ts_str = message_data.get("timestamp")
             try:
                 timestamp = datetime.fromisoformat(ts_str) if ts_str else datetime.now()
@@ -535,7 +534,7 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
             elif role == "assistant":
                 bubble = ChatBubble(message=message, sender="AvA", role=role, timestamp=timestamp)
                 self.chat_scroll.add_bubble(bubble)
-            elif role == "streaming": # Or 'workflow'
+            elif role == "streaming":
                 bubble = ChatBubble(message=f"🔄 {message}", sender="AvA", role=role, timestamp=timestamp)
                 self.chat_scroll.add_bubble(bubble)
 
@@ -549,7 +548,6 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         self.performance_text.setText(text)
         self.performance_indicator.update_status(status)
 
-    ### MODIFIED ###
     def update_rag_status(self, rag_text: str, status: str = "working"):
         """Update RAG status in the footer. (This is now a no-op)."""
         pass

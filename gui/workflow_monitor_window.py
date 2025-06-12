@@ -33,8 +33,8 @@ class WorkflowMonitorWindow(QMainWindow):
         # Initialize with a standard layout
         self.scene.setup_standard_workflow()
 
-        # Setup control panel after scene is ready
-        QTimer.singleShot(100, self._setup_control_panel_after_scene)
+        # FIX: Setup control panel immediately to avoid race conditions.
+        self._setup_control_panel()
 
         self.center_view()
 
@@ -54,7 +54,7 @@ class WorkflowMonitorWindow(QMainWindow):
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Create placeholder for control panel
+        # Create the control panel
         self.control_panel = QWidget()
         self.control_panel.setMinimumWidth(250)
         self.control_panel.setMaximumWidth(300)
@@ -64,16 +64,16 @@ class WorkflowMonitorWindow(QMainWindow):
         main_layout.addWidget(self.view, 5)
         main_layout.addWidget(self.control_panel, 1)
 
-    def _setup_control_panel_after_scene(self):
-        """Setup the control panel after the scene has been initialized"""
+    def _setup_control_panel(self):
+        """Setup the control panel UI. This is now called directly."""
         # Clear any existing layout
         if self.control_panel.layout():
             for i in reversed(range(self.control_panel.layout().count())):
                 item = self.control_panel.layout().itemAt(i)
                 if item.widget():
                     item.widget().setParent(None)
+            self.control_panel.layout().deleteLater()
 
-        # Create the proper control panel
         layout = QVBoxLayout(self.control_panel)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
@@ -87,7 +87,7 @@ class WorkflowMonitorWindow(QMainWindow):
         status_header.setFont(Typography.heading_medium())
         status_frame_layout.addWidget(status_header)
 
-        # Agent status displays - NOW these will exist
+        # Agent status displays
         self.agent_status_widgets = {}
         for agent_id, agent_node in self.scene._agent_nodes.items():
             agent_panel = QFrame()
@@ -137,11 +137,9 @@ class WorkflowMonitorWindow(QMainWindow):
     @Slot(str, str, str)
     def update_agent_status(self, agent_id: str, status: str, status_text: str):
         self.scene.update_agent_status(agent_id, status, status_text)
-        # Also update the text display in the control panel
         if agent_id in self.agent_status_widgets:
             status_label = self.agent_status_widgets[agent_id]
             status_label.setText(f"Status: {status.title()}\n{status_text}")
-
             color = Colors.TEXT_SECONDARY
             if status == "working":
                 color = Colors.ACCENT_ORANGE
@@ -162,6 +160,9 @@ class WorkflowMonitorWindow(QMainWindow):
     @Slot()
     def refresh_workflow(self):
         self.scene.refresh_workflow()
+        self._setup_control_panel()  # Re-setup panel to match refreshed scene
+        for agent_id in self.agent_status_widgets.keys():
+            self.update_agent_status(agent_id, "idle", "Ready")
 
     @Slot()
     def center_view(self):
@@ -172,30 +173,7 @@ class WorkflowMonitorWindow(QMainWindow):
         """Handle zooming with the mouse wheel."""
         zoom_in_factor = 1.15
         zoom_out_factor = 1 / zoom_in_factor
-
         if event.angleDelta().y() > 0:
             self.view.scale(zoom_in_factor, zoom_in_factor)
         else:
             self.view.scale(zoom_out_factor, zoom_out_factor)
-
-
-# This is a simple test to run the window independently
-if __name__ == '__main__':
-    from PySide6.QtWidgets import QApplication
-
-    app = QApplication(sys.argv)
-    window = WorkflowMonitorWindow()
-    window.show()
-
-
-    # Example of how to update status
-    def test_updates():
-        window.update_agent_status("architect", "working", "Thinking...")
-        window.activate_connection("architect", "coder")
-
-
-    timer = window.scene._layout_timer
-    timer.timeout.connect(test_updates)
-    timer.start(1000)
-
-    sys.exit(app.exec())

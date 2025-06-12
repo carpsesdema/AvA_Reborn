@@ -17,7 +17,7 @@ from services.rag_sync_service import RagSyncService
 from gui.main_window import AvAMainWindow
 from gui.code_viewer import CodeViewerWindow
 from gui.workflow_monitor_window import WorkflowMonitorWindow
-from gui.terminals import StreamingTerminal, TerminalWindow
+from gui.terminals import TerminalWindow
 
 
 class AvAApplication(QObject):
@@ -44,7 +44,7 @@ class AvAApplication(QObject):
         # Managed sub-windows
         self.code_viewer_window = CodeViewerWindow()
         self.workflow_monitor_window = WorkflowMonitorWindow()
-        self.streaming_terminal = self.code_viewer_window.terminal  # Use terminal from code_viewer
+        self.log_terminal_window = TerminalWindow()  # Standalone window for logs
 
         logging.info("AvAApplication initialized.")
 
@@ -64,7 +64,7 @@ class AvAApplication(QObject):
 
         self.workflow_engine = HybridWorkflowEngine(
             llm_client=self.llm_client,
-            terminal_window=self.streaming_terminal,
+            terminal_window=self.log_terminal_window,  # Engine logs go to the standalone window
             code_viewer=self.code_viewer_window,
             rag_manager=self.rag_manager
         )
@@ -77,19 +77,20 @@ class AvAApplication(QObject):
 
     def connect_signals(self):
         """Connect signals between all application components."""
-        # --- Main Window to App ---
-        self.main_window.workflow_requested_with_context.connect(self.run_workflow)
+        # --- Chat Interface to App Controller ---
+        self.main_window.chat_interface.workflow_requested.connect(self.run_workflow)
+
+        # --- Sidebar to App Controller ---
+        self.main_window.sidebar.action_triggered.connect(self.handle_sidebar_action)
+        self.main_window.sidebar.model_config_requested.connect(self.main_window._open_model_config_dialog)
         self.main_window.sidebar.new_project_requested.connect(self.new_project)
         self.main_window.sidebar.load_project_requested.connect(self.load_project_dialog)
-        self.main_window.sidebar.model_config_requested.connect(self.main_window._open_model_config_dialog)
         self.main_window.sidebar.scan_directory_requested.connect(self.rag_manager.scan_directory_dialog)
-        self.main_window.sidebar.action_triggered.connect(self.handle_sidebar_action)
         self.model_status_updated.connect(self.main_window.update_model_status_display)
 
         # --- Workflow Engine to GUI ---
         self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
         self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
-        # Note: The code_viewer is part of the CodeViewerWindow, not the main window.
         self.workflow_engine.file_generated.connect(self.code_viewer_window.auto_open_file)
         self.workflow_engine.project_loaded.connect(self.main_window.update_project_display)
 
@@ -120,10 +121,8 @@ class AvAApplication(QObject):
             logging.error("Workflow engine not initialized!")
             return
 
-        # Create a new project state if one doesn't exist
         if not self.workflow_engine.project_state_manager:
             logging.warning("No project loaded. Creating a temporary project state.")
-            # Create a temporary directory or use a default workspace
             temp_project_path = Path("./workspace/new_project")
             temp_project_path.mkdir(parents=True, exist_ok=True)
             self.project_state_manager = ProjectStateManager(str(temp_project_path))
@@ -138,9 +137,8 @@ class AvAApplication(QObject):
             "new_session": self.new_session,
             "open_workflow_monitor": self.workflow_monitor_window.show,
             "open_code_viewer": self.code_viewer_window.show,
+            "view_log": self.log_terminal_window.show,
             "add_project_files": self.add_project_to_rag,
-            # Add other actions here...
-            "view_log": self.view_log
         }
         handler = action_map.get(action)
         if handler:
@@ -156,7 +154,6 @@ class AvAApplication(QObject):
         self.workflow_engine.project_state_manager = None
         self.main_window.update_project_display("New Project")
         self.main_window.chat_interface.clear_chat()
-        self.main_window.chat_interface.add_assistant_response("Ready to build a new project! What should we create?")
 
     @Slot()
     def load_project_dialog(self):
@@ -173,8 +170,6 @@ class AvAApplication(QObject):
             self.project_state_manager = ProjectStateManager(project_path)
             self.workflow_engine.set_project_state(self.project_state_manager)
             self.main_window.update_project_display(Path(project_path).name)
-            # You might want to automatically analyze the project here
-            # asyncio.create_task(self.workflow_engine.analyze_existing_project(project_path))
         except Exception as e:
             logging.error(f"Failed to load project: {e}", exc_info=True)
 
@@ -182,20 +177,13 @@ class AvAApplication(QObject):
     def new_session(self):
         logging.info("New chat session requested.")
         self.main_window.chat_interface.clear_chat()
-        self.main_window.chat_interface.add_assistant_response("New session started. How can I help you?")
 
     @Slot()
     def add_project_to_rag(self):
         if self.project_state_manager:
             project_path = str(self.project_state_manager.project_root)
             logging.info(f"Adding project '{project_path}' to RAG.")
+            self.main_window.sidebar.knowledge_panel.update_rag_status("Syncing project files...", "working")
             asyncio.create_task(self.rag_sync_service.manual_sync_directory(project_path))
         else:
             logging.warning("Cannot add project to RAG: No project loaded.")
-
-    @Slot()
-    def view_log(self):
-        # This could open a new window or just show the terminal
-        self.code_viewer_window.show()
-        self.code_viewer_window.raise_()
-        self.code_viewer_window.activateWindow()

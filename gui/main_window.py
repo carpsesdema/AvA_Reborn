@@ -16,8 +16,8 @@ class AvAMainWindow(QMainWindow):
     The main window of the AvA application, coordinating the UI components.
     This class is now primarily a "View" and delegates logic to AvAApplication.
     """
-    # Signals to notify the application controller of user actions
-    workflow_requested_with_context = Signal(str, list)
+    # Signals are now handled directly by the AvAApplication controller for a cleaner design.
+    # No need for this window to re-emit signals.
 
     def __init__(self):
         super().__init__()
@@ -29,7 +29,7 @@ class AvAMainWindow(QMainWindow):
 
         self._init_ui()
         self._apply_theme()
-        self._connect_ui_signals()
+        # No signal connections needed here anymore, they are managed in AvAApplication.
 
     def _apply_theme(self):
         self.setStyleSheet(f"QMainWindow {{ background: {Colors.PRIMARY_BG}; color: {Colors.TEXT_PRIMARY}; }}")
@@ -46,17 +46,6 @@ class AvAMainWindow(QMainWindow):
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.chat_interface, 1)
         self.setCentralWidget(central_widget)
-
-    def _connect_ui_signals(self):
-        """Connect signals from UI components to the main window's signals."""
-        # The main action: user sends a message
-        self.chat_interface.message_sent.connect(self.handle_user_message)
-        # Note: Other sidebar signals are now connected directly in AvAApplication
-        # for a cleaner separation of concerns.
-
-    def handle_user_message(self, message: str):
-        """Handle user message from chat interface and emit with context."""
-        self.workflow_requested_with_context.emit(message, self.chat_interface.conversation_history)
 
     @Slot()
     def _open_model_config_dialog(self):
