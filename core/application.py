@@ -131,7 +131,7 @@ class AvAApplication(QObject):
         """Connect all component signals"""
         self.logger.info("Connecting components...")
         if self.main_window:
-            self.main_window.workflow_requested_with_context.connect(self._handle_enhanced_workflow_request)
+            self.main_window.workflow_requested_with_context.connect(self._schedule_workflow_request)
             self.main_window.new_project_requested.connect(self.create_new_project_dialog)
             self.main_window.load_project_requested.connect(self.load_existing_project_dialog)
             # Connect the new signal to the main window's handler
@@ -189,7 +189,6 @@ class AvAApplication(QObject):
     def get_status(self) -> Dict[str, Any]:
         """
         Get application status for main.py.
-        --- FIX: CORRECTLY POPULATE THE LLM MODELS ---
         """
         status = {
             'llm_models': [],
@@ -222,6 +221,17 @@ class AvAApplication(QObject):
     def _handle_rag_status_changed(self, status_text: str, color_key: str):
         """Handle RAG status changes"""
         self.rag_status_changed.emit(status_text, color_key)
+
+    @Slot(str, list)
+    def _schedule_workflow_request(self, user_input: str, context_files: list):
+        """
+        --- FINAL FIX: PROPERLY SCHEDULE THE ASYNC WORKFLOW ---
+        This function is a Qt Slot, which is a regular (synchronous) function.
+        To run an `async def` function from here, we must schedule it on the
+        running asyncio event loop using `asyncio.create_task`.
+        """
+        self.logger.info("Scheduling async workflow request...")
+        asyncio.create_task(self._handle_enhanced_workflow_request(user_input, context_files))
 
     async def _handle_enhanced_workflow_request(self, user_input: str, context_files: list):
         """Handle workflow request with context and enhanced engine"""
@@ -346,9 +356,6 @@ class AvAApplication(QObject):
             self.main_window.update_project_display(self.current_project)
         if self.code_viewer:
             self.code_viewer.load_project(str(project_path))
-            # self.code_viewer.show() # Can be annoying, let user open it
-            # self.code_viewer.raise_()
-            # self.code_viewer.activateWindow()
 
         self._on_project_loaded(str(project_path))
 
