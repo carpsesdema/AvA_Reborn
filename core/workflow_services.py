@@ -4,10 +4,11 @@ import json
 import re
 import textwrap
 import logging
+import asyncio
 from typing import Dict, List, Any, Callable, Optional
 
 from core.llm_client import EnhancedLLMClient, LLMRole
-from core.project_state_manager import ProjectStateManager
+from core.project_state_manager import ProjectStateManager, FileState
 from core.enhanced_micro_task_engine import SimpleTaskSpec
 
 # Enhanced prompt templates for hybrid workflow
@@ -67,6 +68,39 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     }}
 
     Return ONLY the JSON object, no explanations or markdown formatting.
+""")
+
+# NEW: High-performance prompt for parallel file analysis
+FILE_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are an expert code analyst. Analyze the provided Python file and create a JSON specification for it.
+
+    **FILE PATH:** {file_path}
+    **FILE CONTENT:**
+    ```python
+    {file_content}
+    ```
+
+    **INSTRUCTIONS:**
+    1.  Determine the primary purpose of this file.
+    2.  Identify all major components (classes, functions).
+    3.  For each component, create a specification including its description, type, and core logic.
+    4.  Infer the file's dependencies based on its import statements.
+
+    **CRITICAL:** Your response MUST be a single, valid JSON object with ONLY the following structure:
+    {{
+      "purpose": "A concise description of the file's role in the project.",
+      "dependencies": ["list", "of", "imported_modules"],
+      "components": [
+        {{
+          "task_id": "{file_path}/component_name",
+          "description": "What this component does.",
+          "component_type": "class|function",
+          "core_logic_steps": ["A high-level summary of the implementation steps."]
+        }}
+      ]
+    }}
+
+    Return ONLY the JSON object. Do not add explanations or markdown.
 """)
 
 HYBRID_CODER_PROMPT_TEMPLATE = textwrap.dedent("""
@@ -265,11 +299,10 @@ class BaseAIService:
                         # Assuming value is a dict of patterns, format it
                         if isinstance(value, dict):
                             for pat_id, pat_details in value.items():
-                                 if isinstance(pat_details, dict):
+                                if isinstance(pat_details, dict):
                                     context_parts.append(f"- {pat_details.get('description', pat_id)}")
                         else:
-                             context_parts.append(f"- {key.replace('_', ' ').title()}: {value}")
-
+                            context_parts.append(f"- {key.replace('_', ' ').title()}: {value}")
 
             return "\n".join(context_parts)
         except Exception as e:
@@ -564,68 +597,77 @@ class ArchitectService(BaseAIService):
         self.stream_emitter("Architect", "success", "Architecture complete with detailed component breakdown!", 1)
         return tech_spec
 
+    async def _analyze_file_in_parallel(self, file_state: FileState) -> Dict[str, Any]:
+        """Analyzes a single file using a focused LLM call."""
+        prompt = FILE_ANALYSIS_PROMPT_TEMPLATE.format(
+            file_path=file_state.path,
+            file_content=file_state.content
+        )
+        # Use a faster model for this focused task
+        json_response = await self._stream_and_collect_json(prompt, LLMRole.CODER, f"Analyst-{file_state.path}")
+        # Return the analysis along with the file path for reassembly
+        return {"file_path": file_state.path, "analysis": json_response}
+
     async def analyze_and_create_spec_from_project(self, project_state: ProjectStateManager) -> dict:
-        """Analyze existing project and create technical specification."""
+        """
+        Analyzes an existing project by breaking it down into parallel,
+        per-file analyses, and then synthesizes the results.
+        """
         self.stream_emitter("Architect", "thought",
-                            "Analyzing existing project to reverse-engineer its architecture...", 1)
+                            "Initiating high-speed parallel analysis of project files...", 1)
 
-        # Get enhanced project context with team insights
-        project_context = project_state.get_enhanced_project_context()
-
-        # Validate that we have content to analyze
-        if not project_context.get("project_overview", {}).get("files"):
-            self.stream_emitter("Architect", "warning",
-                                "No files found in project context for analysis", 1)
+        files_to_analyze = list(project_state.files.values())
+        if not files_to_analyze:
+            self.stream_emitter("Architect", "warning", "No files found to analyze.", 1)
             return {}
 
-        # Create serializable context
-        try:
-            serializable_context = json.loads(json.dumps(project_context, default=str))
-        except Exception as e:
-            self.stream_emitter("Architect", "error",
-                                f"Failed to serialize project context: {e}", 1)
+        # Create a list of concurrent analysis tasks
+        tasks = [self._analyze_file_in_parallel(file_state) for file_state in files_to_analyze]
+
+        self.stream_emitter("Architect", "info", f"Dispatching {len(tasks)} parallel analysis tasks.", 2)
+
+        # Execute all tasks concurrently and gather results
+        analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        self.stream_emitter("Architect", "info", "Parallel analysis complete. Synthesizing final specification.", 1)
+
+        # Synthesize the final technical specification
+        final_spec = {"files": {}}
+        successful_analyses = 0
+        for result in analysis_results:
+            if isinstance(result, Exception):
+                self.logger.error(f"File analysis task failed: {result}")
+                self.stream_emitter("Architect", "warning", f"A file analysis task failed: {result}", 2)
+                continue
+
+            file_path = result.get("file_path")
+            analysis = result.get("analysis")
+            if file_path and analysis:
+                final_spec["files"][file_path] = analysis
+                successful_analyses += 1
+
+        if successful_analyses == 0:
+            self.stream_emitter("Architect", "error", "All file analysis tasks failed. Cannot generate tech spec.", 1)
             return {}
 
-        # Create analysis prompt using the template
-        analysis_prompt = textwrap.dedent(f"""
-            You are the ARCHITECT AI. Analyze the existing project structure and create a comprehensive Technical Specification that represents the current state of the project.
+        # Construct the full tech_spec object expected by the system
+        project_name = project_state.project_metadata.get("name", "Unknown Project")
+        full_tech_spec = {
+            "project_name": project_name,
+            "project_description": f"An analysis of the existing project: {project_name}",
+            "technical_specs": final_spec
+            # requirements and other fields can be populated here if needed
+        }
 
-            **PROJECT CONTEXT:**
-            {json.dumps(serializable_context, indent=2)}
-
-            **TEAM INSIGHTS:**
-            Use the team knowledge and established patterns from the project context above.
-
-            Based on the project files, dependencies, and structure, create a complete technical specification that accurately represents this project. Your output MUST be a single, valid JSON object following the same structure as the creation template.
-
-            Include all existing files in the technical_specs, infer the purpose and api_contract from the actual code content, and determine the correct dependency order.
-
-            **CRITICAL**: Return ONLY valid JSON. No explanations, no markdown, no extra text. Just the JSON object.
-
-            **The system will fail if it receives anything other than the raw, valid JSON object.**
-        """)
-
-        self.stream_emitter("Architect", "info",
-                            f"Sending {len(analysis_prompt)} character prompt to LLM", 2)
-
-        tech_spec = await self._stream_and_collect_json(analysis_prompt, LLMRole.ARCHITECT, "Architect")
-
-        if not tech_spec or not tech_spec.get("technical_specs"):
-            self.stream_emitter("Architect", "error",
-                                "Project analysis failed. Could not produce a valid technical specification from the provided context.",
-                                1)
-            return {}
-
-        # Contribute analysis insights
         self._contribute_team_insight(
             "architectural",
             "Architect",
-            f"Analyzed existing project structure with {len(project_context.get('project_overview', {}).get('files', {}))} files",
+            f"Completed parallel analysis of {successful_analyses}/{len(files_to_analyze)} files.",
             "medium"
         )
 
         self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)
-        return tech_spec
+        return full_tech_spec
 
 
 class CoderService(BaseAIService):
