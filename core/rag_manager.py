@@ -33,7 +33,6 @@ class RAGManager(QObject):
     """
     RAG Manager for the AvA system with status update signals.
     """
-    # NEW SIGNAL: (status_text, color_key)
     status_changed = Signal(str, str)
     upload_completed = Signal(str, int)
 
@@ -95,18 +94,42 @@ class RAGManager(QObject):
         directory = QFileDialog.getExistingDirectory(parent_widget, "Select Directory to Scan", str(Path.home()))
         if directory:
             self.status_changed.emit(f"RAG: Scanning...", "working")
-            try:
-                result = self.upload_service.process_directory_for_context(directory)
-                if result and result.successfully_added_files > 0:
-                    self.upload_completed.emit(GLOBAL_COLLECTION_ID, result.successfully_added_files)
-                    self.status_changed.emit(f"RAG: Added {result.successfully_added_files} files", "success")
-                else:
-                    self.status_changed.emit("RAG: No new files added", "ready")
-            except Exception as e:
-                self.logger.error(f"Directory scan error: {e}", exc_info=True)
-                self.status_changed.emit("RAG: Scan Error", "error")
+            # Run the synchronous method in an async task to avoid blocking
+            asyncio.create_task(self.manual_sync_directory_async(directory))
+
+    async def manual_sync_directory_async(self, directory: str):
+        """Asynchronously syncs a directory."""
+        try:
+            result = self.upload_service.process_directory_for_context(directory)
+            if result and result.successfully_added_files > 0:
+                self.upload_completed.emit(GLOBAL_COLLECTION_ID, result.successfully_added_files)
+                self.status_changed.emit(f"RAG: Added {result.successfully_added_files} files", "success")
+            else:
+                self.status_changed.emit("RAG: No new files added", "ready")
+        except Exception as e:
+            self.logger.error(f"Directory scan error: {e}", exc_info=True)
+            self.status_changed.emit("RAG: Scan Error", "error")
+
+    async def query_context_async(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        """Asynchronous version of query_context to be called from the event loop."""
+        if not self.is_ready:
+            self.logger.warning("RAGManager.query_context_async called but RAG is not ready.")
+            return []
+
+        loop = asyncio.get_event_loop()
+        try:
+            # Run the synchronous, potentially blocking DB query in a thread pool
+            return await loop.run_in_executor(
+                None,  # Default executor
+                self.query_context,  # The synchronous function to run
+                query, k  # Arguments for the function
+            )
+        except Exception as e:
+            self.logger.error(f"RAG async query failed: {e}", exc_info=True)
+            return []
 
     def query_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        """Synchronous version for internal or non-async use."""
         if not self.is_ready:
             self.logger.warning("RAGManager.query_context called but RAG is not ready.")
             return []

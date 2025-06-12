@@ -81,32 +81,39 @@ class BaseAIService:
             return "Team context is currently unavailable due to an internal error."
 
     def _parse_json_from_response(self, response_text: str, agent_name: str) -> dict:
-        """BULLETPROOF JSON parser that handles all edge cases."""
+        """A more robust JSON parser that handles markdown fences and other LLM quirks."""
         response_text = response_text.strip()
-        if not response_text:
-            self.stream_emitter(agent_name, "error", "Empty response from LLM", 3)
-            return {}
 
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            pass
+        # Pattern to find JSON within ```json ... ``` or ``` ... ```
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
 
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
         if json_match:
+            json_str = json_match.group(1)
             try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                self.stream_emitter(agent_name, "error", f"JSON parsing failed inside markdown: {e}", 3)
+                self.logger.error(f"Failed to parse extracted JSON: {json_str[:500]}")
+                # Fall through to the next method
 
+        # If no markdown found or parsing failed, try finding the first '{' and last '}'
         brace_start = response_text.find('{')
         brace_end = response_text.rfind('}')
-        if brace_start != -1 and brace_end != -1:
+
+        if brace_start != -1 and brace_end > brace_start:
             json_candidate = response_text[brace_start:brace_end + 1]
             try:
                 return json.loads(json_candidate)
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                self.stream_emitter(agent_name, "error", f"JSON parsing failed on substring: {e}", 3)
+                self.logger.error(f"Failed to parse substring JSON: {json_candidate[:500]}")
+                # Fall through
+
+        # Final attempt: try loading the whole string directly
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            pass  # Already logged implicitly or by other attempts
 
         self.stream_emitter(agent_name, "error", f"All JSON parsing methods failed. Preview: {response_text[:200]}...",
                             3)
@@ -115,8 +122,13 @@ class BaseAIService:
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
         """Streams response and collects into a single JSON object."""
         all_chunks = []
-        async for chunk in self.llm_client.stream_chat(prompt, role=role):
-            all_chunks.append(chunk)
+        try:
+            async for chunk in self.llm_client.stream_chat(prompt, role=role):
+                all_chunks.append(chunk)
+        except Exception as e:
+            self.stream_emitter(agent_name, "error", f"LLM stream failed: {e}", 2)
+            self.logger.error(f"LLM streaming call failed for {agent_name}: {e}", exc_info=True)
+            return {}
 
         full_response = "".join(all_chunks)
         if not full_response:
@@ -132,8 +144,11 @@ class BaseAIService:
 
         self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
         dynamic_query = f"Python code example for {query}"
+
         try:
-            results = self.rag_manager.query_context(dynamic_query, k=k)
+            # THE FIX: This is now an async call to prevent UI freezes.
+            results = await self.rag_manager.query_context_async(dynamic_query, k=k)
+
             self.stream_emitter("RAG", "success", "Context retrieval complete.", 4)
             if not results: return "No specific examples found in the knowledge base."
             return "\n\n---\n\n".join([
@@ -142,4 +157,5 @@ class BaseAIService:
             ])
         except Exception as e:
             self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
+            self.logger.error(f"Error during RAG query: {e}", exc_info=True)
             return "Could not query knowledge base due to an error."
