@@ -16,7 +16,7 @@ from .state_models import FileState, ProjectPattern, AIDecision, TeamInsight
 class ProjectStateManager:
     """
     Manages the state of the project, including file contents,
-    detected patterns, and team insights. V2 with enhanced context management.
+    detected patterns, and team insights. V3 with domain context storage.
     """
 
     def __init__(self, project_path: str):
@@ -26,22 +26,29 @@ class ProjectStateManager:
         self.team_insights: Dict[str, TeamInsight] = {}
         self.decisions: List[AIDecision] = []
         self.project_metadata: Dict[str, Any] = {"name": self.project_root.name}
+
+        # --- NEW: Central storage for comprehensive domain analysis ---
+        self.domain_context: Optional[Dict[str, Any]] = None
+
         self.logger = logging.getLogger(__name__)
         self.scan_project()
 
     def scan_project(self, ignore_patterns: List[str] = None):
         """Scan project files, ignoring specified patterns."""
         if ignore_patterns is None:
-            ignore_patterns = ['.git', '__pycache__', '.DS_Store', 'venv', '*.log']
+            ignore_patterns = ['.git', '__pycache__', '.DS_Store', 'venv', '*.log', 'rag_data']
 
         self.logger.info(f"Scanning project at {self.project_root}...")
         for path in self.project_root.rglob('*'):
+            # Ensure path is not in an ignored directory
+            if any(part in ignore_patterns for part in path.parts):
+                continue
+
             if path.is_file():
                 relative_path = str(path.relative_to(self.project_root))
-
+                # Final check on file name pattern
                 if any(path.match(p) for p in ignore_patterns):
                     continue
-
                 try:
                     content = path.read_text(encoding='utf-8')
                     last_mod = path.stat().st_mtime
@@ -100,7 +107,6 @@ class ProjectStateManager:
         if "if __name__ == '__main__':" in content:
             patterns["main_files"].append(file_state.path)
 
-        # Dependency and framework detection
         imports = re.findall(r'^(?:from|import)\s+([a-zA-Z0-9_.]+)', content, re.MULTILINE)
         for imp in imports:
             base_module = imp.split('.')[0]
@@ -160,6 +166,13 @@ class ProjectStateManager:
         pattern_list = "\n".join([f"- {p.description}" for p in self.patterns.values()])
         insight_list = "\n".join([f"- [{i.source_agent}] {i.content}" for i in self.team_insights.values()])
 
+        domain_summary = "Domain context has not been analyzed yet."
+        if self.domain_context:
+            db_summary = f"{len(self.domain_context.get('database_schema', {}).get('tables', []))} tables"
+            api_summary = f"{len(self.domain_context.get('api_definition', {}).get('endpoints', []))} endpoints"
+            fw_summary = ", ".join([fw['name'] for fw in self.domain_context.get('frameworks', [])])
+            domain_summary = f"Analyzed Domain: {db_summary}, {api_summary}. Frameworks: {fw_summary or 'N/A'}."
+
         return f"""
         Project: {self.project_metadata.get('name', 'N/A')}
 
@@ -169,44 +182,44 @@ class ProjectStateManager:
         Established Patterns:
         {pattern_list}
 
-        Recent Team Insights:
+        Team Insights:
         {insight_list}
+
+        Domain Context Summary:
+        {domain_summary}
         """
 
     def get_enhanced_project_context(self, for_file: str = None, ai_role: str = None) -> Dict[str, Any]:
         """
-        V2 CONTEXT: Get intelligent, filtered context for a specific task.
-        - Filters insights based on relevance to the file and AI role.
-        - Provides established project patterns.
+        V3 CONTEXT: Get intelligent, filtered context including domain analysis.
         """
         context = {
             "project_name": self.project_metadata.get("name"),
             "established_patterns": self.project_metadata.get("established_patterns", {}),
-            "team_insights": []
+            "team_insights": [],
+            # --- NEW: Include a summary of the domain context ---
+            "domain_summary": "Domain analysis not performed."
         }
+
+        # Include domain context summary if available
+        if self.domain_context:
+            db_summary = f"Database: {len(self.domain_context.get('database_schema', {}).get('tables', []))} tables found."
+            api_summary = f"API: {len(self.domain_context.get('api_definition', {}).get('endpoints', []))} endpoints found."
+            fw_summary = "Frameworks: " + ", ".join([fw['name'] for fw in self.domain_context.get('frameworks', [])])
+            context['domain_summary'] = f"{db_summary} {api_summary} {fw_summary}"
 
         # Filter insights
         for insight in sorted(self.team_insights.values(), key=lambda i: i.timestamp, reverse=True):
             is_relevant = False
-            # Relevance by file association
-            if for_file and for_file in insight.related_files:
-                is_relevant = True
-            # Relevance by insight type and AI role
+            if for_file and for_file in insight.related_files: is_relevant = True
             if ai_role:
                 if (ai_role == 'ArchitectService' and insight.insight_type == 'architectural') or \
                         (ai_role == 'CoderService' and insight.insight_type in ['implementation', 'review']) or \
                         (ai_role == 'ReviewerService' and insight.insight_type in ['implementation', 'review',
                                                                                    'testing']):
                     is_relevant = True
+            if insight.impact_level == 'high': is_relevant = True
+            if is_relevant: context["team_insights"].append(insight.__dict__)
 
-            # If no specific filter is met, include high-impact insights
-            if insight.impact_level == 'high':
-                is_relevant = True
-
-            if is_relevant:
-                context["team_insights"].append(insight.__dict__)
-
-        # Limit to the most recent 5 relevant insights
         context["team_insights"] = context["team_insights"][:5]
-
         return context

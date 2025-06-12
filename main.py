@@ -1,4 +1,5 @@
 # main.py
+
 import sys
 import asyncio
 import logging
@@ -6,105 +7,80 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 import qasync
 
-from core.application import AvAApplication
-
-# Add current directory to path
+# Add the project root to the Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-  # Import the AvAApplication class
-
-ava_app_instance_container = []  # Global to hold the instance for shutdown
-app_quit_future = None  # Global future to signal application quit
-
-
-def handle_about_to_quit():
-    """Slot to be called when QApplication is about to quit."""
-    global app_quit_future
-    logging.info("main.py: QApplication.aboutToQuit signal received.")
-    if app_quit_future and not app_quit_future.done():
-        logging.info("main.py: Setting result for app_quit_future.")
-        app_quit_future.set_result(True)
-    else:
-        logging.info("main.py: app_quit_future is None or already done.")
+from core.application import AvAApplication
+from gui.main_window import AvAMainWindow
+from utils.logger import init_logging
 
 
-async def main_async_logic():
-    """The main async part of the application startup."""
-    logging.info("main_async_logic: Coroutine started.")
-    global ava_app_instance_container, app_quit_future
-
-    app = QApplication.instance()
-    if not app:
-        logging.error("main_async_logic: QApplication instance not found. This is unexpected.")
+# Global exception handler
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Log unhandled exceptions."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
+    logging.critical("Unhandled top-level exception", exc_info=(exc_type, exc_value, exc_traceback))
 
-    app_quit_future = asyncio.Future()
-    app.aboutToQuit.connect(handle_about_to_quit)
+sys.excepthook = handle_exception
+
+# --- Asynchronous Main Logic ---
+async def main_async_logic():
+    """
+    The main asynchronous entry point for the application.
+    Initializes the event loop, creates windows, and starts the app logic.
+    """
+    logging.info("main_async_logic: Coroutine started.")
+    app_quit_future = asyncio.get_event_loop().create_future()
+
+    def on_about_to_quit():
+        logging.info("main.py: QApplication.aboutToQuit signal received.")
+        if not app_quit_future.done():
+            app_quit_future.set_result(True)
+
+    QApplication.instance().aboutToQuit.connect(on_about_to_quit)
     logging.info("main_async_logic: Connected aboutToQuit signal.")
 
-    # THE FIX IS HERE
-    ava_app = AvAApplication()
-    # THE FIX IS HERE
+    # Create the main GUI window.
+    window = AvAMainWindow()
 
-    ava_app_instance_container.append(ava_app)
+    # Create the main application logic class, passing it the main window.
+    ava_app = AvAApplication(window)
 
-    def on_fully_initialized():
-        print("AvAApplication fully_initialized_signal received: Async components should be complete.")
-        if ava_app_instance_container:
-            current_ava_app = ava_app_instance_container[0]
-            try:
-                status = current_ava_app.get_status()
-                print(f"Status Check (on_fully_initialized) - LLM Models: {status.get('llm_models', 'N/A')}")
-                rag_status_info = status.get('rag', {})
-                print(f"Status Check (on_fully_initialized) - RAG Info: {rag_status_info}")
-            except Exception as e:
-                # Use the logger for exceptions, which is safer
-                logging.error("Error getting status in on_fully_initialized", exc_info=True)
+    # Launch the application's asynchronous initialization as a background task.
+    # This task will run on the qasync event loop without blocking UI setup.
+    init_task = asyncio.create_task(ava_app.initialize_async())
 
-    ava_app.fully_initialized_signal.connect(on_fully_initialized)
+    # Show the main window immediately. It will become fully functional
+    # once the initialization task completes.
+    window.show()
+    logging.info("main_async_logic: MainWindow shown.")
 
-    try:
-        logging.info("main_async_logic: About to call and await ava_app.initialize().")
-        await ava_app.initialize()
-        logging.info("main_async_logic: ava_app.initialize() completed.")
+    # Wait for the application to be closed.
+    await app_quit_future
+    logging.info("main_async_logic: app_quit_future completed.")
 
-        logging.info("main_async_logic: Application initialized. Waiting for quit signal...")
-        await app_quit_future
-        logging.info("main_async_logic: app_quit_future completed. Application is quitting.")
+    # Cleanly handle the init_task on exit
+    if not init_task.done():
+        init_task.cancel()
+        try:
+            await init_task
+        except asyncio.CancelledError:
+            logging.info("Initialization task cancelled on exit.")
 
-    except Exception as e:
-        logging.critical(f"main_async_logic: Error during application lifecycle: {e}", exc_info=True)
-        if app_quit_future and not app_quit_future.done():
-            app_quit_future.set_exception(e)
-        if QApplication.instance():
-            QApplication.instance().quit()
-    finally:
-        logging.info("main_async_logic: Exiting.")
+    logging.info("main_async_logic: Coroutine ending.")
 
-
+# --- Main Entry Point ---
 if __name__ == "__main__":
-    # It's important to have logging configured before the app starts for startup issues.
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-    app = QApplication(sys.argv)
-    app.setApplicationName("AvA")
-    app.setApplicationVersion("2.1")
-
     exit_code = 0
     try:
-        logging.info("main.py: About to call qasync.run(main_async_logic()).")
+        init_logging()
+        app = QApplication(sys.argv)
         qasync.run(main_async_logic())
-        logging.info("main.py: qasync.run() has completed.")
-
     except Exception as e:
-        logging.critical(f"main.py: Unhandled top-level exception: {e}", exc_info=True)
+        logging.critical(f"Unhandled top-level exception during startup: {e}", exc_info=True)
         exit_code = 1
-    finally:
-        logging.info("main.py: Main finally block.")
-        if ava_app_instance_container:
-            ava_app_instance = ava_app_instance_container[0]
-            if hasattr(ava_app_instance, 'shutdown'):
-                logging.info("main.py: Calling AvAApplication.shutdown().")
-                ava_app_instance.shutdown()
 
-        logging.info(f"main.py: Script is ending. Intended exit code: {exit_code}")
+    logging.info(f"main.py: Application exiting with code {exit_code}.")
+    sys.exit(exit_code)

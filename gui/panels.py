@@ -1,4 +1,4 @@
-# gui/panels.py - Modernized panels with sleek design
+# gui/panels.py
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSlider,
@@ -44,7 +44,7 @@ class StyledPanel(QFrame):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(10)
-        self.content_layout.addStretch(1) # This will push the panel's content to the top
+        self.content_layout.addStretch(1)  # This will push the panel's content to the top
 
         self.main_layout.addWidget(self.content_widget)
         self.setLayout(self.main_layout)
@@ -270,32 +270,40 @@ class KnowledgeBasePanel(StyledPanel):
         rag_status_layout = QHBoxLayout()
         rag_status_layout.setContentsMargins(0, 8, 0, 0)
 
-        rag_status_label = QLabel("RAG:")
-        rag_status_label.setFont(Typography.body())
-        rag_status_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+        self.rag_status_indicator = StatusIndicator("offline")
 
-        self.rag_status_display_label = QLabel("Initializing embedder...")
+        self.rag_status_display_label = QLabel("RAG: Initializing...")
         self.rag_status_display_label.setFont(Typography.body_small())
         self.rag_status_display_label.setStyleSheet(f"color: {Colors.ACCENT_ORANGE};")
 
-        rag_status_layout.addWidget(rag_status_label)
+        rag_status_layout.addWidget(self.rag_status_indicator)
         rag_status_layout.addWidget(self.rag_status_display_label, 1)
         self.add_layout(rag_status_layout)
 
-    def update_rag_status(self, status_text: str):
+    @Slot(str, str)
+    def update_rag_status(self, status_text: str, level: str = "info"):
         """Update RAG status display"""
         self.rag_status_display_label.setText(status_text)
 
-        # Update color based on status
-        if "ready" in status_text.lower() or "complete" in status_text.lower():
-            color = Colors.ACCENT_GREEN
-        elif "error" in status_text.lower() or "failed" in status_text.lower():
-            color = Colors.ACCENT_RED
-        elif "initializing" in status_text.lower() or "loading" in status_text.lower():
-            color = Colors.ACCENT_ORANGE
-        else:
-            color = Colors.TEXT_SECONDARY
+        status_map = {
+            "info": "ready",
+            "success": "success",
+            "working": "working",
+            "warning": "working",
+            "error": "error"
+        }
+        indicator_status = status_map.get(level, "offline")
+        self.rag_status_indicator.update_status(indicator_status)
 
+        # Update color based on level
+        color_map = {
+            "info": Colors.TEXT_SECONDARY,
+            "success": Colors.ACCENT_GREEN,
+            "working": Colors.ACCENT_ORANGE,
+            "warning": Colors.ACCENT_ORANGE,
+            "error": Colors.ACCENT_RED
+        }
+        color = color_map.get(level, Colors.TEXT_MUTED)
         self.rag_status_display_label.setStyleSheet(f"color: {color};")
 
 

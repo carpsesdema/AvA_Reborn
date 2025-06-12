@@ -21,34 +21,6 @@ from .vector_db_service import GLOBAL_COLLECTION_ID
 logger = logging.getLogger(__name__)
 
 
-class RagFileWatcher(FileSystemEventHandler):
-    """File system event handler for RAG sync"""
-
-    def __init__(self, sync_service: 'RagSyncService'):
-        super().__init__()
-        self.sync_service = sync_service
-        self.supported_extensions = {
-            '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h',
-            '.txt', '.md', '.rst', '.html', '.css', '.json', '.yaml', '.yml'
-        }
-
-    def on_modified(self, event):
-        if not event.is_directory:
-            self.sync_service.queue_file_update(event.src_path, 'modified')
-
-    def on_created(self, event):
-        if not event.is_directory:
-            self.sync_service.queue_file_update(event.src_path, 'created')
-
-    def on_deleted(self, event):
-        if not event.is_directory:
-            self.sync_service.queue_file_update(event.src_path, 'deleted')
-
-    def _is_supported_file(self, file_path: str) -> bool:
-        """Check if file type is supported"""
-        return Path(file_path).suffix.lower() in self.supported_extensions
-
-
 class RagSyncService:
     """
     Real-time file synchronization service for AvA RAG system
@@ -303,3 +275,31 @@ class RagSyncService:
         """Cleanup when service is destroyed"""
         if self.is_running:
             self.stop_watching()
+
+
+class RagFileWatcher(FileSystemEventHandler):
+    """File system event handler for RAG sync"""
+
+    def __init__(self, sync_service: RagSyncService): # No longer need quotes here
+        super().__init__()
+        self.sync_service = sync_service
+        self.supported_extensions = {
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h',
+            '.txt', '.md', '.rst', '.html', '.css', '.json', '.yaml', '.yml'
+        }
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.sync_service.queue_file_update(event.src_path, 'modified')
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self.sync_service.queue_file_update(event.src_path, 'created')
+
+    def on_deleted(self, event):
+        if not event.is_directory:
+            self.sync_service.queue_file_update(event.src_path, 'deleted')
+
+    def _is_supported_file(self, file_path: str) -> bool:
+        """Check if file type is supported"""
+        return Path(file_path).suffix.lower() in self.supported_extensions
