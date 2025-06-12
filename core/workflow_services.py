@@ -1,4 +1,4 @@
-# core/workflow_services.py - V6.0 with Hybrid Workflow Support
+# core/workflow_services.py
 
 import json
 import re
@@ -223,27 +223,60 @@ class BaseAIService:
                 related_files=related_files or []
             )
 
-    def _get_team_context_string(self, context_type: str = "full") -> str:
-        """Get formatted team context for prompts."""
+    def _get_team_context_string(self, for_file: str = None) -> str:
+        """
+        Get a dynamically filtered and formatted string of team context,
+        tailored to the agent's role and the specific file being worked on.
+        """
         if not self.project_state:
             return "No team context available."
 
         try:
-            insights = self.project_state.get_team_insights(context_type)
-            if not insights:
-                return "No team insights available yet."
+            # Use the new intelligent context method
+            agent_name = self.__class__.__name__
+            context_data = self.project_state.get_enhanced_project_context(
+                for_file=for_file,
+                ai_role=agent_name
+            )
 
-            context_parts = []
-            for insight in insights[:10]:  # Limit to recent insights
-                # Use attribute access instead of .get()
+            insights = context_data.get("team_insights", [])
+
+            if not insights:
+                return "No relevant team insights for this task."
+
+            context_parts = ["**Relevant Team Insights & Learnings**"]
+            for insight in insights:
+                # Format each insight for maximum clarity in the prompt
+                related = f"(Related files: {', '.join(insight['related_files'])})" if insight.get(
+                    'related_files') else ""
                 context_parts.append(
-                    f"- {insight.insight_type.upper()}: {insight.content}"
+                    f"- **{insight['insight_type'].upper()}** "
+                    f"from **{insight['source_agent']}** "
+                    f"(Impact: {insight['impact_level']}): "
+                    f"{insight['content']} {related}"
                 )
+
+            # Also include established patterns from the project context
+            patterns = context_data.get("established_patterns", {})
+            if patterns:
+                context_parts.append("\n**Established Project Patterns**")
+                for key, value in patterns.items():
+                    if value:
+                        # Assuming value is a dict of patterns, format it
+                        if isinstance(value, dict):
+                            for pat_id, pat_details in value.items():
+                                 if isinstance(pat_details, dict):
+                                    context_parts.append(f"- {pat_details.get('description', pat_id)}")
+                        else:
+                             context_parts.append(f"- {key.replace('_', ' ').title()}: {value}")
+
 
             return "\n".join(context_parts)
         except Exception as e:
-            self.logger.warning(f"Failed to get team context: {e}")
-            return "Team context unavailable."
+            self.logger.warning(f"Failed to get and format team context: {e}")
+            # Log the full exception for debugging
+            self.logger.exception("Exception details for team context failure:")
+            return "Team context is currently unavailable due to an internal error."
 
     def _parse_json_from_response(self, response_text: str, agent_name: str) -> dict:
         """BULLETPROOF JSON parser that handles all edge cases."""
@@ -605,7 +638,7 @@ class CoderService(BaseAIService):
                                 f"🚀 Executing micro-task {task.id} with Gemini Flash", 3)
 
             # Get team context and project patterns
-            team_context = self._get_team_context_string()
+            team_context = self._get_team_context_string(for_file=task.file_path)
 
             # Prepare task specification
             task_spec_json = {
@@ -675,7 +708,7 @@ class CoderService(BaseAIService):
         self.stream_emitter("Coder", "info", f"Generating {file_path} using traditional approach", 2)
 
         # Build comprehensive context
-        team_context = self._get_team_context_string()
+        team_context = self._get_team_context_string(for_file=file_path)
         rag_context = await self._get_intelligent_rag_context(f"{file_path} {file_spec.get('purpose', '')}")
 
         # Create traditional file generation prompt
@@ -801,7 +834,7 @@ class ReviewerService(BaseAIService):
             self.stream_emitter("Reviewer", "info", f"🔍 Reviewing {file_path}", 2)
 
             # Get team context for standards
-            team_context = self._get_team_context_string()
+            team_context = self._get_team_context_string(for_file=file_path)
 
             # Create review prompt
             prompt = REVIEWER_PROMPT_TEMPLATE.format(

@@ -1,4 +1,4 @@
-# core/project_state_manager.py - Enhanced with Team Communication
+# core/project_state_manager.py
 
 import hashlib
 import json
@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 @dataclass
@@ -163,12 +163,37 @@ class ProjectStateManager:
         return [i for i in self.team_insights if i.source_agent == agent]
 
     def get_applicable_insights(self, file_path: str = None) -> List[TeamInsight]:
-        """Get insights that apply to current work, optionally filtered by file."""
+        """
+        Get insights that apply to current work, optionally filtered by file.
+        This now prioritizes file-specific insights.
+        """
         applicable = [i for i in self.team_insights if i.applies_to_future]
+
+        file_specific_insights = []
+        general_insights = []
+
         if file_path:
             rel_path = self._get_relative_path(file_path)
-            applicable = [i for i in applicable if not i.related_files or rel_path in i.related_files]
-        return sorted(applicable, key=lambda x: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}[x.impact_level])
+            # Find files that depend on or are dependencies of the target file
+            related_files = self._get_related_files(rel_path)
+            related_files.add(rel_path)
+
+            for insight in applicable:
+                # Prioritize insights that are directly related to the file or its dependencies
+                if any(rf in (insight.related_files or []) for rf in related_files):
+                    file_specific_insights.append(insight)
+                elif not insight.related_files:  # Also include general, non-file-specific insights
+                    general_insights.append(insight)
+        else:
+            general_insights = applicable  # If no file, all are general
+
+        # Sort both lists by impact and recency
+        impact_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        file_specific_insights.sort(key=lambda x: (impact_order.get(x.impact_level, 4), x.timestamp), reverse=True)
+        general_insights.sort(key=lambda x: (impact_order.get(x.impact_level, 4), x.timestamp), reverse=True)
+
+        # Combine them, with file-specific ones first
+        return file_specific_insights + general_insights
 
     def _invalidate_context_cache(self):
         """Invalidate the context cache when insights change."""
@@ -176,31 +201,51 @@ class ProjectStateManager:
         self.last_context_update = datetime.now()
 
     def get_enhanced_project_context(self, for_file: str = None, ai_role: str = None) -> Dict[str, Any]:
-        """Enhanced version of get_project_context with team insights."""
-        # Check if we have a cached version that's still fresh
+        """
+        Dynamically builds a focused project context, including role- and
+        file-specific team insights to prevent overload and maximize relevance.
+        """
         cache_key = f"{for_file}_{ai_role}"
         if (cache_key in self.team_context_cache and
-                (datetime.now() - self.last_context_update).seconds < 300):  # 5 minute cache
+                (datetime.now() - self.last_context_update).seconds < 300):
             return self.team_context_cache[cache_key]
 
-        # Get base context (existing functionality)
-        context = self.get_project_context(for_file, ai_role)
+        base_context = self.get_project_context(for_file, ai_role)
 
-        # Add team insights
-        context["team_insights"] = {
-            "architectural_insights": [i.to_dict() for i in self.get_team_insights("architectural", limit=5)],
-            "implementation_patterns": [i.to_dict() for i in self.get_team_insights("implementation", limit=5)],
-            "quality_standards": [i.to_dict() for i in self.get_team_insights("quality", limit=5)],
-            "integration_learnings": [i.to_dict() for i in self.get_team_insights("integration", limit=5)],
-            "applicable_to_current": [i.to_dict() for i in self.get_applicable_insights(for_file)]
+        # --- Dynamic Insight Filtering Logic ---
+        all_applicable_insights = self.get_applicable_insights(for_file)
+
+        # Define role-specific insight preferences
+        role_insight_focus = {
+            "Architect": ["architectural", "integration"],
+            "Coder": ["implementation", "quality"],
+            "CodeReviewer": ["quality", "implementation", "architectural"]
         }
 
-        # Add team communication summary
-        context["team_communication"] = self._build_team_communication_summary()
+        # Filter insights based on the agent's role
+        relevant_insights = []
+        if ai_role and ai_role in role_insight_focus:
+            focus_types = role_insight_focus[ai_role]
+            # Add highly relevant insights first
+            for insight in all_applicable_insights:
+                if insight.insight_type in focus_types:
+                    relevant_insights.append(insight)
+            # Add other critical insights regardless of type
+            for insight in all_applicable_insights:
+                if insight.impact_level == 'critical' and insight not in relevant_insights:
+                    relevant_insights.append(insight)
+        else:
+            relevant_insights = all_applicable_insights  # Default to all if no role specified
 
-        # Cache the result
-        self.team_context_cache[cache_key] = context
-        return context
+        # Limit the number of insights to avoid prompt overload, prioritizing the most relevant.
+        final_insights = relevant_insights[:15]  # Increased limit for more context, but still controlled
+
+        base_context["team_insights"] = [i.to_dict() for i in final_insights]
+
+        # --- End Dynamic Filtering ---
+
+        self.team_context_cache[cache_key] = base_context
+        return base_context
 
     def _build_team_communication_summary(self) -> Dict[str, Any]:
         """Build a summary of team communication patterns and priorities."""
@@ -384,17 +429,29 @@ class ProjectStateManager:
 
     def _extract_dependencies(self, content: str) -> List[str]:
         dependencies = []
-        for line in content.split('\n'):
-            line = line.strip()
-            if line.startswith('from ') and 'import' in line:
-                parts = line.split()
-                if len(parts) >= 2 and not parts[1].startswith('.'):
-                    dependencies.append(parts[1])
-            elif line.startswith('import '):
-                module = line.replace('import ', '').split()[0].split('.')[0]
-                if module != '__future__':
-                    dependencies.append(module)
-        return list(set(dependencies))
+        try:
+            tree = ast.parse(content)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        # Attempt to resolve relative imports
+                        level = node.level
+                        if level > 0:
+                            # This is a simplified assumption. Real resolution is more complex.
+                            # For now, we'll just note the local nature of the import.
+                            module_path = '.' * level + node.module
+                        else:
+                            module_path = node.module
+                        dependencies.append(module_path)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        dependencies.append(alias.name)
+        except SyntaxError:
+            # Fallback to regex for non-python or syntactically incorrect files
+            dependencies.extend(re.findall(r'^\s*import\s+([^\s]+)', content, re.MULTILINE))
+            dependencies.extend(re.findall(r'^\s*from\s+([^\s]+)', content, re.MULTILINE))
+
+        return list(set(dep.split('.')[0] for dep in dependencies))
 
     def _extract_exports(self, content: str) -> List[str]:
         exports = []
@@ -532,7 +589,11 @@ class ProjectStateManager:
         return [d.to_dict() for d in self.ai_decisions if d.decision_type == "architecture"]
 
     def _build_dependency_graph(self) -> Dict[str, List[str]]:
-        return {p: f_state.dependencies for p, f_state in self.files.items()}
+        graph = defaultdict(list)
+        for path, f_state in self.files.items():
+            # This is a basic implementation. A more advanced one would resolve modules to file paths.
+            graph[path] = [dep for dep in f_state.dependencies if dep in self.files]
+        return graph
 
     def _extract_coding_standards(self) -> Dict[str, Any]:
         return {"docstring_style": "google", "type_hints": True, "error_handling": "exceptions",
@@ -544,14 +605,21 @@ class ProjectStateManager:
 
     def _get_file_specific_context(self, file_path: str) -> Dict[str, Any]:
         rel_path = self._get_relative_path(file_path)
-        context = {"related_files": self._get_related_files(rel_path),
-                   "consistency_requirements": self.get_consistency_requirements(file_path),
-                   "required_interfaces": self._get_interface_requirements(rel_path)}
+        related_files_paths = list(self._get_related_files(rel_path))
+
+        context = {
+            "related_files": related_files_paths,
+            "consistency_requirements": self.get_consistency_requirements(file_path),
+            "required_interfaces": self._get_interface_requirements(rel_path)
+        }
         if rel_path in self.files:
             fs = self.files[rel_path]
-            context.update({"current_exports": fs.exports, "current_dependencies": fs.dependencies,
-                            "previous_decisions": [d for d in fs.ai_decisions[-3:]],
-                            "user_feedback": [f for f in fs.user_feedback[-2:]]})
+            context.update({
+                "current_exports": fs.exports,
+                "current_dependencies": fs.dependencies,
+                "previous_decisions": [d for d in fs.ai_decisions[-3:]],
+                "user_feedback": [f for f in fs.user_feedback[-2:]]
+            })
         return context
 
     def _get_role_guidance(self, ai_role: str) -> Dict[str, Any]:
@@ -567,15 +635,37 @@ class ProjectStateManager:
         }
         return guidance.get(ai_role.lower(), {})
 
-    def _get_related_files(self, file_path: str) -> List[str]:
+    def _get_related_files(self, file_path: str) -> Set[str]:
+        """
+        Identifies related files based on direct imports/dependencies and
+        files that import from the current file.
+        """
         related = set()
-        current_file = self.files.get(file_path)
-        if not current_file: return []
+        target_file_state = self.files.get(file_path)
+        if not target_file_state:
+            return related
+
+        # 1. Direct dependencies (this file imports from them)
+        # A more robust implementation would map module names to actual file paths.
+        # For now, we assume module names might correspond to file names.
+        for dep_module in target_file_state.dependencies:
+            # Simple check: does a file exist that matches the module name?
+            possible_file_path = f"{dep_module.replace('.', '/')}.py"
+            if possible_file_path in self.files:
+                related.add(possible_file_path)
+
+        # 2. Direct dependents (other files import from this one)
         for path, f_state in self.files.items():
-            if path == file_path: continue
-            if current_file.exports and any(exp in f_state.imports for exp in current_file.exports): related.add(path)
-        related.update(current_file.dependencies)
-        return list(related - {file_path})
+            if path == file_path:
+                continue
+            # Check if any of this file's exports are used in another file's imports
+            # This requires parsing the import statements of other files, which is complex.
+            # A simpler proxy: check if the file's module name is in other's dependencies.
+            module_name_guess = file_path.replace('.py', '').replace('/', '.')
+            if module_name_guess in f_state.dependencies:
+                related.add(path)
+
+        return related
 
     def _get_consistent_naming_style(self) -> str:
         return self.patterns.get("function_naming", ProjectPattern("", "snake_case", [], 0, 0)).description
