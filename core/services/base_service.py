@@ -42,22 +42,19 @@ class BaseAIService:
         if not self.project_state_manager:
             return "No project state available."
 
-        # --- THIS IS THE FIX ---
-        # Instead of directly accessing the attribute, we use .get() with a default value.
-        # This prevents the crash if an insight object somehow doesn't have 'related_files'.
         all_insights = list(self.project_state_manager.team_insights.values())
 
         if for_file:
+            # Filter for insights that are global (no related_files) or specific to the file
             insights = [
                 insight for insight in all_insights
-                if not insight.related_files or for_file in insight.get('related_files', [])
+                if not insight.related_files or for_file in insight.related_files
             ]
         else:
             insights = all_insights
 
         if not insights:
             return "No relevant team insights or patterns have been established yet."
-        # --- END OF FIX ---
 
         context_str = "### Established Team Insights & Patterns\n"
         # Sort insights by timestamp to show the most recent ones first

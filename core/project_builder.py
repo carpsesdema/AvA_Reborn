@@ -1,4 +1,4 @@
-# core/project_builder.py
+# core/project_builder.py - V2 with Robust Sandbox Branching
 
 import shutil
 import logging
@@ -43,21 +43,27 @@ class ProjectBuilder:
             dev_dir_name = f"{original_project_path.name}_dev"
             project_dir = self.workspace_root / dev_dir_name
 
-            # --- KEY CHANGE: Only copy if the dev directory doesn't already exist ---
+            # --- THIS IS THE KEY FIX ---
+            # Only copy the original project if the dev directory doesn't already exist.
+            # This ensures we create a complete sandbox on the first modification,
+            # and then continue to work within that sandbox for subsequent changes.
             if not project_dir.exists():
-                self.stream_emitter("ProjectBuilder", "file_op", f"Creating development branch at '{project_dir}'...",
-                                    "1")
+                self.stream_emitter("ProjectBuilder", "file_op", f"Creating new development branch at '{project_dir}'...", "1")
                 try:
-                    # Use dirs_exist_ok=False to be safe, since we check for existence first.
-                    shutil.copytree(original_project_path, project_dir, dirs_exist_ok=False,
-                                    ignore=shutil.ignore_patterns('venv', '__pycache__', '.git', '.idea', '.vscode'))
-                    self.stream_emitter("ProjectBuilder", "success", "Branch created successfully.", "1")
+                    # Use shutil.copytree to copy the entire project directory structure
+                    shutil.copytree(
+                        original_project_path,
+                        project_dir,
+                        dirs_exist_ok=False, # Be safe, we already checked for existence
+                        # Ignore common development folders to keep the copy clean
+                        ignore=shutil.ignore_patterns('venv', '.venv', '__pycache__', '.git', '.idea', '.vscode', '.pytest_cache', '*.db')
+                    )
+                    self.stream_emitter("ProjectBuilder", "success", "Branch created and populated successfully.", "1")
                 except Exception as e:
                     self.logger.error(f"Failed to copy project to dev branch: {e}", exc_info=True)
                     raise IOError(f"Failed to create development branch: {e}")
             else:
-                self.stream_emitter("ProjectBuilder", "info", f"Using existing development branch: '{project_dir}'",
-                                    "1")
+                self.stream_emitter("ProjectBuilder", "info", f"Using existing development branch: '{project_dir}'", "1")
 
         else:  # This is a new project from scratch
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

@@ -1,4 +1,4 @@
-# core/application.py
+# core/application.py - V2.1 with dangling signal connection removed
 
 import asyncio
 import logging
@@ -64,7 +64,7 @@ class AvAApplication(QObject):
 
         self.workflow_engine = HybridWorkflowEngine(
             llm_client=self.llm_client,
-            terminal_window=self.log_terminal_window,  # Engine logs go to the standalone window
+            terminal_window=self.log_terminal_window,
             code_viewer=self.code_viewer_window,
             rag_manager=self.rag_manager
         )
@@ -77,34 +77,27 @@ class AvAApplication(QObject):
 
     def connect_signals(self):
         """Connect signals between all application components."""
-        # --- Chat Interface to App Controller ---
         self.main_window.chat_interface.workflow_requested.connect(self.run_workflow)
-
-        # --- Sidebar to App Controller ---
         self.main_window.sidebar.action_triggered.connect(self.handle_sidebar_action)
         self.main_window.sidebar.model_config_requested.connect(self.main_window._open_model_config_dialog)
         self.main_window.sidebar.new_project_requested.connect(self.new_project)
         self.main_window.sidebar.load_project_requested.connect(self.load_project_dialog)
         self.main_window.sidebar.scan_directory_requested.connect(self.rag_manager.scan_directory_dialog)
         self.model_status_updated.connect(self.main_window.update_model_status_display)
-
-        # --- Workflow Engine to GUI ---
         self.workflow_engine.workflow_completed.connect(self.main_window.on_workflow_completed)
         self.workflow_engine.workflow_started.connect(self.main_window.on_workflow_started)
         self.workflow_engine.file_generated.connect(self.code_viewer_window.auto_open_file)
         self.workflow_engine.project_loaded.connect(self.main_window.update_project_display)
-
-        # --- Workflow Engine to Monitor Window ---
         self.workflow_engine.node_status_changed.connect(self.workflow_monitor_window.update_agent_status)
         self.workflow_engine.data_flow_started.connect(self.workflow_monitor_window.activate_connection)
         self.workflow_engine.data_flow_completed.connect(self.workflow_monitor_window.deactivate_connection)
         self.workflow_engine.workflow_reset.connect(self.workflow_monitor_window.refresh_workflow)
 
-        # --- RAG Manager to GUI ---
-        if hasattr(self.main_window.sidebar, 'knowledge_panel'):
-            self.rag_manager.status_changed.connect(
-                self.main_window.sidebar.knowledge_panel.update_rag_status
-            )
+        # --- THIS IS THE FIX ---
+        # The line that was causing the error has been removed.
+        # We no longer connect RAG status directly to the knowledge panel widget.
+        # We can add a new connection later if we want to display status elsewhere.
+
         logging.info("All application signals connected.")
 
     @Slot()
@@ -146,7 +139,6 @@ class AvAApplication(QObject):
         else:
             logging.warning(f"No handler found for sidebar action: {action}")
 
-    # --- Specific Action Handlers ---
     @Slot()
     def new_project(self):
         logging.info("New project requested.")
@@ -180,10 +172,12 @@ class AvAApplication(QObject):
 
     @Slot()
     def add_project_to_rag(self):
-        if self.project_state_manager:
+        if self.project_state_manager and self.rag_sync_service:
             project_path = str(self.project_state_manager.project_root)
             logging.info(f"Adding project '{project_path}' to RAG.")
-            self.main_window.sidebar.knowledge_panel.update_rag_status("Syncing project files...", "working")
+            # We can maybe emit a signal to a status bar in the future here
             asyncio.create_task(self.rag_sync_service.manual_sync_directory(project_path))
+        elif not self.rag_sync_service:
+            logging.warning("Cannot add project to RAG: RAG sync service not available.")
         else:
             logging.warning("Cannot add project to RAG: No project loaded.")

@@ -1,7 +1,8 @@
-# gui/interactive_terminal.py - V3 with History and Tab Completion!
+# gui/interactive_terminal.py - V3 with Command History AND Tab Completion!
 
 import sys
 import os
+import logging
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QProcess, QProcessEnvironment
 from PySide6.QtGui import QFont, QTextCursor, QColor, QTextCharFormat, QKeyEvent
@@ -10,11 +11,12 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QHBoxL
 from gui.components import Colors, Typography, ModernButton
 
 
+# --- NEW: Custom LineEdit to handle special key presses ---
 class TerminalInput(QLineEdit):
-    """A QLineEdit that handles up/down arrows for history and Tab for completion."""
+    """A QLineEdit that handles up/down arrow keys for history and Tab for completion."""
     up_arrow_pressed = Signal()
     down_arrow_pressed = Signal()
-    tab_pressed = Signal()  # New signal for tab completion
+    tab_pressed = Signal()
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Up:
@@ -23,11 +25,10 @@ class TerminalInput(QLineEdit):
         if event.key() == Qt.Key.Key_Down:
             self.down_arrow_pressed.emit()
             return
-        # --- NEW: Handle Tab key press ---
         if event.key() == Qt.Key.Key_Tab:
             self.tab_pressed.emit()
             return
-
+        # For all other keys, use the default behavior
         super().keyPressEvent(event)
 
 
@@ -42,6 +43,9 @@ class InteractiveTerminal(QWidget):
         super().__init__(parent)
         self.working_directory = Path.cwd()
         self.current_project_path = None
+        self.logger = logging.getLogger(__name__)
+
+        # --- Command History attributes ---
         self.command_history: list[str] = []
         self.history_index = -1
 
@@ -54,6 +58,7 @@ class InteractiveTerminal(QWidget):
         self._apply_style()
 
     def _init_ui(self):
+        """Initialize the UI components."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
@@ -87,7 +92,6 @@ class InteractiveTerminal(QWidget):
         self.input_line.returnPressed.connect(self.run_manual_command)
         self.input_line.up_arrow_pressed.connect(self._show_previous_history)
         self.input_line.down_arrow_pressed.connect(self._show_next_history)
-        # --- NEW: Connect Tab signal ---
         self.input_line.tab_pressed.connect(self._handle_tab_completion)
 
         input_layout.addWidget(self.prompt_label)
@@ -117,7 +121,7 @@ class InteractiveTerminal(QWidget):
         python_exe = venv_path / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
         if not python_exe.exists(): return self.append_error(f"Python not found in venv: {python_exe}")
 
-        command = f"{python_exe} {main_file}"
+        command = f'"{python_exe}" "{main_file}"'
         self._add_to_history(command)
         self.execute_command(str(python_exe), [str(main_file)])
 
@@ -130,7 +134,7 @@ class InteractiveTerminal(QWidget):
         pip_exe = venv_path / ("Scripts/pip.exe" if sys.platform == "win32" else "bin/pip")
         if not pip_exe.exists(): return self.append_error(f"Pip not found in venv: {pip_exe}")
 
-        command = f"{pip_exe} install -r {req_file}"
+        command = f'"{pip_exe}" install -r "{req_file}"'
         self._add_to_history(command)
         self.execute_command(str(pip_exe), ['install', '-r', str(req_file)])
 
@@ -161,7 +165,16 @@ class InteractiveTerminal(QWidget):
         self._add_to_history(command_text)
         self.input_line.clear()
         if command_text == "clear": return self.clear_terminal()
-        parts = command_text.split()
+
+        # Basic command parsing
+        import shlex
+        try:
+            parts = shlex.split(command_text)
+        except ValueError:
+            self.append_error("Error: Mismatched quotes in command.")
+            return
+
+        if not parts: return
         self.execute_command(parts[0], parts[1:])
 
     def _add_to_history(self, command: str):
@@ -173,51 +186,55 @@ class InteractiveTerminal(QWidget):
         if self.command_history and self.history_index < len(self.command_history) - 1:
             self.history_index += 1
             self.input_line.setText(self.command_history[self.history_index])
+            self.input_line.end(False)  # Move cursor to end
 
     def _show_next_history(self):
         if self.history_index > 0:
             self.history_index -= 1
             self.input_line.setText(self.command_history[self.history_index])
+            self.input_line.end(False)
         else:
             self.history_index = -1
             self.input_line.clear()
 
-    # --- NEW: Tab Completion Logic ---
     def _handle_tab_completion(self):
-        text = self.input_line.text()
-        parts = text.split()
+        text_under_cursor = self.input_line.text()
+        parts = text_under_cursor.split()
         if not parts: return
 
         to_complete = parts[-1]
-        base_path_str = os.path.dirname(to_complete)
-        search_dir = self.working_directory / base_path_str if base_path_str else self.working_directory
-
         try:
+            path_obj = Path(to_complete)
+            # Determine search directory and partial name
+            if to_complete.endswith(os.sep):
+                search_dir = self.working_directory / path_obj
+                partial_name = ""
+            else:
+                search_dir = self.working_directory / path_obj.parent
+                partial_name = path_obj.name
+
             if not search_dir.is_dir(): return
 
-            partial_name = os.path.basename(to_complete)
             matches = [p.name for p in search_dir.iterdir() if p.name.startswith(partial_name)]
 
             if not matches: return
 
             if len(matches) == 1:
-                # Single match, complete it fully
                 completed_name = matches[0]
                 if (search_dir / completed_name).is_dir():
-                    completed_name += os.sep  # Add slash for directories
+                    completed_name += os.sep
 
-                new_path = os.path.join(base_path_str, completed_name)
-                parts[-1] = new_path
+                # Reconstruct the full path for the part we're completing
+                full_completion = (path_obj.parent / completed_name).as_posix()
+                parts[-1] = full_completion
                 self.input_line.setText(" ".join(parts))
             else:
-                # Multiple matches, find common prefix
                 prefix = os.path.commonprefix(matches)
-                if prefix > partial_name:
-                    new_path = os.path.join(base_path_str, prefix)
-                    parts[-1] = new_path
+                if len(prefix) > len(partial_name):
+                    full_completion = (path_obj.parent / prefix).as_posix()
+                    parts[-1] = full_completion
                     self.input_line.setText(" ".join(parts))
 
-                # Display all possible completions in the terminal
                 self.append_output("\n" + "    ".join(matches) + "\n")
                 self.append_command(self.input_line.text())
 

@@ -26,80 +26,99 @@ class CodeExecutionResult:
     result: ExecutionResult
     output: str
     error: str
-    execution_time: float
     exit_code: int
-    suggestions: List[str]
-    dependencies_missing: List[str]
-
-
-@dataclass
-class TestResult:
-    """Result of generated test execution"""
-    test_name: str
-    passed: bool
-    output: str
-    error: str
-    coverage: float
-
-
-class SafeExecutionEnvironment:
-    """Isolated environment for safe code execution"""
-
-    def __init__(self, timeout: int = 30, memory_limit: int = 100):
-        self.timeout = timeout
-        self.memory_limit = memory_limit  # MB
-        self.allowed_imports = {
-            # Safe standard library modules
-            'os', 'sys', 'pathlib', 'json', 'datetime', 'time', 'math',
-            'random', 'collections', 'itertools', 'functools', 're',
-            'typing', 'dataclasses', 'enum', 'abc', 'copy', 'uuid',
-            # Common safe third-party
-            'requests', 'numpy', 'pandas', 'matplotlib', 'flask', 'fastapi',
-            'pydantic', 'click', 'argparse', 'logging', 'pytest',
-            'PySide6', 'tkinter', 'ursina', 'noise' # Added game libs
-        }
-        self.forbidden_modules = {
-            'subprocess', 'multiprocessing', 'threading', 'socket',
-            'urllib', 'http', 'ftplib', 'smtplib', 'pickle', 'marshal',
-            'ctypes', 'importlib', '__builtin__', '__builtins__'
-        }
 
 
 class ExecutionEngine:
     """
-    🚀 Code Execution & Testing Engine
+    🚀 Code Execution & Validation Engine
 
-    Safely executes generated code and provides immediate feedback:
-    - Syntax validation
+    Safely executes generated code in a subprocess to provide immediate feedback on:
+    - Syntax validation (implicit in execution attempt)
     - Import dependency checking
-    - Runtime execution in isolated environment
-    - Auto-generated test creation and execution
-    - Performance metrics and suggestions
+    - Runtime errors
     """
 
-    def __init__(self, project_state_manager, terminal=None, stream_emitter=None):
+    def __init__(self, project_state_manager, stream_emitter=None):
         self.project_state = project_state_manager
-        self.terminal = terminal
         self.stream_emitter = stream_emitter
         self.logger = logging.getLogger(__name__)
-        self.environment = SafeExecutionEnvironment()
+        self.timeout = 15  # seconds
+
+    def _log(self, message: str, level: str = "info", indent: int = 3):
+        if self.stream_emitter:
+            self.stream_emitter("ExecutionEngine", level, message, str(indent))
 
     async def validate_code(self, file_path: str, code: str) -> CodeExecutionResult:
-        """Lightweight validation pipeline for a file's code."""
-        if self.stream_emitter:
-            self.stream_emitter("ExecutionEngine", "info", f"Validating syntax for {file_path}", "3")
+        """
+        Robust validation pipeline. Writes code to a temporary file and executes it
+        in a separate, timed-out process to catch runtime and import errors.
+        """
+        self._log(f"Starting robust validation for {file_path}...")
 
-        # Stage 1: Syntax validation
-        try:
-            compile(code, file_path, 'exec')
-        except SyntaxError as e:
-            error_msg = f"Syntax error in {file_path} on line {e.lineno}: {e.msg}"
-            if self.stream_emitter:
-                self.stream_emitter("ExecutionEngine", "error", error_msg, "3")
-            return CodeExecutionResult(result=ExecutionResult.SYNTAX_ERROR, output="", error=error_msg,
-                                       execution_time=0.0, exit_code=1, suggestions=[], dependencies_missing=[])
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir = Path(temp_dir_str)
+            temp_file = temp_dir / Path(file_path).name  # Use only the filename
+            temp_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file.write_text(code, encoding='utf-8')
 
-        if self.stream_emitter:
-            self.stream_emitter("ExecutionEngine", "success", f"Syntax OK for {file_path}", "3")
-        return CodeExecutionResult(result=ExecutionResult.SUCCESS, output="Syntax validation passed", error="",
-                                   execution_time=0.0, exit_code=0, suggestions=[], dependencies_missing=[])
+            python_executable = sys.executable
+            command = [python_executable, str(temp_file)]
+            self._log(f"Executing command: {' '.join(command)}", "debug")
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(temp_dir)
+                )
+
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+
+                stdout = stdout_bytes.decode('utf-8', errors='ignore')
+                stderr = stderr_bytes.decode('utf-8', errors='ignore')
+                exit_code = proc.returncode
+
+                if exit_code == 0:
+                    self._log(f"✅ Validation successful for {file_path}. Exit code: 0.", "success")
+                    return CodeExecutionResult(result=ExecutionResult.SUCCESS, output=stdout, error="", exit_code=0)
+                else:
+                    self._log(f"❌ Validation failed for {file_path}. Exit code: {exit_code}.", "error")
+                    self._log(f"Stderr: {stderr.strip()}", "debug", 4)
+
+                    if "SyntaxError:" in stderr:
+                        result_type = ExecutionResult.SYNTAX_ERROR
+                    elif "ImportError:" in stderr or "ModuleNotFoundError:" in stderr:
+                        result_type = ExecutionResult.IMPORT_ERROR
+                    else:
+                        result_type = ExecutionResult.RUNTIME_ERROR
+
+                    return CodeExecutionResult(result=result_type, output=stdout, error=stderr, exit_code=exit_code)
+
+            except asyncio.TimeoutError:
+                self._log(f"⏰ Validation timed out for {file_path} after {self.timeout}s.", "error")
+                proc.kill()
+                await proc.wait()
+                return CodeExecutionResult(
+                    result=ExecutionResult.TIMEOUT,
+                    output="",
+                    error=f"Execution timed out after {self.timeout} seconds. The code may contain an infinite loop.",
+                    exit_code=-1
+                )
+            except FileNotFoundError:
+                self._log(f"❌ Command not found: {python_executable}. Is Python installed correctly?", "error")
+                return CodeExecutionResult(
+                    result=ExecutionResult.RUNTIME_ERROR,
+                    output="",
+                    error=f"Python executable not found at '{python_executable}'.",
+                    exit_code=127
+                )
+            except Exception as e:
+                self._log(f"An unexpected error occurred during validation: {e}", "error")
+                return CodeExecutionResult(
+                    result=ExecutionResult.RUNTIME_ERROR,
+                    output="",
+                    error=f"An unexpected exception occurred during execution: {str(e)}",
+                    exit_code=-1
+                )
