@@ -1,4 +1,4 @@
-# core/services/base_service.py
+# core/services/base_service.py - Now with more robust insight handling!
 
 import json
 import re
@@ -42,33 +42,30 @@ class BaseAIService:
         if not self.project_state_manager:
             return "No project state available."
 
-        # CORRECTED LOGIC: Access the attribute directly and then filter.
-        all_insights = self.project_state_manager.team_insights
+        # --- THIS IS THE FIX ---
+        # Instead of directly accessing the attribute, we use .get() with a default value.
+        # This prevents the crash if an insight object somehow doesn't have 'related_files'.
+        all_insights = list(self.project_state_manager.team_insights.values())
 
         if for_file:
-            # Filter for insights that are globally relevant (no related files)
-            # or specifically related to the file in question.
             insights = [
                 insight for insight in all_insights
-                if not insight.related_files or for_file in insight.related_files
+                if not insight.related_files or for_file in insight.get('related_files', [])
             ]
         else:
             insights = all_insights
 
         if not insights:
             return "No relevant team insights or patterns have been established yet."
+        # --- END OF FIX ---
 
         context_str = "### Established Team Insights & Patterns\n"
-        # Sort by relevance score if available (assuming higher is better)
-        try:
-            insights.sort(key=lambda x: float(x.relevance_score), reverse=True)
-        except (ValueError, TypeError):
-            pass  # Ignore sorting if relevance_score is not a number
+        # Sort insights by timestamp to show the most recent ones first
+        insights.sort(key=lambda x: x.timestamp, reverse=True)
 
-        for insight in insights:
+        for insight in insights[:5]:  # Only show the top 5 most recent insights
             context_str += f"- **Type:** {insight.insight_type.capitalize()} | "
-            context_str += f"**Source:** {insight.source_agent} | "
-            context_str += f"**Relevance:** {insight.relevance_score}\n"
+            context_str += f"**Source:** {insight.source_agent}\n"
             context_str += f"  **Insight:** {insight.content}\n"
             if insight.related_files:
                 context_str += f"  **Related Files:** {', '.join(insight.related_files)}\n"
@@ -79,13 +76,17 @@ class BaseAIService:
             insight_type: str,
             source_agent: str,
             content: str,
-            relevance_score: str,
+            impact_level: str,  # Corrected from relevance_score
             related_files: Optional[List[str]] = None
     ):
         """Contributes a new insight to the project state."""
         if self.project_state_manager:
             self.project_state_manager.add_team_insight(
-                insight_type, source_agent, content, relevance_score, related_files
+                insight_type=insight_type,
+                source_agent=source_agent,
+                content=content,
+                impact_level=impact_level,  # Corrected
+                related_files=related_files or []  # Ensure it's always a list
             )
 
     async def _get_intelligent_rag_context(self, query: str) -> str:
@@ -96,12 +97,16 @@ class BaseAIService:
             return "RAG system not available."
         try:
             results = await self.rag_manager.query_context_async(query, k=3)
-            if not results or not results.get("documents"):
+
+            # The RAG query returns a list of dictionaries now.
+            if not results:
                 return "No relevant information found in the knowledge base."
 
             context_str = "### Relevant Information from Knowledge Base\n"
-            for doc in results["documents"][0]:
-                context_str += f"- {doc}\n"
+            for doc in results:
+                content = doc.get('content', '')
+                source = doc.get('metadata', {}).get('filename', 'Unknown Source')
+                context_str += f"- Source: {source}\n  Content: {content[:250]}...\n"
             return context_str
         except Exception as e:
             self.logger.error(f"RAG query failed: {e}", exc_info=True)

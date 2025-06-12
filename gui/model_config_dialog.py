@@ -1,4 +1,4 @@
-# gui/model_config_dialog.py - V4.2 FINAL - Simplified UI for V4 roles
+# gui/model_config_dialog.py - V4.3 - Now saves assignments to file!
 
 import json
 from pathlib import Path
@@ -453,9 +453,16 @@ class ModelConfigurationDialog(QDialog):
                 section_widget.set_personality(personality_text)
 
     def _reset_to_defaults(self):
+        # --- CHANGED: Don't call the private method, let it re-evaluate on next launch ---
+        # Instead, we just delete the config file and reload the dialog.
+        if self.llm_client.assignments_file.exists():
+            self.llm_client.assignments_file.unlink()
+
+        # Re-initialize the client's assignment logic (which will now use smart defaults)
         self.llm_client._assign_roles()
-        self._load_current_config()
-        QMessageBox.information(self, "Defaults Restored", "Configuration has been reset to smart defaults.")
+        self._load_current_config()  # Reload the dialog UI to show the new defaults
+        QMessageBox.information(self, "Defaults Restored",
+                                "Configuration has been reset to smart defaults. Settings will be saved on apply.")
 
     def _apply_configuration(self):
         all_sections = {
@@ -479,9 +486,13 @@ class ModelConfigurationDialog(QDialog):
             new_personalities[role_enum] = section_widget.get_personality()
 
         try:
+            # --- CHANGED: Apply and then SAVE! ---
             self.llm_client.role_assignments = new_assignments
             self.llm_client.personalities = new_personalities
             self.llm_client.role_temperatures = new_temperatures
+
+            # This is the magic! Save the new settings to the file.
+            self.llm_client.save_assignments()
 
             self.configuration_applied.emit({'role_assignments': {k.value: v for k, v in new_assignments.items()}})
             QMessageBox.information(self, "Configuration Applied", "AI Specialist configuration updated successfully.")

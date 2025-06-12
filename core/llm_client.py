@@ -1,4 +1,4 @@
-# core/llm_client.py - V4.9 FINAL - Corrected retry logic for async generators
+# core/llm_client.py - V5.0 - Now with persistent configuration!
 
 import json
 import os
@@ -20,6 +20,7 @@ def retry_async_generator(retries=4, delay=2.0, backoff=2.0):
     A decorator for retrying an async GENERATOR with exponential backoff.
     This is specifically designed for functions that use `async for` loops.
     """
+
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -37,12 +38,15 @@ def retry_async_generator(retries=4, delay=2.0, backoff=2.0):
                     logger.warning(
                         f"API call for generator {func.__name__} failed (Attempt {i + 1}/{retries}). Error: {e}. Retrying in {current_delay:.2f}s...")
                     if i >= retries - 1:
-                        logger.error(f"API call for generator {func.__name__} failed after {retries} retries. Giving up.")
+                        logger.error(
+                            f"API call for generator {func.__name__} failed after {retries} retries. Giving up.")
                         raise  # Re-raise the last exception
                     await asyncio.sleep(current_delay)
                     # Add jitter to avoid thundering herd problem
                     current_delay = (current_delay * backoff) + (random.uniform(0, 1))
+
         return wrapper
+
     return decorator
 
 
@@ -77,13 +81,18 @@ class EnhancedLLMClient:
 
     def __init__(self):
         self.models: Dict[str, ModelConfig] = {}
+        # --- CHANGED: Define config file path ---
+        self.config_dir = Path("config")
+        self.config_dir.mkdir(exist_ok=True)
+        self.assignments_file = self.config_dir / "role_assignments.json"
+
         self.role_assignments: Dict[LLMRole, str] = {}
         self.personalities: Dict[LLMRole, str] = {}
         self.role_temperatures: Dict[LLMRole, float] = {}
         self._initialize_models()
         self._load_personalities_from_config()
         self._initialize_default_personalities()
-        self._assign_roles()
+        self._assign_roles()  # This will now load from file or use smart defaults
 
     def _load_personalities_from_config(self):
         """Load personalities from personality_presets.json."""
@@ -97,12 +106,16 @@ class EnhancedLLMClient:
                         # Map planner/structurer to architect
                         if role_str in ["planner", "structurer"]:
                             role_enum = LLMRole.ARCHITECT
+                        elif role_str == "coder":
+                            # Handle different coder personalities mapping to the single CODER role
+                            role_enum = LLMRole.CODER
                         else:
                             role_enum = LLMRole(role_str)
 
                         if presets_list:
-                            user_preset = next((p for p in presets_list if p.get("author") == "User"), None)
-                            preset_to_load = user_preset or presets_list[0]
+                            # Use the last User-created preset for a role if it exists
+                            user_presets = [p for p in presets_list if p.get("author") == "User"]
+                            preset_to_load = user_presets[-1] if user_presets else presets_list[0]
                             self.personalities[role_enum] = preset_to_load["personality"]
                             self.role_temperatures[role_enum] = preset_to_load.get("temperature", 0.7)
                     except (ValueError, KeyError) as e:
@@ -180,8 +193,40 @@ class EnhancedLLMClient:
                                                   temperature=0.6, suitable_roles=[LLMRole.CHAT, LLMRole.ARCHITECT])
         logger.info("✅ Ollama models configured (ensure models are pulled and server is running).")
 
+    # --- ENTIRELY NEW METHOD ---
+    def save_assignments(self):
+        """Saves the current role assignments to the JSON file."""
+        logger.info(f"Saving role assignments to {self.assignments_file}")
+        # Convert enum keys to strings for JSON compatibility
+        assignments_to_save = {
+            role.value: model_name for role, model_name in self.role_assignments.items()
+        }
+        with open(self.assignments_file, 'w', encoding='utf-8') as f:
+            json.dump(assignments_to_save, f, indent=2)
+
     def _assign_roles(self):
-        """Assigns the best available model to each role."""
+        """
+        Assigns models to roles. It first tries to load from the config file,
+        then falls back to smart defaults.
+        """
+        # --- CHANGED: Load from file first! ---
+        if self.assignments_file.exists():
+            logger.info(f"Loading role assignments from {self.assignments_file}")
+            with open(self.assignments_file, 'r', encoding='utf-8') as f:
+                try:
+                    loaded_assignments = json.load(f)
+                    # Convert string keys back to LLMRole enums
+                    for role_str, model_name in loaded_assignments.items():
+                        if model_name in self.models:
+                            self.role_assignments[LLMRole(role_str)] = model_name
+                        else:
+                            logger.warning(
+                                f"Model '{model_name}' for role '{role_str}' from config is not available. Will re-assign.")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.error(f"Error loading role assignments file: {e}. Falling back to defaults.")
+                    # If file is corrupt, proceed to smart assignment
+
+        # --- Fallback to smart assignment for any unassigned roles ---
         preferences = {
             LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229",
                                 "gpt-4o"],
@@ -193,29 +238,32 @@ class EnhancedLLMClient:
         }
 
         for role, preferred_models in preferences.items():
-            assigned_model = next((model_name for model_name in preferred_models if model_name in self.models), None)
-            if not assigned_model:
-                assigned_model = next((model_key for model_key, model_config in self.models.items() if
-                                       role in model_config.suitable_roles), None)
-            self.role_assignments[role] = assigned_model
+            if role not in self.role_assignments:  # Only assign if not loaded from config
+                assigned_model = next((model_name for model_name in preferred_models if model_name in self.models),
+                                      None)
+                if not assigned_model:
+                    assigned_model = next((model_key for model_key, model_config in self.models.items() if
+                                           role in model_config.suitable_roles), None)
+                if assigned_model:
+                    self.role_assignments[role] = assigned_model
 
         available_models = list(self.models.keys())
         if not available_models:
             logger.error("❌ No models available. Please check your API keys in the .env file.")
             return
 
+        # Ensure every role has at least a fallback model
         for role in LLMRole:
-            if not self.role_assignments.get(role):
+            if role not in self.role_assignments:
                 self.role_assignments[role] = available_models[0]
+                logger.warning(f"Role '{role.value}' was unassigned, falling back to '{available_models[0]}'.")
 
-        # Set initial role temperatures from the assigned model's default, unless overridden by presets
         for role, model_name in self.role_assignments.items():
             if role not in self.role_temperatures and model_name and model_name in self.models:
                 self.role_temperatures[role] = self.models[model_name].temperature
-
         if LLMRole.CODER in self.role_temperatures: self.role_temperatures[LLMRole.CODER] = 0.1
 
-        logger.info("🎯 Smart Role Assignments:")
+        logger.info("🎯 Final Role Assignments:")
         for role, model_name in self.role_assignments.items():
             if model_name and model_name in self.models:
                 provider = self.models[model_name].provider
@@ -223,6 +271,9 @@ class EnhancedLLMClient:
                 logger.info(f"  {role.value.title():<10}: {provider}/{self.models[model_name].model} (Temp: {temp})")
             else:
                 logger.warning(f"  {role.value.title():<10}: ❌ Unassigned")
+
+        # --- ADDED: Save the potentially updated assignments back to disk ---
+        self.save_assignments()
 
     def get_role_model(self, role: LLMRole) -> Optional[ModelConfig]:
         """Get the model configuration assigned to a role."""
@@ -243,7 +294,6 @@ class EnhancedLLMClient:
             logger.error(f"Chat failed for role {role.value}: {e}", exc_info=True)
             # The fallback response is now handled inside stream_chat
             return f"# AvA Error: Chat failed for role {role.value}. See logs for details."
-
 
     @retry_async_generator()
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
@@ -273,8 +323,6 @@ class EnhancedLLMClient:
             yield self._fallback_response(prompt, role)
             return
 
-        # The decorator will handle retries. If it still fails, we raise the exception to be caught by the caller.
-        # We don't need a try/except block here anymore because the decorator handles it.
         async for chunk in stream_func(prompt, call_config, personality):
             yield chunk
 

@@ -1,4 +1,5 @@
-# gui/workflow_monitor_window.py - Graphics Window for Workflow Visualization
+# gui/workflow_monitor_window.py - V2 with Robust Refresh Logic
+
 import sys
 from PySide6.QtCore import Qt, QPointF, Slot, QTimer
 from PySide6.QtGui import QPainter
@@ -33,10 +34,12 @@ class WorkflowMonitorWindow(QMainWindow):
         # Initialize with a standard layout
         self.scene.setup_standard_workflow()
 
-        # FIX: Setup control panel immediately to avoid race conditions.
+        # Setup control panel immediately to avoid race conditions.
         self._setup_control_panel()
 
-        self.center_view()
+        # Center the view once the window is shown
+        QTimer.singleShot(100, self.center_view)
+
 
     def _init_ui(self):
         """Initialize the UI layout."""
@@ -66,14 +69,6 @@ class WorkflowMonitorWindow(QMainWindow):
 
     def _setup_control_panel(self):
         """Setup the control panel UI. This is now called directly."""
-        # Clear any existing layout
-        if self.control_panel.layout():
-            for i in reversed(range(self.control_panel.layout().count())):
-                item = self.control_panel.layout().itemAt(i)
-                if item.widget():
-                    item.widget().setParent(None)
-            self.control_panel.layout().deleteLater()
-
         layout = QVBoxLayout(self.control_panel)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
@@ -89,7 +84,10 @@ class WorkflowMonitorWindow(QMainWindow):
 
         # Agent status displays
         self.agent_status_widgets = {}
-        for agent_id, agent_node in self.scene._agent_nodes.items():
+        # --- CHANGED: Use the scene's internal order for consistency ---
+        sorted_nodes = sorted(self.scene._agent_nodes.values(), key=lambda node: node.y())
+        for agent_node in sorted_nodes:
+            agent_id = agent_node.agent_id
             agent_panel = QFrame()
             agent_panel_layout = QVBoxLayout(agent_panel)
             agent_panel.setStyleSheet(f"background: {Colors.ELEVATED_BG}; border-radius: 6px; padding: 8px;")
@@ -159,10 +157,16 @@ class WorkflowMonitorWindow(QMainWindow):
 
     @Slot()
     def refresh_workflow(self):
+        """
+        Refreshes the workflow view by resetting node statuses without rebuilding
+        the entire control panel, making it more robust.
+        """
         self.scene.refresh_workflow()
-        self._setup_control_panel()  # Re-setup panel to match refreshed scene
+        # --- THIS IS THE FIX ---
+        # Instead of rebuilding the panel, just update the widgets that are already there.
         for agent_id in self.agent_status_widgets.keys():
             self.update_agent_status(agent_id, "idle", "Ready")
+        # --- END FIX ---
 
     @Slot()
     def center_view(self):

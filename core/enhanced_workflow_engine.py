@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V6.3 - Added robust micro-task failure handling
+# core/enhanced_workflow_engine.py - V6.4 - Robust state management and failure handling
 
 import asyncio
 import json
@@ -22,7 +22,7 @@ from core.domain_context_manager import DomainContextManager
 
 class HybridWorkflowEngine(QObject):
     """
-    🚀 V6.3 Hybrid Workflow Engine: Now with robust failure handling for micro-tasks.
+    🚀 V6.4 Hybrid Workflow Engine: Robust state management and failure handling.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -80,11 +80,13 @@ class HybridWorkflowEngine(QObject):
             except Exception as e:
                 self.logger.error(f"❌ Failed to connect terminal signals: {e}")
 
+    # --- THIS IS THE KEY FIX FOR MICRO-TASK FAILURES! ---
     def set_project_state(self, project_state_manager: ProjectStateManager):
         """Connects the project state to all services and initializes dependent components."""
         self.project_state_manager = project_state_manager
         self.domain_context_manager = DomainContextManager(project_state_manager.project_root)
 
+        # Make sure ALL services that need state get it!
         self.architect_service.set_project_state(project_state_manager)
         self.coder_service.set_project_state(project_state_manager)
         self.assembler_service.set_project_state(project_state_manager)
@@ -94,6 +96,7 @@ class HybridWorkflowEngine(QObject):
             llm_client=self.llm_client,
             domain_context_manager=self.domain_context_manager
         )
+        self.logger.info("Project state correctly set for all AI services.")
 
     async def _prepare_and_set_domain_context(self):
         """Analyzes the project's domain context ONCE and stores it in the state manager."""
@@ -154,8 +157,8 @@ class HybridWorkflowEngine(QObject):
             self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
-        """Execute the V6.3 Hybrid workflow combining architecture and micro-task orchestration."""
-        self.logger.info(f"🚀 Starting V6.3 Hybrid workflow: {user_prompt[:100]}...")
+        """Execute the V6.4 Hybrid workflow combining architecture and micro-task orchestration."""
+        self.logger.info(f"🚀 Starting V6.4 Hybrid workflow: {user_prompt[:100]}...")
         self.workflow_reset.emit()
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
@@ -183,8 +186,10 @@ class HybridWorkflowEngine(QObject):
             project_context_for_tasks = {"project_name": tech_spec.get("project_name", ""),
                                          "project_description": tech_spec.get("project_description", "")}
 
-            all_micro_tasks = await self.micro_task_engine.create_smart_tasks(tech_spec.get("technical_specs", {}),
-                                                                              project_context_for_tasks)
+            # --- Corrected logic to handle the new tech_spec structure ---
+            files_to_plan = tech_spec.get("technical_specs", {}).get("files", {})
+            all_micro_tasks = await self.micro_task_engine.create_smart_tasks(files_to_plan, project_context_for_tasks)
+
             tasks_by_file = defaultdict(list)
             for task in all_micro_tasks:
                 if task.file_path: tasks_by_file[task.file_path].append(task)
@@ -222,12 +227,12 @@ class HybridWorkflowEngine(QObject):
                                                                             generated_files, micro_tasks_for_file)
                 if assembled_code:
                     self.node_status_changed.emit("reviewer", "working", f"Reviewing {filename}...")
-                    self.data_flow_started.emit("coder", "reviewer")
+                    self.data_flow_started.emit("assembler", "reviewer")  # Data flows from assembler to reviewer
                     await asyncio.sleep(0.1)
-                    self.data_flow_completed.emit("coder", "reviewer")
+                    self.data_flow_completed.emit("assembler", "reviewer")
                     self.node_status_changed.emit("reviewer", "success", f"{filename} approved.")
                     self._write_file(project_dir, filename, assembled_code)
-                    generated_files[filename] = {"source_code": assembled_code}
+                    generated_files[filename] = {"source_code": assembled_code, "spec": file_spec}
             except Exception as e:
                 self.logger.error(f"Failed to generate {filename}: {e}", exc_info=True)
 
@@ -236,13 +241,13 @@ class HybridWorkflowEngine(QObject):
     async def _generate_file_with_micro_tasks(self, filename: str, file_spec: dict, tech_spec: dict,
                                               generated_files: dict, micro_tasks: List[SimpleTaskSpec]) -> str:
         if not micro_tasks:
+            # Fallback for simple files without detailed components
             return await self.coder_service.generate_file_from_spec(filename, file_spec, {
                 "description": tech_spec.get("project_description", "")}, self._build_dependency_context(
                 file_spec.get("dependencies", []), generated_files))
 
         micro_task_results = await self._execute_micro_tasks_in_parallel(micro_tasks)
 
-        # If ALL micro-tasks for a file failed, we should not attempt to assemble it.
         if not micro_task_results:
             self.logger.warning(f"Skipping assembly of {filename} as all its micro-tasks failed.")
             self.detailed_log_event.emit("Assembler", "warning", f"Skipping {filename}: no completed micro-tasks.", "2")
@@ -260,41 +265,22 @@ class HybridWorkflowEngine(QObject):
         return assembled_code
 
     async def _execute_micro_tasks_in_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
-        """
-        Executes micro-tasks in parallel, now with robust error logging and handling.
-        It will continue executing all tasks and return the results of the successful ones.
-        """
         if not micro_tasks:
             return []
-        semaphore = asyncio.Semaphore(5)  # Limit concurrent API calls
+        semaphore = asyncio.Semaphore(5)
 
         async def execute_task(task: SimpleTaskSpec):
             async with semaphore:
-                # The CoderService will raise an exception on permanent failure,
-                # which will be caught by asyncio.gather.
-                return await self.coder_service.execute_micro_task_with_gemini_flash(task)
+                try:
+                    return await self.coder_service.execute_micro_task_with_gemini_flash(task)
+                except Exception as e:
+                    self.logger.error(f"Micro-task {task.id} failed permanently: {e}", exc_info=False)
+                    self.detailed_log_event.emit("HybridEngine", "error", f"❌ Failed to execute micro-task {task.id}.",
+                                                 "2")
+                    return None  # Return None on failure
 
-        # Use return_exceptions=True to prevent one failed task from stopping all others.
-        # We get back either a result dict or the exception object.
-        all_results = await asyncio.gather(*[execute_task(task) for task in micro_tasks], return_exceptions=True)
-
-        successful_results = []
-        for i, result in enumerate(all_results):
-            task_info = micro_tasks[i]
-            if isinstance(result, Exception):
-                # Log the failure clearly.
-                self.logger.error(
-                    f"Micro-task {task_info.id} ({task_info.description[:40]}...) failed permanently: {result}",
-                    exc_info=False  # The exception is already formatted.
-                )
-                self.detailed_log_event.emit(
-                    "HybridEngine", "error", f"❌ Failed to execute micro-task {task_info.id}.", "2"
-                )
-            elif result:
-                successful_results.append(result)
-
-        return successful_results
-
+        results = await asyncio.gather(*[execute_task(task) for task in micro_tasks])
+        return [res for res in results if res is not None]
 
     async def _setup_project_directory(self, tech_spec: dict) -> Path:
         project_name = tech_spec.get("project_name", "generated_project")
