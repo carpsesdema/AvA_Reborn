@@ -6,7 +6,8 @@ import asyncio
 from typing import Dict, List, Any
 
 from core.llm_client import LLMRole
-from core.project_state_manager import ProjectStateManager, FileState
+from core.project_state_manager import ProjectStateManager
+from core.state_models import FileState
 from .base_service import BaseAIService
 
 

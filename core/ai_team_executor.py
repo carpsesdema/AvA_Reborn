@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict, deque
 from typing import Dict, List, Optional
 
-from core.workflow_services import CoderService, ReviewerService
+from core.services import coder_service, reviewer_service
 from core.project_state_manager import ProjectStateManager
 
 
@@ -17,7 +17,7 @@ class AITeamExecutor:
     Now with parallel code generation for maximum speed!
     """
 
-    def __init__(self, coder_service: CoderService, reviewer_service: ReviewerService, stream_emitter,
+    def __init__(self, coder_service: coder_service, reviewer_service: reviewer_service, stream_emitter,
                  logger: logging.Logger):
         self.coder_service = coder_service
         self.reviewer_service = reviewer_service
