@@ -1,4 +1,4 @@
-# core/llm_client.py - V5.0 - Now with persistent configuration!
+# core/llm_client.py - V5.1 - Integrated a wider range of local models
 
 import json
 import os
@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# --- NEW: Corrected Retry Decorator for ASYNC GENERATORS ---
+# --- Corrected Retry Decorator for ASYNC GENERATORS ---
 def retry_async_generator(retries=4, delay=2.0, backoff=2.0):
     """
     A decorator for retrying an async GENERATOR with exponential backoff.
@@ -81,7 +81,6 @@ class EnhancedLLMClient:
 
     def __init__(self):
         self.models: Dict[str, ModelConfig] = {}
-        # --- CHANGED: Define config file path ---
         self.config_dir = Path("config")
         self.config_dir.mkdir(exist_ok=True)
         self.assignments_file = self.config_dir / "role_assignments.json"
@@ -92,7 +91,7 @@ class EnhancedLLMClient:
         self._initialize_models()
         self._load_personalities_from_config()
         self._initialize_default_personalities()
-        self._assign_roles()  # This will now load from file or use smart defaults
+        self._assign_roles()
 
     def _load_personalities_from_config(self):
         """Load personalities from personality_presets.json."""
@@ -103,17 +102,14 @@ class EnhancedLLMClient:
                     all_presets_data = json.load(f)
                 for role_str, presets_list in all_presets_data.items():
                     try:
-                        # Map planner/structurer to architect
                         if role_str in ["planner", "structurer"]:
                             role_enum = LLMRole.ARCHITECT
                         elif role_str == "coder":
-                            # Handle different coder personalities mapping to the single CODER role
                             role_enum = LLMRole.CODER
                         else:
                             role_enum = LLMRole(role_str)
 
                         if presets_list:
-                            # Use the last User-created preset for a role if it exists
                             user_presets = [p for p in presets_list if p.get("author") == "User"]
                             preset_to_load = user_presets[-1] if user_presets else presets_list[0]
                             self.personalities[role_enum] = preset_to_load["personality"]
@@ -185,19 +181,29 @@ class EnhancedLLMClient:
 
         # --- Ollama (Local) ---
         ollama_base_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
-        self.models["ollama_llama3"] = ModelConfig(provider="ollama", model="llama3", base_url=ollama_base_url,
-                                                   temperature=0.7, suitable_roles=[LLMRole.CHAT, LLMRole.REVIEWER])
-        self.models["ollama_codellama"] = ModelConfig(provider="ollama", model="codellama", base_url=ollama_base_url,
-                                                      temperature=0.1, suitable_roles=[LLMRole.CODER])
-        self.models["ollama_qwen2"] = ModelConfig(provider="ollama", model="qwen2", base_url=ollama_base_url,
-                                                  temperature=0.6, suitable_roles=[LLMRole.CHAT, LLMRole.ARCHITECT])
-        logger.info("✅ Ollama models configured (ensure models are pulled and server is running).")
 
-    # --- ENTIRELY NEW METHOD ---
+        # --- Good All-Rounders / Chat Models ---
+        self.models["ollama_llama3"] = ModelConfig("ollama", "llama3", base_url=ollama_base_url,
+                                                   temperature=0.7, suitable_roles=[LLMRole.CHAT, LLMRole.REVIEWER])
+        self.models["ollama_qwen2.5-coder"] = ModelConfig("ollama", "qwen2.5-coder:latest", base_url=ollama_base_url,
+                                                          temperature=0.6,
+                                                          suitable_roles=[LLMRole.CHAT, LLMRole.ARCHITECT])
+
+        # --- Specialist Coding Models (Now with general versions) ---
+        self.models["ollama_codellama-13b"] = ModelConfig("ollama", "codellama:13b", base_url=ollama_base_url,
+                                                          temperature=0.1, suitable_roles=[LLMRole.CODER])
+        self.models["ollama_codellama-13b-instruct"] = ModelConfig("ollama", "codellama:13b-instruct",
+                                                                   base_url=ollama_base_url,
+                                                                   temperature=0.1, suitable_roles=[LLMRole.CODER])
+        self.models["ollama_starcoder2-15b-instruct"] = ModelConfig("ollama", "starcoder2:15b-instruct",
+                                                                    base_url=ollama_base_url,
+                                                                    temperature=0.1, suitable_roles=[LLMRole.CODER])
+
+        logger.info("✅ Ollama local models configured. Make sure your Ollama server is running!")
+
     def save_assignments(self):
         """Saves the current role assignments to the JSON file."""
         logger.info(f"Saving role assignments to {self.assignments_file}")
-        # Convert enum keys to strings for JSON compatibility
         assignments_to_save = {
             role.value: model_name for role, model_name in self.role_assignments.items()
         }
@@ -209,13 +215,11 @@ class EnhancedLLMClient:
         Assigns models to roles. It first tries to load from the config file,
         then falls back to smart defaults.
         """
-        # --- CHANGED: Load from file first! ---
         if self.assignments_file.exists():
             logger.info(f"Loading role assignments from {self.assignments_file}")
             with open(self.assignments_file, 'r', encoding='utf-8') as f:
                 try:
                     loaded_assignments = json.load(f)
-                    # Convert string keys back to LLMRole enums
                     for role_str, model_name in loaded_assignments.items():
                         if model_name in self.models:
                             self.role_assignments[LLMRole(role_str)] = model_name
@@ -224,9 +228,7 @@ class EnhancedLLMClient:
                                 f"Model '{model_name}' for role '{role_str}' from config is not available. Will re-assign.")
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"Error loading role assignments file: {e}. Falling back to defaults.")
-                    # If file is corrupt, proceed to smart assignment
 
-        # --- Fallback to smart assignment for any unassigned roles ---
         preferences = {
             LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229",
                                 "gpt-4o"],
@@ -238,7 +240,7 @@ class EnhancedLLMClient:
         }
 
         for role, preferred_models in preferences.items():
-            if role not in self.role_assignments:  # Only assign if not loaded from config
+            if role not in self.role_assignments:
                 assigned_model = next((model_name for model_name in preferred_models if model_name in self.models),
                                       None)
                 if not assigned_model:
@@ -252,7 +254,6 @@ class EnhancedLLMClient:
             logger.error("❌ No models available. Please check your API keys in the .env file.")
             return
 
-        # Ensure every role has at least a fallback model
         for role in LLMRole:
             if role not in self.role_assignments:
                 self.role_assignments[role] = available_models[0]
@@ -272,7 +273,6 @@ class EnhancedLLMClient:
             else:
                 logger.warning(f"  {role.value.title():<10}: ❌ Unassigned")
 
-        # --- ADDED: Save the potentially updated assignments back to disk ---
         self.save_assignments()
 
     def get_role_model(self, role: LLMRole) -> Optional[ModelConfig]:
@@ -287,12 +287,10 @@ class EnhancedLLMClient:
         """Standard, non-streaming chat call."""
         full_response = ""
         try:
-            # Use an async generator comprehension to collect chunks
             full_response = "".join([chunk async for chunk in self.stream_chat(prompt, role)])
             return full_response
         except Exception as e:
             logger.error(f"Chat failed for role {role.value}: {e}", exc_info=True)
-            # The fallback response is now handled inside stream_chat
             return f"# AvA Error: Chat failed for role {role.value}. See logs for details."
 
     @retry_async_generator()
@@ -325,8 +323,6 @@ class EnhancedLLMClient:
 
         async for chunk in stream_func(prompt, call_config, personality):
             yield chunk
-
-    # --- Provider-specific Implementations with Enhanced Error Handling ---
 
     async def _stream_openai(self, prompt, config, personality):
         messages = [{"role": "system", "content": personality}] if personality else []
