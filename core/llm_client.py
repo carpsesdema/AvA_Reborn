@@ -6,6 +6,9 @@ from enum import Enum
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, Any
 import aiohttp
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LLMRole(Enum):
@@ -41,7 +44,7 @@ class EnhancedLLMClient:
         self.models: Dict[str, ModelConfig] = {}
         self.role_assignments: Dict[LLMRole, str] = {}
         self.personalities: Dict[LLMRole, str] = {}
-        self.role_temperatures: Dict[LLMRole, float] = {}  # NEW: Per-role temperature overrides
+        self.role_temperatures: Dict[LLMRole, float] = {}
         self._initialize_models()
         self._load_personalities_from_config()
         self._initialize_default_personalities()
@@ -56,25 +59,22 @@ class EnhancedLLMClient:
                     all_presets_data = json.load(f)
                 for role_str, presets_list in all_presets_data.items():
                     try:
-                        if role_str in ["planner", "structurer", "architect"]:
+                        # Map planner/structurer to architect
+                        if role_str in ["planner", "structurer"]:
                             role_enum = LLMRole.ARCHITECT
-                        elif role_str in ["assembler", "coder"]:
-                            # Handle both old and new role names from config
-                            if role_str == "assembler":
-                                role_enum = LLMRole.ASSEMBLER
-                            else:
-                                role_enum = LLMRole.CODER
                         else:
                             role_enum = LLMRole(role_str)
 
                         if presets_list:
-                            user_preset = next((p for p in presets_list if p.get("author", "User") == "User"), None)
+                            user_preset = next((p for p in presets_list if p.get("author") == "User"), None)
                             preset_to_load = user_preset or presets_list[0]
                             self.personalities[role_enum] = preset_to_load["personality"]
-                    except (ValueError, KeyError):
+                            self.role_temperatures[role_enum] = preset_to_load.get("temperature", 0.7)
+                    except (ValueError, KeyError) as e:
+                        logger.warning(f"Could not load personality for role '{role_str}': {e}")
                         continue
         except Exception as e:
-            print(f"Error loading personalities from config: {e}")
+            logger.error(f"Error loading personalities from config: {e}")
 
     def _initialize_default_personalities(self):
         """Initialize default personalities for the new role structure."""
@@ -94,74 +94,59 @@ class EnhancedLLMClient:
         # --- OpenAI ---
         if api_key := os.getenv("OPENAI_API_KEY"):
             base_url = os.getenv("OPENAI_API_BASE")
-            self.models["gpt-4o"] = ModelConfig(
-                "openai", "gpt-4o", api_key, base_url, 0.5, 8000,
-                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.REVIEWER, LLMRole.CHAT]
-            )
-            self.models["gpt-4o-mini"] = ModelConfig(
-                "openai", "gpt-4o-mini", api_key, base_url, 0.7, 16000, [LLMRole.CHAT]
-            )
-            print("✅ OpenAI models loaded.")
+            self.models["gpt-4o"] = ModelConfig("openai", "gpt-4o", api_key, base_url, 0.5, 8000,
+                                                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.REVIEWER,
+                                                 LLMRole.CHAT])
+            self.models["gpt-4o-mini"] = ModelConfig("openai", "gpt-4o-mini", api_key, base_url, 0.7, 16000,
+                                                     [LLMRole.CHAT])
+            logger.info("✅ OpenAI models loaded.")
 
         # --- Anthropic ---
         if api_key := os.getenv("ANTHROPIC_API_KEY"):
             base_url = os.getenv("ANTHROPIC_API_BASE")
-            self.models["claude-3-5-sonnet-20240620"] = ModelConfig(
-                "anthropic", "claude-3-5-sonnet-20240620", api_key, base_url, 0.5, 8000,
-                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER, LLMRole.REVIEWER, LLMRole.CHAT]
-            )
-            self.models["claude-3-opus-20240229"] = ModelConfig(
-                "anthropic", "claude-3-opus-20240229", api_key, base_url, 0.5, 8000,
-                [LLMRole.ARCHITECT, LLMRole.REVIEWER]
-            )
-            print("✅ Anthropic models loaded.")
+            self.models["claude-3-5-sonnet-20240620"] = ModelConfig("anthropic", "claude-3-5-sonnet-20240620", api_key,
+                                                                    base_url, 0.5, 8000,
+                                                                    [LLMRole.ARCHITECT, LLMRole.CODER,
+                                                                     LLMRole.ASSEMBLER, LLMRole.REVIEWER, LLMRole.CHAT])
+            self.models["claude-3-opus-20240229"] = ModelConfig("anthropic", "claude-3-opus-20240229", api_key,
+                                                                base_url, 0.5, 8000,
+                                                                [LLMRole.ARCHITECT, LLMRole.REVIEWER])
+            logger.info("✅ Anthropic models loaded.")
 
         # --- Google Gemini ---
         if api_key := os.getenv("GEMINI_API_KEY"):
             base_url = os.getenv("GOOGLE_API_BASE")
-            self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig(
-                "gemini", "gemini-2.5-pro-preview-06-05", api_key, base_url, 0.3, 8000,
-                [LLMRole.ARCHITECT, LLMRole.REVIEWER]
-            )
-            self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig(
-                "gemini", "gemini-2.5-flash-preview-05-20", api_key, base_url, 0.7, 8000,
-                [LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT]
-            )
-            print("✅ Google Gemini models loaded.")
+            self.models["gemini-2.5-pro-preview-06-05"] = ModelConfig("gemini", "gemini-2.5-pro-preview-06-05", api_key,
+                                                                      base_url, 0.3, 8000,
+                                                                      [LLMRole.ARCHITECT, LLMRole.REVIEWER])
+            self.models["gemini-2.5-flash-preview-05-20"] = ModelConfig("gemini", "gemini-2.5-flash-preview-05-20",
+                                                                        api_key, base_url, 0.7, 8000,
+                                                                        [LLMRole.CODER, LLMRole.REVIEWER, LLMRole.CHAT])
+            logger.info("✅ Google Gemini models loaded.")
 
         # --- DeepSeek ---
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
-            self.models["deepseek-reasoner"] = ModelConfig(
-                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000,
-                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER]
-            )
-            self.models["deepseek-coder"] = ModelConfig(
-                "deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
-            )
-            self.models["deepseek-chat"] = ModelConfig(
-                "deepseek", "deepseek-chat", api_key, base_url, 0.7, 8000, [LLMRole.CHAT]
-            )
-            print("✅ DeepSeek models loaded.")
+            self.models["deepseek-reasoner"] = ModelConfig("deepseek", "deepseek-reasoner", api_key, base_url, 0.1,
+                                                           32000, [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER])
+            self.models["deepseek-coder"] = ModelConfig("deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000,
+                                                        [LLMRole.CODER])
+            self.models["deepseek-chat"] = ModelConfig("deepseek", "deepseek-chat", api_key, base_url, 0.7, 8000,
+                                                       [LLMRole.CHAT])
+            logger.info("✅ DeepSeek models loaded.")
 
         # --- Ollama (Local) ---
         ollama_base_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
-        self.models["ollama_llama3"] = ModelConfig(
-            provider="ollama", model="llama3", base_url=ollama_base_url, temperature=0.7,
-            suitable_roles=[LLMRole.CHAT, LLMRole.REVIEWER]
-        )
-        self.models["ollama_codellama"] = ModelConfig(
-            provider="ollama", model="codellama", base_url=ollama_base_url, temperature=0.1,
-            suitable_roles=[LLMRole.CODER]
-        )
-        self.models["ollama_qwen2"] = ModelConfig(
-            provider="ollama", model="qwen2", base_url=ollama_base_url, temperature=0.6,
-            suitable_roles=[LLMRole.CHAT, LLMRole.ARCHITECT]
-        )
-        print("✅ Ollama models configured (ensure models are pulled and server is running).")
+        self.models["ollama_llama3"] = ModelConfig(provider="ollama", model="llama3", base_url=ollama_base_url,
+                                                   temperature=0.7, suitable_roles=[LLMRole.CHAT, LLMRole.REVIEWER])
+        self.models["ollama_codellama"] = ModelConfig(provider="ollama", model="codellama", base_url=ollama_base_url,
+                                                      temperature=0.1, suitable_roles=[LLMRole.CODER])
+        self.models["ollama_qwen2"] = ModelConfig(provider="ollama", model="qwen2", base_url=ollama_base_url,
+                                                  temperature=0.6, suitable_roles=[LLMRole.CHAT, LLMRole.ARCHITECT])
+        logger.info("✅ Ollama models configured (ensure models are pulled and server is running).")
 
     def _assign_roles(self):
-        """Assigns the best available model to each role and sets default temperatures."""
+        """Assigns the best available model to each role."""
         preferences = {
             LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229",
                                 "gpt-4o"],
@@ -173,164 +158,107 @@ class EnhancedLLMClient:
         }
 
         for role, preferred_models in preferences.items():
-            assigned_model = None
-            for model_name in preferred_models:
-                if model_name in self.models:
-                    assigned_model = model_name
-                    break
-
+            assigned_model = next((model_name for model_name in preferred_models if model_name in self.models), None)
             if not assigned_model:
-                for model_key, model_config in self.models.items():
-                    if role in model_config.suitable_roles:
-                        assigned_model = model_key
-                        break
-
+                assigned_model = next((model_key for model_key, model_config in self.models.items() if
+                                       role in model_config.suitable_roles), None)
             self.role_assignments[role] = assigned_model
 
         available_models = list(self.models.keys())
         if not available_models:
-            print("❌ No models available. Please check your API keys in the .env file.")
+            logger.error("❌ No models available. Please check your API keys in the .env file.")
             return
 
         for role in LLMRole:
             if not self.role_assignments.get(role):
                 self.role_assignments[role] = available_models[0]
 
-        # NEW: Set initial role temperatures from the assigned model's default
+        # Set initial role temperatures from the assigned model's default, unless overridden by presets
         for role, model_name in self.role_assignments.items():
-            if model_name and model_name in self.models:
+            if role not in self.role_temperatures and model_name and model_name in self.models:
                 self.role_temperatures[role] = self.models[model_name].temperature
 
-        # NEW: Override Coder's default temperature as requested
-        if LLMRole.CODER in self.role_temperatures:
-            self.role_temperatures[LLMRole.CODER] = 0.1
+        if LLMRole.CODER in self.role_temperatures: self.role_temperatures[LLMRole.CODER] = 0.1
 
-        print("🎯 Smart Role Assignments:")
+        logger.info("🎯 Smart Role Assignments:")
         for role, model_name in self.role_assignments.items():
             if model_name and model_name in self.models:
                 provider = self.models[model_name].provider
                 temp = self.role_temperatures.get(role, "N/A")
-                print(f"  {role.value.title():<10}: {provider}/{self.models[model_name].model} (Temp: {temp})")
+                logger.info(f"  {role.value.title():<10}: {provider}/{self.models[model_name].model} (Temp: {temp})")
             else:
-                print(f"  {role.value.title():<10}: ❌ Unassigned")
-
-    def assign_role(self, role: LLMRole, model_name: str):
-        """Manually assign a model to a specific role."""
-        if model_name in self.models:
-            self.role_assignments[role] = model_name
-            # Update the role's temperature to the new model's default
-            self.role_temperatures[role] = self.models[model_name].temperature
-            print(f"✅ Assigned {model_name} to {role.value} role")
-        else:
-            print(f"❌ Model {model_name} not found in available models.")
+                logger.warning(f"  {role.value.title():<10}: ❌ Unassigned")
 
     def get_role_model(self, role: LLMRole) -> Optional[ModelConfig]:
         """Get the model configuration assigned to a role."""
         model_name = self.role_assignments.get(role)
         if not model_name or model_name not in self.models:
-            print(f"Warning: Model for role {role.value} ('{model_name}') not available. Check API keys.")
+            logger.warning(f"Model for role {role.value} ('{model_name}') not available. Check API keys.")
             return None
         return self.models.get(model_name)
 
-    def get_role_assignments(self) -> Dict[str, str]:
-        """Get current role assignments for display."""
-        return {role_enum.value: model_name for role_enum, model_name in self.role_assignments.items()}
-
     async def chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> str:
-        model_config = self.get_role_model(role)
-        personality = self.personalities.get(role, "")
-
-        if not model_config:
-            return self._fallback_response(prompt, role)
-
-        # Get role-specific temperature, fallback to model's default
-        role_temp = self.role_temperatures.get(role, model_config.temperature)
-
-        # Create a temporary config for this specific call to avoid modifying the original
-        call_config = ModelConfig(
-            provider=model_config.provider, model=model_config.model, api_key=model_config.api_key,
-            base_url=model_config.base_url, temperature=role_temp, max_tokens=model_config.max_tokens
-        )
-
+        """Standard, non-streaming chat call."""
+        # This implementation can remain largely the same, focusing on robust error handling
+        full_response = ""
         try:
-            provider_map = {
-                "gemini": self._call_gemini,
-                "anthropic": self._call_anthropic,
-                "deepseek": self._call_deepseek,
-                "openai": self._call_openai,
-                "ollama": self._call_ollama
-            }
-            if call_config.provider in provider_map:
-                return await provider_map[call_config.provider](prompt, call_config, personality)
-            return self._fallback_response(prompt, role)
+            async for chunk in self.stream_chat(prompt, role):
+                full_response += chunk
+            return full_response
         except Exception as e:
-            print(f"API call with {call_config.provider} for role {role.value} failed: {e}")
+            logger.error(f"Chat failed for role {role.value}: {e}", exc_info=True)
             return self._fallback_response(prompt, role, e)
 
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
+        """Streaming chat call with robust error handling."""
         model_config = self.get_role_model(role)
         personality = self.personalities.get(role, "")
         if not model_config:
+            logger.error(f"No model configured for role: {role.value}")
             yield self._fallback_response(prompt, role)
             return
 
-        # Get role-specific temperature, fallback to model's default
         role_temp = self.role_temperatures.get(role, model_config.temperature)
-
-        # Create a temporary config for this specific call
         call_config = ModelConfig(
             provider=model_config.provider, model=model_config.model, api_key=model_config.api_key,
             base_url=model_config.base_url, temperature=role_temp, max_tokens=model_config.max_tokens
         )
 
-        stream_generator = None
+        provider_map = {
+            "gemini": self._stream_gemini, "anthropic": self._stream_anthropic,
+            "deepseek": self._stream_deepseek, "openai": self._stream_openai,
+            "ollama": self._stream_ollama
+        }
+        stream_func = provider_map.get(call_config.provider)
+
+        if not stream_func:
+            logger.error(f"Unsupported provider for streaming: {call_config.provider}")
+            yield self._fallback_response(prompt, role)
+            return
+
         try:
-            provider_map = {
-                "gemini": self._stream_gemini,
-                "anthropic": self._stream_anthropic,
-                "deepseek": self._stream_deepseek,
-                "openai": self._stream_openai,
-                "ollama": self._stream_ollama
-            }
-            if call_config.provider in provider_map:
-                stream_generator = provider_map[call_config.provider](prompt, call_config, personality)
-                async for chunk in stream_generator:
-                    yield chunk
-            else:
-                yield self._fallback_response(prompt, role)
+            async for chunk in stream_func(prompt, call_config, personality):
+                yield chunk
         except Exception as e:
-            print(f"Streaming API call for role {role.value} failed: {e}")
+            logger.error(f"Streaming API call for role {role.value} with provider {call_config.provider} failed: {e}",
+                         exc_info=True)
             yield self._fallback_response(prompt, role, e)
-        finally:
-            if stream_generator and hasattr(stream_generator, 'aclose'):
-                await stream_generator.aclose()
 
-    async def _call_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        messages = [{"role": "system", "content": personality}] if personality else []
-        messages.append({"role": "user", "content": prompt})
-        url = f"{config.base_url or 'https://api.openai.com'}/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
-        payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
-                   "max_tokens": config.max_tokens}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                resp_json = await response.json()
-                if response.status == 200 and "choices" in resp_json:
-                    return resp_json["choices"][0]["message"]["content"]
-                raise Exception(f"OpenAI API error {response.status}: {resp_json}")
+    # --- Provider-specific Implementations with Enhanced Error Handling ---
 
-    async def _stream_openai(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
+    async def _stream_openai(self, prompt, config, personality):
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
         url = f"{config.base_url or 'https://api.openai.com'}/v1/chat/completions"
         headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
         payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
                    "max_tokens": config.max_tokens, "stream": True}
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
-                    raise Exception(f"OpenAI stream API error: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(f"OpenAI stream API error {response.status}: {error_text}")
                 async for line in response.content:
                     line_str = line.decode('utf-8').strip()
                     if line_str.startswith("data: "):
@@ -338,98 +266,67 @@ class EnhancedLLMClient:
                         if data_content == "[DONE]": break
                         try:
                             chunk = json.loads(data_content)
-                            if chunk["choices"][0]["delta"].get("content"):
-                                yield chunk["choices"][0]["delta"]["content"]
-                        except json.JSONDecodeError:
+                            if "error" in chunk:
+                                raise Exception(f"OpenAI API error in stream: {chunk['error']}")
+                            if content := chunk.get("choices", [{}])[0].get("delta", {}).get("content"):
+                                yield content
+                        except (json.JSONDecodeError, IndexError) as e:
+                            logger.warning(f"Could not parse OpenAI stream chunk: {e} - Content: '{data_content}'")
                             continue
 
-    async def _call_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:generateContent?key={config.api_key}"
-        payload = {"contents": [{"parts": [{"text": final_prompt}]}],
-                   "generationConfig": {"temperature": config.temperature, "maxOutputTokens": config.max_tokens}}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers={"Content-Type": "application/json"}, json=payload) as response:
-                response_json = await response.json()
-                if response.status == 200 and "candidates" in response_json and response_json["candidates"]:
-                    # Safer access to potentially missing 'parts' key
-                    content = response_json["candidates"][0].get("content", {})
-                    parts = content.get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "")
-                    return ""  # Return empty if no parts found
-                raise Exception(f"Gemini API error {response.status}: {response_json}")
-
-    async def _stream_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
+    async def _stream_gemini(self, prompt, config, personality):
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:streamGenerateContent?key={config.api_key}&alt=sse"
         payload = {"contents": [{"parts": [{"text": final_prompt}]}],
                    "generationConfig": {"temperature": config.temperature, "maxOutputTokens": config.max_tokens}}
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
                 if response.status != 200:
-                    raise Exception(f"Gemini stream API error: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(f"Gemini stream API error {response.status}: {error_text}")
                 async for line in response.content:
                     if line.startswith(b'data: '):
                         try:
                             data = json.loads(line[6:])
-                            if data.get("candidates"):
-                                yield data["candidates"][0]["content"]["parts"][0]["text"]
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            print(f"Warning: Gemini stream decode/parse error: {line.decode('utf-8', 'ignore')}")
+                            if "error" in data:
+                                raise Exception(f"Gemini API error in stream: {data['error']}")
+                            if content := data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get(
+                                    "text"):
+                                yield content
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            logger.warning(
+                                f"Could not parse Gemini stream chunk: {e} - Content: '{line.decode('utf-8', 'ignore')}'")
+                            continue
 
-    async def _call_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        url = config.base_url or "https://api.anthropic.com/v1/messages"
-        headers = {"x-api-key": config.api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01"}
-        payload = {"model": config.model, "max_tokens": config.max_tokens, "temperature": config.temperature,
-                   "messages": [{"role": "user", "content": prompt}]}
-        if personality: payload["system"] = personality
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                resp_json = await response.json()
-                if response.status == 200: return resp_json["content"][0]["text"]
-                raise Exception(f"Anthropic API error {response.status}: {resp_json}")
-
-    async def _stream_anthropic(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
+    async def _stream_anthropic(self, prompt, config, personality):
         url = config.base_url or "https://api.anthropic.com/v1/messages"
         headers = {"x-api-key": config.api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01",
                    "Accept": "text/event-stream"}
         payload = {"model": config.model, "max_tokens": config.max_tokens, "temperature": config.temperature,
                    "messages": [{"role": "user", "content": prompt}], "stream": True}
         if personality: payload["system"] = personality
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
-                    raise Exception(f"Anthropic stream API error: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(f"Anthropic stream API error {response.status}: {error_text}")
                 async for line in response.content:
                     if line.startswith(b"data: "):
                         try:
                             data = json.loads(line[6:])
+                            if data.get("type") == "error":
+                                raise Exception(f"Anthropic API error in stream: {data['error']}")
                             if data.get("type") == "content_block_delta":
                                 yield data["delta"]["text"]
-                        except json.JSONDecodeError:
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.warning(
+                                f"Could not parse Anthropic stream chunk: {e} - Content: '{line.decode('utf-8', 'ignore')}'")
                             continue
 
-    async def _call_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
-        messages = [{"role": "system", "content": personality}] if personality else []
-        messages.append({"role": "user", "content": prompt})
-        url = f"{config.base_url}/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
-        payload = {"model": config.model, "messages": messages, "temperature": config.temperature,
-                   "max_tokens": config.max_tokens}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                resp_json = await response.json()
-                if response.status == 200 and "choices" in resp_json:
-                    message = resp_json["choices"][0]["message"]
-                    return message.get('content', '')
-                raise Exception(f"DeepSeek API error {response.status}: {resp_json}")
-
-    async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
+    async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = ""):
+        # Implementation assumed similar to OpenAI, add error checks
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
         url = f"{config.base_url}/v1/chat/completions"
@@ -440,7 +337,8 @@ class EnhancedLLMClient:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
-                    raise Exception(f"DeepSeek stream API error: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(f"DeepSeek stream API error {response.status}: {error_text}")
                 async for line in response.content:
                     line_str = line.decode('utf-8').strip()
                     if line_str.startswith("data: "):
@@ -448,65 +346,42 @@ class EnhancedLLMClient:
                         if data_content == "[DONE]": break
                         try:
                             chunk = json.loads(data_content)
-                            delta = chunk["choices"][0].get("delta", {})
-                            if delta.get("content"):
-                                yield delta["content"]
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            print(f"Warning: DeepSeek stream decode/parse error: {line_str}")
+                            if "error" in chunk:
+                                raise Exception(f"DeepSeek API error in stream: {chunk['error']}")
+                            if content := chunk.get("choices", [{}])[0].get("delta", {}).get("content"):
+                                yield content
+                        except (json.JSONDecodeError, IndexError) as e:
+                            logger.warning(f"Could not parse Deepseek stream chunk: {e} - Content: '{data_content}'")
+                            continue
 
-    async def _call_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> str:
+    async def _stream_ollama(self, prompt, config, personality):
         final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
         url = f"{config.base_url}/api/generate"
-        payload = {
-            "model": config.model, "prompt": final_prompt, "stream": False,
-            "options": {"temperature": config.temperature, "num_predict": config.max_tokens}
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                response_json = await response.json()
-                if response.status == 200 and "response" in response_json:
-                    return response_json["response"]
-                raise Exception(f"Ollama API error {response.status}: {response_json}")
+        payload = {"model": config.model, "prompt": final_prompt, "stream": True,
+                   "options": {"temperature": config.temperature, "num_predict": config.max_tokens}}
 
-    async def _stream_ollama(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
-        str, None]:
-        final_prompt = f"{personality}\n\nUSER PROMPT:\n{prompt}" if personality else prompt
-        url = f"{config.base_url}/api/generate"
-        payload = {
-            "model": config.model, "prompt": final_prompt, "stream": True,
-            "options": {"temperature": config.temperature, "num_predict": config.max_tokens}
-        }
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
                 if response.status != 200:
-                    raise Exception(f"Ollama stream API error: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(f"Ollama API error {response.status}: {error_text}")
                 async for line in response.content:
                     if line:
                         try:
                             data = json.loads(line)
-                            if data.get("response"):
-                                yield data["response"]
-                        except json.JSONDecodeError:
-                            print(f"Warning: Ollama stream JSON decode error: {line.decode('utf-8', 'ignore')}")
+                            if data.get("error"):
+                                raise Exception(f"Ollama error: {data['error']}")
+                            if content := data.get("response"):
+                                yield content
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                f"Could not parse Ollama stream chunk: {e} - Content: '{line.decode('utf-8', 'ignore')}'")
+                            continue
 
     def _fallback_response(self, prompt: str, role: LLMRole, error: Exception = None) -> str:
         error_msg = f"API call failed: {str(error)}" if error else "No model available."
         return f"# AvA Error: No {role.value} LLM available or {error_msg}\n# Request: {prompt[:100]}...\n# Check config and API keys."
 
-    def get_available_models(self) -> list:
-        available = []
-        if not self.role_assignments:
-            return ["No models assigned to roles yet."]
-
-        for role_enum, model_name_key in self.role_assignments.items():
-            if model_name_key and model_name_key in self.models:
-                config = self.models[model_name_key]
-                available.append(f"{role_enum.value.title()}: {config.provider}/{config.model}")
-            else:
-                available.append(f"{role_enum.value.title()}: Unassigned or '{model_name_key}' not found")
-
-        if not available and self.models:
-            return [f"Models loaded ({len(self.models)}) but not assigned."]
-        elif not available:
-            return ["No LLM services available or configured."]
-        return available
+    def get_role_assignments(self) -> Dict[str, str]:
+        """Get current role assignments for display."""
+        return {role_enum.value: model_name for role_enum, model_name in self.role_assignments.items()}

@@ -90,11 +90,10 @@ class HybridWorkflowEngine(QObject):
         self.assembler_service.set_project_state(project_state_manager)
         self.reviewer_service.set_project_state(project_state_manager)
 
-        # THE FIX: Removed the extra rag_manager argument from this call
+        # THE FIX: Initialize micro-task engine with the components it actually needs.
         self.micro_task_engine = StreamlinedMicroTaskEngine(
-            self.llm_client,
-            self.project_state_manager,
-            self.domain_context_manager
+            llm_client=self.llm_client,
+            domain_context_manager=self.domain_context_manager
         )
 
     async def _prepare_and_set_domain_context(self):
@@ -102,6 +101,7 @@ class HybridWorkflowEngine(QObject):
         if not self.domain_context_manager:
             return
         if self.project_state_manager and self.project_state_manager.domain_context is not None:
+            self.detailed_log_event.emit("HybridEngine", "info", "Domain context already analyzed and cached.", "1")
             return
 
         self.detailed_log_event.emit("HybridEngine", "stage_start", "🔬 Analyzing project domain context...", "1")
@@ -162,6 +162,7 @@ class HybridWorkflowEngine(QObject):
         self.original_user_prompt = user_prompt
 
         try:
+            # THE FIX: Centralized domain analysis at the start of the workflow.
             if self.is_existing_project_loaded:
                 project_name = self.original_project_path.name
                 self.detailed_log_event.emit("HybridEngine", "stage_start",
@@ -183,6 +184,8 @@ class HybridWorkflowEngine(QObject):
             self.workflow_progress.emit("micro-tasking", "📋 Breaking into micro-tasks...")
             project_context_for_tasks = {"project_name": tech_spec.get("project_name", ""),
                                          "project_description": tech_spec.get("project_description", "")}
+
+            # THE FIX: The micro_task_engine no longer needs state or RAG passed directly. It's leaner.
             all_micro_tasks = await self.micro_task_engine.create_smart_tasks(tech_spec.get("technical_specs", {}),
                                                                               project_context_for_tasks)
             tasks_by_file = defaultdict(list)
@@ -204,6 +207,7 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow failed: {str(e)}", "0")
             self.workflow_completed.emit({"success": False, "error": str(e)})
 
+    # ... (Rest of the file is unchanged)
     async def _execute_hybrid_file_generation(self, tech_spec: dict, project_dir: Path,
                                               tasks_by_file: Dict[str, List[SimpleTaskSpec]]):
         self.workflow_progress.emit("generation", "⚡ Generating files...")

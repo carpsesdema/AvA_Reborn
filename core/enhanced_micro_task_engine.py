@@ -41,10 +41,14 @@ class StreamlinedMicroTaskEngine:
     Dynamically creates micro-tasks based on detailed Planner output.
     """
 
-    def __init__(self, llm_client, project_state_manager, domain_context_manager):
+    def __init__(self, llm_client, domain_context_manager):
+        """
+        Initializes the engine.
+        Note: The project_state_manager is no longer needed here as domain
+        context is now handled at a higher level in the workflow.
+        """
         self.llm_client = llm_client
-        self.project_state = project_state_manager
-        self.domain_context = domain_context_manager
+        self.domain_context_manager = domain_context_manager
 
     async def create_smart_tasks(
             self,
@@ -52,46 +56,32 @@ class StreamlinedMicroTaskEngine:
             project_overall_context: Dict[str, Any]
     ) -> List[SimpleTaskSpec]:
         """
-        Dynamically create SimpleTaskSpec objects based on the Planner's JSON output,
-        with optimized context generation to prevent API rate-limiting.
+        Dynamically create SimpleTaskSpec objects based on the Planner's JSON output.
+        This version assumes domain context has been pre-analyzed and is available
+        via the domain_context_manager.
         """
         all_micro_tasks: List[SimpleTaskSpec] = []
-        project_name = planner_json_plan.get("project_name", "default_project")
-
-        # --- PERFORMANCE FIX START ---
-        # Get the comprehensive context ONCE for the entire project plan.
-        # This is the expensive operation that we are moving out of the loop.
-        if self.domain_context:
-            print("[INFO] Generating comprehensive domain context for all tasks...")
-            # The full context isn't directly used, but this call populates the
-            # manager's internal cache for the cheaper calls later.
-            await self.domain_context.get_comprehensive_context()
-            print("[INFO] Domain context analysis complete and cached.")
-        # --- PERFORMANCE FIX END ---
+        project_name = project_overall_context.get("project_name", "default_project")
 
         files_to_process = planner_json_plan.get("files", {})
         if not files_to_process:
-            # Fallback logic remains the same
             return self._create_fallback_tasks_for_project(planner_json_plan)
 
         for file_path_str, file_spec in files_to_process.items():
             file_purpose = file_spec.get("purpose", f"Functionality for {file_path_str}")
             components = file_spec.get("components", [])
 
-            # --- PERFORMANCE FIX START ---
-            # Get smaller, file-specific context for this file's tasks.
-            # This uses the cache in DomainContextManager and is much faster.
+            # Get file-specific context (this should be fast if cached by the manager)
             file_specific_context_str = ""
-            if self.domain_context:
+            if self.domain_context_manager:
                 try:
-                    file_context = await self.domain_context.get_context_for_file(file_path_str)
-                    file_specific_context_str = json.dumps(file_context, default=str, indent=2)
+                    file_context = await self.domain_context_manager.get_context_for_file(file_path_str)
+                    if file_context:
+                        file_specific_context_str = json.dumps(file_context, default=str, indent=2)
                 except Exception as e:
                     print(f"[WARNING] Could not get domain context for {file_path_str}: {e}")
-            # --- PERFORMANCE FIX END ---
 
             if not components:
-                # Umbrella task logic remains the same
                 all_micro_tasks.append(self._create_umbrella_task_for_file(
                     file_path_str, file_purpose, project_name, file_spec.get("description", file_purpose)
                 ))
@@ -105,14 +95,10 @@ class StreamlinedMicroTaskEngine:
                 expected_lines = component_spec.get("expected_lines",
                                                     20 + len(component_spec.get("core_logic_steps", [])) * 3)
 
-                # --- PERFORMANCE FIX START ---
-                # Add the smaller, file-specific context to the task's main context string.
-                # This ensures the LLM prompt is not bloated with unnecessary information.
                 context_str = (f"File: {file_path_str} ({file_purpose}) within Project: {project_name}. "
                                f"Component: {description}\n\n")
                 if file_specific_context_str:
                     context_str += f"--- FILE-SPECIFIC DOMAIN CONTEXT ---\n{file_specific_context_str}"
-                # --- PERFORMANCE FIX END ---
 
                 req_parts = [f"COMPONENT TYPE: {component_type}"]
                 if "inputs" in component_spec:
@@ -122,28 +108,24 @@ class StreamlinedMicroTaskEngine:
                     req_parts.append(f"INPUTS:\n  {inputs_str}")
                 if "outputs" in component_spec:
                     req_parts.append(f"OUTPUTS/SIDE EFFECTS:\n  {component_spec['outputs']}")
-                if "core_logic_steps" in component_spec and component_spec["core_logic_steps"]:
+                if component_spec.get("core_logic_steps"):
                     steps_str = "\n  - ".join(component_spec["core_logic_steps"])
                     req_parts.append(f"CORE LOGIC STEPS:\n  - {steps_str}")
-                if "error_conditions_to_handle" in component_spec and component_spec["error_conditions_to_handle"]:
+                if component_spec.get("error_conditions_to_handle"):
                     errors_str = "\n  - ".join(component_spec["error_conditions_to_handle"])
                     req_parts.append(f"ERROR CONDITIONS TO HANDLE:\n  - {errors_str}")
-                if "interactions" in component_spec and component_spec["interactions"]:
+                if component_spec.get("interactions"):
                     interactions_str = "\n  - ".join(component_spec["interactions"])
                     req_parts.append(f"INTERACTIONS WITH OTHER COMPONENTS:\n  - {interactions_str}")
-                if "critical_notes" in component_spec and component_spec["critical_notes"]:
+                if component_spec.get("critical_notes"):
                     req_parts.append(f"CRITICAL NOTES:\n  {component_spec['critical_notes']}")
 
                 exact_requirements_str = "\n\n".join(req_parts)
 
                 micro_task = SimpleTaskSpec(
-                    id=full_task_id,
-                    description=description,
-                    expected_lines=expected_lines,
-                    context=context_str,
-                    exact_requirements=exact_requirements_str,
-                    component_type=component_type,
-                    file_path=file_path_str
+                    id=full_task_id, description=description, expected_lines=expected_lines,
+                    context=context_str, exact_requirements=exact_requirements_str,
+                    component_type=component_type, file_path=file_path_str
                 )
                 all_micro_tasks.append(micro_task)
 
@@ -170,18 +152,14 @@ class StreamlinedMicroTaskEngine:
         - Adhere to any overarching architectural patterns or coding standards defined by the Planner.
         """
         return SimpleTaskSpec(
-            id=task_id,
-            description=description,
-            expected_lines=100,
-            context=context_str,
-            exact_requirements=exact_requirements_str.strip(),
-            component_type="full_file",
-            file_path=file_path_str
+            id=task_id, description=description, expected_lines=100,
+            context=context_str, exact_requirements=exact_requirements_str.strip(),
+            component_type="full_file", file_path=file_path_str
         )
 
     def _create_fallback_tasks_for_project(self, planner_json_plan: Dict[str, Any]) -> List[SimpleTaskSpec]:
         project_name = planner_json_plan.get("project_name", "unspecified_project")
-        project_description = planner_json_plan.get("description", "An AI-generated project.")
+        project_description = planner_json_plan.get("project_description", "An AI-generated project.")
         main_file_name = next(iter(planner_json_plan.get("files", {})), "main.py")
 
         return [
