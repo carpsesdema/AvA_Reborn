@@ -69,9 +69,11 @@ ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
     Return ONLY the JSON object, no explanations or markdown formatting.
 """)
 
-# NEW: High-performance prompt for parallel file analysis
+# --- UPDATED AND ENRICHED PROMPT ---
+# This prompt now asks for the same level of detail as the main architect prompt,
+# ensuring that the analysis of existing files retains its "soul".
 FILE_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are an expert code analyst. Analyze the provided Python file and create a JSON specification for it.
+    You are a master software architect. Your task is to deeply analyze the provided Python file and reverse-engineer its complete technical specification into a JSON object.
 
     **FILE PATH:** {file_path}
     **FILE CONTENT:**
@@ -80,26 +82,34 @@ FILE_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
     ```
 
     **INSTRUCTIONS:**
-    1.  Determine the primary purpose of this file.
-    2.  Identify all major components (classes, functions).
-    3.  For each component, create a specification including its description, type, and core logic.
-    4.  Infer the file's dependencies based on its import statements.
+    Deconstruct the file into its core components. For each component (class, function), you must infer and specify the following:
+    1.  **purpose**: A concise description of the file's overall role.
+    2.  **dependencies**: A list of all modules this file depends on (from imports).
+    3.  **components**: A list of detailed component objects. For each component:
+        -   **task_id**: Create a unique ID, like `{file_path}/component_name`.
+        -   **description**: What the component does and its role.
+        -   **component_type**: The type, e.g., "class", "function", "method".
+        -   **core_logic_steps**: A high-level summary of its implementation.
+        -   **error_conditions_to_handle**: Infer potential errors it handles or should handle (e.g., file not found, API errors, invalid input).
+        -   **interactions**: Describe how it interacts with other components, even those in other files.
+        -   **critical_notes**: Note any non-obvious details regarding security, performance, or algorithms.
 
-    **CRITICAL:** Your response MUST be a single, valid JSON object with ONLY the following structure:
+    **CRITICAL:** Your response MUST be a single, valid JSON object with ONLY the following structure. Do not add explanations.
     {{
       "purpose": "A concise description of the file's role in the project.",
       "dependencies": ["list", "of", "imported_modules"],
       "components": [
         {{
-          "task_id": "{file_path}/component_name",
-          "description": "What this component does.",
+          "task_id": "file_path/component_name",
+          "description": "What this component does and its role in the file.",
           "component_type": "class|function",
-          "core_logic_steps": ["A high-level summary of the implementation steps."]
+          "core_logic_steps": ["High-level summary of implementation steps."],
+          "error_conditions_to_handle": ["List of inferred error conditions."],
+          "interactions": ["Description of interactions with other components."],
+          "critical_notes": "Inferred notes on security, performance, etc."
         }}
       ]
     }}
-
-    Return ONLY the JSON object. Do not add explanations or markdown.
 """)
 
 

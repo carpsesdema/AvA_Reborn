@@ -2,160 +2,163 @@
 
 import json
 import re
-import logging
 import asyncio
-from typing import Dict, List, Any, Callable, Optional
+import logging
+from typing import Callable, Optional, List, Dict, Any
 
 from core.llm_client import EnhancedLLMClient, LLMRole
 from core.project_state_manager import ProjectStateManager
+from core.rag_manager import RAGManager
 
 
 class BaseAIService:
-    """Base class for AI services with team communication and model selection."""
+    """
+    Base class for all AI agent services.
+    Provides shared functionality for LLM interaction, state management,
+    and structured logging.
+    """
 
-    def __init__(self, llm_client: EnhancedLLMClient, stream_emitter: Callable, rag_manager=None):
+    def __init__(
+            self,
+            llm_client: EnhancedLLMClient,
+            stream_emitter: Callable[[str, str, str, str], None],
+            rag_manager: Optional[RAGManager] = None
+    ):
         self.llm_client = llm_client
         self.stream_emitter = stream_emitter
         self.rag_manager = rag_manager
-        self.project_state: Optional[ProjectStateManager] = None
+        self.project_state_manager: Optional[ProjectStateManager] = None
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def set_project_state(self, project_state: ProjectStateManager):
-        """Connect this service to project state for team communication."""
-        self.project_state = project_state
+    def set_project_state(self, project_state_manager: ProjectStateManager):
+        """Sets the project state for the service."""
+        self.project_state_manager = project_state_manager
 
-    def _contribute_team_insight(self, insight_type: str, source_agent: str, content: str,
-                                 impact_level: str = "medium", related_files: List[str] = None):
-        """Contribute an insight to the team knowledge base."""
-        if self.project_state:
-            self.project_state.add_team_insight(
-                insight_type=insight_type,
-                source_agent=source_agent,
-                content=content,
-                impact_level=impact_level,
-                related_files=related_files or []
-            )
-
-    def _get_team_context_string(self, for_file: str = None) -> str:
+    def _get_team_context_string(self, for_file: Optional[str] = None) -> str:
         """
-        Get a dynamically filtered context string including team insights
-        and a summary of the analyzed domain context.
+        Retrieves relevant team context (insights) from the project state.
+        If for_file is provided, it prioritizes file-specific insights.
         """
-        if not self.project_state:
-            return "No project context available."
+        if not self.project_state_manager:
+            return "No project state available."
 
+        # CORRECTED LOGIC: Access the attribute directly and then filter.
+        all_insights = self.project_state_manager.team_insights
+
+        if for_file:
+            # Filter for insights that are globally relevant (no related files)
+            # or specifically related to the file in question.
+            insights = [
+                insight for insight in all_insights
+                if not insight.related_files or for_file in insight.related_files
+            ]
+        else:
+            insights = all_insights
+
+        if not insights:
+            return "No relevant team insights or patterns have been established yet."
+
+        context_str = "### Established Team Insights & Patterns\n"
+        # Sort by relevance score if available (assuming higher is better)
         try:
-            agent_name = self.__class__.__name__
-            context_data = self.project_state.get_enhanced_project_context(
-                for_file=for_file,
-                ai_role=agent_name
+            insights.sort(key=lambda x: float(x.relevance_score), reverse=True)
+        except (ValueError, TypeError):
+            pass  # Ignore sorting if relevance_score is not a number
+
+        for insight in insights:
+            context_str += f"- **Type:** {insight.insight_type.capitalize()} | "
+            context_str += f"**Source:** {insight.source_agent} | "
+            context_str += f"**Relevance:** {insight.relevance_score}\n"
+            context_str += f"  **Insight:** {insight.content}\n"
+            if insight.related_files:
+                context_str += f"  **Related Files:** {', '.join(insight.related_files)}\n"
+        return context_str
+
+    def _contribute_team_insight(
+            self,
+            insight_type: str,
+            source_agent: str,
+            content: str,
+            relevance_score: str,
+            related_files: Optional[List[str]] = None
+    ):
+        """Contributes a new insight to the project state."""
+        if self.project_state_manager:
+            self.project_state_manager.add_insight(
+                insight_type, source_agent, content, relevance_score, related_files
             )
 
-            context_parts = []
+    async def _get_intelligent_rag_context(self, query: str) -> str:
+        """
+        Performs a RAG query to get relevant context from the knowledge base.
+        """
+        if not self.rag_manager:
+            return "RAG system not available."
+        try:
+            results = await self.rag_manager.query(query, n_results=3)
+            if not results or not results.get("documents"):
+                return "No relevant information found in the knowledge base."
 
-            # --- NEW: Add Domain Context Summary ---
-            if self.project_state.domain_context:
-                context_parts.append("**Project Domain Analysis**")
-                domain = self.project_state.domain_context
-                db_summary = f"- Database: {len(domain.get('database_schema', {}).get('tables', []))} tables found."
-                api_summary = f"- API: {len(domain.get('api_definition', {}).get('endpoints', []))} endpoints found."
-                fw_summary = "- Frameworks: " + ", ".join(
-                    [fw['name'] for fw in domain.get('frameworks', []) if fw.get('confidence', 0) > 0.3])
-                context_parts.extend([db_summary, api_summary, fw_summary, "\n"])
-
-            # Add Team Insights
-            insights = context_data.get("team_insights", [])
-            if insights:
-                context_parts.append("**Relevant Team Insights**")
-                for insight in insights:
-                    related = f"(Related: {', '.join(insight['related_files'])})" if insight.get(
-                        'related_files') else ""
-                    context_parts.append(
-                        f"- From {insight['source_agent']}: {insight['content']} {related}"
-                    )
-
-            return "\n".join(context_parts) if context_parts else "No relevant project context found."
-
+            context_str = "### Relevant Information from Knowledge Base\n"
+            for doc in results["documents"][0]:
+                context_str += f"- {doc}\n"
+            return context_str
         except Exception as e:
-            self.logger.warning(f"Failed to get and format team context: {e}", exc_info=True)
-            return "Team context is currently unavailable due to an internal error."
-
-    def _parse_json_from_response(self, response_text: str, agent_name: str) -> dict:
-        """A more robust JSON parser that handles markdown fences and other LLM quirks."""
-        response_text = response_text.strip()
-
-        # Pattern to find JSON within ```json ... ``` or ``` ... ```
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
-
-        if json_match:
-            json_str = json_match.group(1)
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError as e:
-                self.stream_emitter(agent_name, "error", f"JSON parsing failed inside markdown: {e}", 3)
-                self.logger.error(f"Failed to parse extracted JSON: {json_str[:500]}")
-                # Fall through to the next method
-
-        # If no markdown found or parsing failed, try finding the first '{' and last '}'
-        brace_start = response_text.find('{')
-        brace_end = response_text.rfind('}')
-
-        if brace_start != -1 and brace_end > brace_start:
-            json_candidate = response_text[brace_start:brace_end + 1]
-            try:
-                return json.loads(json_candidate)
-            except json.JSONDecodeError as e:
-                self.stream_emitter(agent_name, "error", f"JSON parsing failed on substring: {e}", 3)
-                self.logger.error(f"Failed to parse substring JSON: {json_candidate[:500]}")
-                # Fall through
-
-        # Final attempt: try loading the whole string directly
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            pass  # Already logged implicitly or by other attempts
-
-        self.stream_emitter(agent_name, "error", f"All JSON parsing methods failed. Preview: {response_text[:200]}...",
-                            3)
-        return {}
+            self.logger.error(f"RAG query failed: {e}", exc_info=True)
+            return "Error retrieving information from the knowledge base."
 
     async def _stream_and_collect_json(self, prompt: str, role: LLMRole, agent_name: str) -> dict:
-        """Streams response and collects into a single JSON object."""
-        all_chunks = []
+        """
+        Streams from an LLM, collects the full response, and parses it as JSON.
+        Now includes periodic progress updates to keep the UI responsive.
+        """
+        full_response_str = ""
+        self.stream_emitter(agent_name, "info", f"Waiting for {role.value} model response...", 3)
+
+        # --- Progress tracking ---
+        last_update_time = asyncio.get_event_loop().time()
+
         try:
             async for chunk in self.llm_client.stream_chat(prompt, role=role):
-                all_chunks.append(chunk)
+                full_response_str += chunk
+                current_time = asyncio.get_event_loop().time()
+
+                # Emit a progress update every 0.3 seconds to prevent flooding the UI
+                if (current_time - last_update_time) > 0.3:
+                    self.stream_emitter(agent_name, "info", f"Receiving data... ({len(full_response_str)} chars)", 3)
+                    last_update_time = current_time
+
+            self.stream_emitter(agent_name, "success",
+                                f"Response received ({len(full_response_str)} chars). Parsing...", 3)
+            return self._parse_json_from_response(full_response_str)
+
         except Exception as e:
-            self.stream_emitter(agent_name, "error", f"LLM stream failed: {e}", 2)
-            self.logger.error(f"LLM streaming call failed for {agent_name}: {e}", exc_info=True)
-            return {}
+            self.logger.error(f"LLM streaming/parsing failed for {agent_name}: {e}", exc_info=True)
+            self.stream_emitter(agent_name, "error", f"LLM streaming call failed for {agent_name}: {e}", 2)
+            raise
 
-        full_response = "".join(all_chunks)
-        if not full_response:
-            self.stream_emitter(agent_name, "error", "Received empty response from LLM.", 2)
-            return {}
-
-        return self._parse_json_from_response(full_response, agent_name)
-
-    async def _get_intelligent_rag_context(self, query: str, k: int = 2) -> str:
-        """Get intelligent RAG context for the query."""
-        if not self.rag_manager or not self.rag_manager.is_ready:
-            return "No RAG context available."
-
-        self.stream_emitter("RAG", "thought", f"Generating context for: '{query}'", 4)
-        dynamic_query = f"Python code example for {query}"
+    def _parse_json_from_response(self, response: str) -> Dict[str, Any]:
+        """
+        Robustly parses a JSON object from a string that might contain markdown fences or other text.
+        """
+        # Find the start and end of the JSON block
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Fallback for responses that are just the JSON object
+            json_str = response.strip()
+            if not (json_str.startswith('{') and json_str.endswith('}')):
+                # If it's not a clear JSON object, try to find one within the text
+                start = json_str.find('{')
+                end = json_str.rfind('}') + 1
+                if start != -1 and end != 0:
+                    json_str = json_str[start:end]
+                else:
+                    raise json.JSONDecodeError("Could not find a JSON object in the response.", json_str, 0)
 
         try:
-            # THE FIX: This is now an async call to prevent UI freezes.
-            results = await self.rag_manager.query_context_async(dynamic_query, k=k)
-
-            self.stream_emitter("RAG", "success", "Context retrieval complete.", 4)
-            if not results: return "No specific examples found in the knowledge base."
-            return "\n\n---\n\n".join([
-                f"Relevant Example from '{r.get('metadata', {}).get('filename', 'Unknown')}':\n```python\n{r.get('content', '')[:700]}...\n```"
-                for r in results if r.get('content')
-            ])
-        except Exception as e:
-            self.stream_emitter("RAG", "error", f"Failed to query RAG: {e}", 4)
-            self.logger.error(f"Error during RAG query: {e}", exc_info=True)
-            return "Could not query knowledge base due to an error."
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to decode JSON: {e}\nResponse was:\n{json_str[:500]}...")
+            raise

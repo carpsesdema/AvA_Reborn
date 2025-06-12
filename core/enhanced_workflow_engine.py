@@ -1,4 +1,4 @@
-# core/enhanced_workflow_engine.py - V6.2 Final wiring update
+# core/enhanced_workflow_engine.py - V6.3 - Added robust micro-task failure handling
 
 import asyncio
 import json
@@ -22,7 +22,7 @@ from core.domain_context_manager import DomainContextManager
 
 class HybridWorkflowEngine(QObject):
     """
-    🚀 V6.2 Hybrid Workflow Engine: Solves API spam by analyzing domain context once.
+    🚀 V6.3 Hybrid Workflow Engine: Now with robust failure handling for micro-tasks.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -90,7 +90,6 @@ class HybridWorkflowEngine(QObject):
         self.assembler_service.set_project_state(project_state_manager)
         self.reviewer_service.set_project_state(project_state_manager)
 
-        # THE FIX: Initialize micro-task engine with the components it actually needs.
         self.micro_task_engine = StreamlinedMicroTaskEngine(
             llm_client=self.llm_client,
             domain_context_manager=self.domain_context_manager
@@ -155,14 +154,13 @@ class HybridWorkflowEngine(QObject):
             self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
 
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
-        """Execute the V6.2 Hybrid workflow combining architecture and micro-task orchestration."""
-        self.logger.info(f"🚀 Starting V6.2 Hybrid workflow: {user_prompt[:100]}...")
+        """Execute the V6.3 Hybrid workflow combining architecture and micro-task orchestration."""
+        self.logger.info(f"🚀 Starting V6.3 Hybrid workflow: {user_prompt[:100]}...")
         self.workflow_reset.emit()
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
 
         try:
-            # THE FIX: Centralized domain analysis at the start of the workflow.
             if self.is_existing_project_loaded:
                 project_name = self.original_project_path.name
                 self.detailed_log_event.emit("HybridEngine", "stage_start",
@@ -185,7 +183,6 @@ class HybridWorkflowEngine(QObject):
             project_context_for_tasks = {"project_name": tech_spec.get("project_name", ""),
                                          "project_description": tech_spec.get("project_description", "")}
 
-            # THE FIX: The micro_task_engine no longer needs state or RAG passed directly. It's leaner.
             all_micro_tasks = await self.micro_task_engine.create_smart_tasks(tech_spec.get("technical_specs", {}),
                                                                               project_context_for_tasks)
             tasks_by_file = defaultdict(list)
@@ -207,7 +204,6 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow failed: {str(e)}", "0")
             self.workflow_completed.emit({"success": False, "error": str(e)})
 
-    # ... (Rest of the file is unchanged)
     async def _execute_hybrid_file_generation(self, tech_spec: dict, project_dir: Path,
                                               tasks_by_file: Dict[str, List[SimpleTaskSpec]]):
         self.workflow_progress.emit("generation", "⚡ Generating files...")
@@ -245,7 +241,12 @@ class HybridWorkflowEngine(QObject):
                 file_spec.get("dependencies", []), generated_files))
 
         micro_task_results = await self._execute_micro_tasks_in_parallel(micro_tasks)
-        if not micro_task_results: return ""
+
+        # If ALL micro-tasks for a file failed, we should not attempt to assemble it.
+        if not micro_task_results:
+            self.logger.warning(f"Skipping assembly of {filename} as all its micro-tasks failed.")
+            self.detailed_log_event.emit("Assembler", "warning", f"Skipping {filename}: no completed micro-tasks.", "2")
+            return ""
 
         self.node_status_changed.emit("assembler", "working", f"Assembling {filename}...")
         self.data_flow_started.emit("coder", "assembler")
@@ -259,18 +260,41 @@ class HybridWorkflowEngine(QObject):
         return assembled_code
 
     async def _execute_micro_tasks_in_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
-        if not micro_tasks: return []
-        semaphore = asyncio.Semaphore(5)
+        """
+        Executes micro-tasks in parallel, now with robust error logging and handling.
+        It will continue executing all tasks and return the results of the successful ones.
+        """
+        if not micro_tasks:
+            return []
+        semaphore = asyncio.Semaphore(5)  # Limit concurrent API calls
 
         async def execute_task(task: SimpleTaskSpec):
             async with semaphore:
-                try:
-                    return await self.coder_service.execute_micro_task_with_gemini_flash(task)
-                except Exception:
-                    return None
+                # The CoderService will raise an exception on permanent failure,
+                # which will be caught by asyncio.gather.
+                return await self.coder_service.execute_micro_task_with_gemini_flash(task)
 
-        results = await asyncio.gather(*[execute_task(task) for task in micro_tasks])
-        return [r for r in results if r]
+        # Use return_exceptions=True to prevent one failed task from stopping all others.
+        # We get back either a result dict or the exception object.
+        all_results = await asyncio.gather(*[execute_task(task) for task in micro_tasks], return_exceptions=True)
+
+        successful_results = []
+        for i, result in enumerate(all_results):
+            task_info = micro_tasks[i]
+            if isinstance(result, Exception):
+                # Log the failure clearly.
+                self.logger.error(
+                    f"Micro-task {task_info.id} ({task_info.description[:40]}...) failed permanently: {result}",
+                    exc_info=False  # The exception is already formatted.
+                )
+                self.detailed_log_event.emit(
+                    "HybridEngine", "error", f"❌ Failed to execute micro-task {task_info.id}.", "2"
+                )
+            elif result:
+                successful_results.append(result)
+
+        return successful_results
+
 
     async def _setup_project_directory(self, tech_spec: dict) -> Path:
         project_name = tech_spec.get("project_name", "generated_project")

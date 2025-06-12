@@ -1,14 +1,49 @@
-# core/llm_client.py - V4.7 FINAL - Complete file with user-defined defaults
+# core/llm_client.py - V4.9 FINAL - Corrected retry logic for async generators
 
 import json
 import os
+import asyncio
+import random
 from enum import Enum
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, Any, Callable, Awaitable
+from functools import wraps
 import aiohttp
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# --- NEW: Corrected Retry Decorator for ASYNC GENERATORS ---
+def retry_async_generator(retries=4, delay=2.0, backoff=2.0):
+    """
+    A decorator for retrying an async GENERATOR with exponential backoff.
+    This is specifically designed for functions that use `async for` loops.
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            current_delay = delay
+            for i in range(retries):
+                try:
+                    # Get the generator object from the decorated function call
+                    async_gen = func(*args, **kwargs)
+                    # Yield from the generator
+                    async for item in async_gen:
+                        yield item
+                    # If the loop completes without error, we are done.
+                    return
+                except Exception as e:
+                    logger.warning(
+                        f"API call for generator {func.__name__} failed (Attempt {i + 1}/{retries}). Error: {e}. Retrying in {current_delay:.2f}s...")
+                    if i >= retries - 1:
+                        logger.error(f"API call for generator {func.__name__} failed after {retries} retries. Giving up.")
+                        raise  # Re-raise the last exception
+                    await asyncio.sleep(current_delay)
+                    # Add jitter to avoid thundering herd problem
+                    current_delay = (current_delay * backoff) + (random.uniform(0, 1))
+        return wrapper
+    return decorator
 
 
 class LLMRole(Enum):
@@ -199,18 +234,20 @@ class EnhancedLLMClient:
 
     async def chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> str:
         """Standard, non-streaming chat call."""
-        # This implementation can remain largely the same, focusing on robust error handling
         full_response = ""
         try:
-            async for chunk in self.stream_chat(prompt, role):
-                full_response += chunk
+            # Use an async generator comprehension to collect chunks
+            full_response = "".join([chunk async for chunk in self.stream_chat(prompt, role)])
             return full_response
         except Exception as e:
             logger.error(f"Chat failed for role {role.value}: {e}", exc_info=True)
-            return self._fallback_response(prompt, role, e)
+            # The fallback response is now handled inside stream_chat
+            return f"# AvA Error: Chat failed for role {role.value}. See logs for details."
 
+
+    @retry_async_generator()
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
-        """Streaming chat call with robust error handling."""
+        """Streaming chat call with robust error handling and retry logic."""
         model_config = self.get_role_model(role)
         personality = self.personalities.get(role, "")
         if not model_config:
@@ -236,13 +273,10 @@ class EnhancedLLMClient:
             yield self._fallback_response(prompt, role)
             return
 
-        try:
-            async for chunk in stream_func(prompt, call_config, personality):
-                yield chunk
-        except Exception as e:
-            logger.error(f"Streaming API call for role {role.value} with provider {call_config.provider} failed: {e}",
-                         exc_info=True)
-            yield self._fallback_response(prompt, role, e)
+        # The decorator will handle retries. If it still fails, we raise the exception to be caught by the caller.
+        # We don't need a try/except block here anymore because the decorator handles it.
+        async for chunk in stream_func(prompt, call_config, personality):
+            yield chunk
 
     # --- Provider-specific Implementations with Enhanced Error Handling ---
 
@@ -281,7 +315,7 @@ class EnhancedLLMClient:
                    "generationConfig": {"temperature": config.temperature, "maxOutputTokens": config.max_tokens}}
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     raise Exception(f"Gemini stream API error {response.status}: {error_text}")
@@ -326,7 +360,6 @@ class EnhancedLLMClient:
                             continue
 
     async def _stream_deepseek(self, prompt: str, config: ModelConfig, personality: str = ""):
-        # Implementation assumed similar to OpenAI, add error checks
         messages = [{"role": "system", "content": personality}] if personality else []
         messages.append({"role": "user", "content": prompt})
         url = f"{config.base_url}/v1/chat/completions"
