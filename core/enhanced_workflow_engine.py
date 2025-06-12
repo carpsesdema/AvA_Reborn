@@ -13,7 +13,10 @@ from typing import Dict, Any, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from core.workflow_services import ArchitectService, CoderService, ReviewerService, AssemblerService
+from core.services.architect_service import ArchitectService
+from core.services.coder_service import CoderService
+from core.services.reviewer_service import ReviewerService
+from core.services.assembler_service import AssemblerService
 from core.project_state_manager import ProjectStateManager
 from core.enhanced_micro_task_engine import StreamlinedMicroTaskEngine, SimpleTaskSpec
 from core.project_builder import ProjectBuilder
