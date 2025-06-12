@@ -1,77 +1,88 @@
-# core/services/architect_service.py
+# core/services/architect_service.py - V2 with Streaming Tech Specs!
 
+import json
 import textwrap
 import logging
 import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List, Any, AsyncGenerator
 
 from core.llm_client import LLMRole
 from core.project_state_manager import ProjectStateManager
 from core.state_models import FileState
 from .base_service import BaseAIService
 
-
-ARCHITECT_PROMPT_TEMPLATE = textwrap.dedent("""
-    You are the ARCHITECT AI. Create a comprehensive technical specification for this project.
+# New prompt to first get the overall structure
+PROJECT_STRUCTURE_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are the lead ARCHITECT AI. Your first task is to determine the overall file structure for a project based on a user's request.
+    Focus ONLY on what files are needed and their dependencies. Do NOT generate component details yet.
 
     **USER REQUEST:** {user_prompt}
     **CONVERSATION CONTEXT:** {conversation_context}
     **GDD CONTEXT:** {gdd_context}
+    **TEAM INSIGHTS & PATTERNS:** {team_context}
+    **KNOWLEDGE BASE CONTEXT:** {rag_context}
 
-    **TEAM INSIGHTS & PATTERNS:**
-    {team_context}
+    **INSTRUCTIONS:**
+    1.  Analyze all provided context.
+    2.  Determine a complete list of necessary files.
+    3.  For each file, list its direct dependencies (other files in this project it will import).
+    4.  Estimate the complexity of each file (low, medium, high).
+    5.  List any external libraries required for the `requirements.txt` file.
 
-    **KNOWLEDGE BASE CONTEXT:**
-    {rag_context}
-
-    Create a detailed technical specification that includes:
-    1. **Project Overview:** Clear description and objectives
-    2. **File Structure:** Complete breakdown of required files with dependencies
-    3. **Component Specifications:** For each file, provide detailed component breakdown including:
-       - task_id: Unique identifier for each component
-       - description: What the component does
-       - component_type: function, class, method, etc.
-       - core_logic_steps: Step-by-step implementation guide
-       - error_conditions_to_handle: Specific error scenarios
-       - interactions: How it connects with other components
-       - critical_notes: Security, performance, or architectural constraints
-    4. **Implementation Standards:** Coding patterns and best practices
-    5. **Quality Criteria:** Review standards and testing requirements
-
-    Your response MUST be a valid JSON object with this structure:
+    **CRITICAL:** Your response MUST be a single, valid JSON object with ONLY the following structure. Do not add explanations or markdown.
     {{
       "project_name": "string",
       "project_description": "string",
-      "technical_specs": {{
-        "files": {{
-          "filename": {{
-            "purpose": "string",
-            "dependencies": ["list", "of", "files"],
-            "components": [
-              {{
-                "task_id": "unique_id",
-                "description": "component description",
-                "component_type": "function|class|method",
-                "core_logic_steps": ["step1", "step2"],
-                "error_conditions_to_handle": ["error1", "error2"],
-                "interactions": ["component1", "component2"],
-                "critical_notes": "security/performance notes"
-              }}
-            ]
-          }}
-        }},
-        "requirements": ["package1", "package2"],
-        "coding_standards": "PEP 8 compliance, type hints, docstrings",
-        "project_patterns": "Architecture patterns to follow"
-      }}
+      "files": [
+        {{
+            "filename": "path/to/file.py",
+            "purpose": "A concise, one-sentence purpose for this file.",
+            "dependencies": ["dependency1.py", "dependency2.py"],
+            "complexity": "low|medium|high"
+        }}
+      ],
+      "requirements": ["package1", "package2"]
     }}
-
-    Return ONLY the JSON object, no explanations or markdown formatting.
 """)
 
-# --- UPDATED AND ENRICHED PROMPT ---
-# This prompt now asks for the same level of detail as the main architect prompt,
-# ensuring that the analysis of existing files retains its "soul".
+# New prompt to generate the detailed spec for a SINGLE file
+FILE_SPEC_PROMPT_TEMPLATE = textwrap.dedent("""
+    You are a detail-oriented ARCHITECT AI. Your task is to create a detailed technical specification for a SINGLE file, based on the overall project goal.
+
+    **PROJECT GOAL:** {project_description}
+    **FILE TO SPEC:** `{filename}`
+    **FILE's PURPOSE:** {file_purpose}
+    **ALL PROJECT FILES & PURPOSES:**
+    {all_files_summary}
+
+    **INSTRUCTIONS:**
+    Create a detailed component breakdown for ONLY the file `{filename}`.
+    -   **task_id**: A unique snake_case identifier for the component (e.g., `render_world`, `player_input_handler`).
+    -   **description**: A clear, concise explanation of what the component does.
+    -   **component_type**: The type, e.g., "function", "class", "method", "variable_initialization".
+    -   **core_logic_steps**: A high-level, step-by-step summary of its implementation logic.
+    -   **error_conditions_to_handle**: Infer potential errors it handles or should handle.
+    -   **interactions**: Describe how it interacts with other components, even those in other files.
+    -   **critical_notes**: Note any non-obvious details regarding security, performance, or algorithms.
+
+    **CRITICAL:** Your response MUST be a single, valid JSON object with ONLY the following structure for THIS ONE FILE. Do not add explanations.
+    {{
+        "purpose": "{file_purpose}",
+        "dependencies": ["list", "of", "imported_project_files"],
+        "components": [
+            {{
+              "task_id": "unique_id",
+              "description": "component description",
+              "component_type": "function|class|method",
+              "core_logic_steps": ["step1", "step2"],
+              "error_conditions_to_handle": ["error1", "error2"],
+              "interactions": ["component1", "component2"],
+              "critical_notes": "security/performance notes"
+            }}
+        ]
+    }}
+""")
+
 FILE_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
     You are a master software architect. Your task is to deeply analyze the provided Python file and reverse-engineer its complete technical specification into a JSON object.
 
@@ -114,32 +125,27 @@ FILE_ANALYSIS_PROMPT_TEMPLATE = textwrap.dedent("""
 
 
 class ArchitectService(BaseAIService):
-    """Enhanced Architect Service for hybrid workflow planning."""
+    """Architect Service refactored for streaming file-by-file specifications."""
 
-    async def create_tech_spec(self, user_prompt: str, conversation_context: List[Dict] = None) -> dict:
-        """Create technical specification with detailed component breakdown."""
-        self.stream_emitter("Architect", "thought",
-                            "Phase 1: Creating comprehensive project architecture with micro-task breakdown...", 0)
+    async def create_tech_spec_stream(self, user_prompt: str, conversation_context: List[Dict] = None) -> \
+    AsyncGenerator[Dict[str, Any], None]:
+        """
+        Creates a technical specification by first planning the structure and then
+        streaming the detailed specification for each file individually.
+        """
+        self.stream_emitter("Architect", "stage_start", "Phase 1: Planning project structure...", 0)
 
-        # Parse user prompt and GDD context
+        # --- Stage 1: Get Overall Project Structure ---
         prompt_parts = user_prompt.split("\n\n--- GDD CONTEXT ---\n")
         actual_user_prompt = prompt_parts[0]
         gdd_context = prompt_parts[1] if len(prompt_parts) > 1 else "No GDD provided."
 
-        # Get team context and RAG context
         team_context = self._get_team_context_string()
         rag_context = await self._get_intelligent_rag_context(actual_user_prompt)
+        conversation_str = "\n".join([f"{msg.get('role', 'user')}: {msg.get('message', '')}" for msg in
+                                      conversation_context[-3:]]) if conversation_context else ""
 
-        # Build conversation context string
-        conversation_str = ""
-        if conversation_context:
-            conversation_str = "\n".join([
-                f"{msg.get('role', 'user')}: {msg.get('message', '')}"
-                for msg in conversation_context[-3:]  # Last 3 messages for context
-            ])
-
-        # Create architecture prompt
-        architecture_prompt = ARCHITECT_PROMPT_TEMPLATE.format(
+        structure_prompt = PROJECT_STRUCTURE_PROMPT_TEMPLATE.format(
             user_prompt=actual_user_prompt,
             conversation_context=conversation_str,
             gdd_context=gdd_context,
@@ -147,37 +153,69 @@ class ArchitectService(BaseAIService):
             rag_context=rag_context
         )
 
-        self.stream_emitter("Architect", "info",
-                            f"Sending architecture prompt ({len(architecture_prompt)} chars) to big model", 2)
+        structure_plan = await self._stream_and_collect_json(structure_prompt, LLMRole.ARCHITECT, "Architect")
+        if not structure_plan or not structure_plan.get("files"):
+            self.stream_emitter("Architect", "error", "Failed to determine project structure. Aborting.", 1)
+            return
 
-        # Use big model for architecture
-        tech_spec = await self._stream_and_collect_json(architecture_prompt, LLMRole.ARCHITECT, "Architect")
+        # First, yield the overall project metadata
+        project_metadata = {
+            "project_name": structure_plan.get("project_name", "unnamed_project"),
+            "project_description": structure_plan.get("project_description", "No description."),
+            "requirements": structure_plan.get("requirements", [])
+        }
+        yield {"type": "metadata", "data": project_metadata}
 
-        if not tech_spec or not tech_spec.get("technical_specs"):
-            self.stream_emitter("Architect", "error",
-                                "Architecture failed. Could not produce valid technical specification.", 1)
-            return {}
+        self.stream_emitter("Architect", "stage_start", "Phase 2: Generating detailed specs for each file...", 0)
 
-        # Contribute architectural insights
-        self._contribute_team_insight(
-            "architectural",
-            "Architect",
-            f"Created architecture for project: {tech_spec.get('project_name', 'Unknown')}",
-            "high"
-        )
+        # --- Stage 2: Generate and Stream Detailed Spec for Each File ---
+        files_to_spec = structure_plan.get("files", [])
+        all_files_summary = "\n".join([f"- {f['filename']}: {f['purpose']}" for f in files_to_spec])
 
-        self.stream_emitter("Architect", "success", "Architecture complete with detailed component breakdown!", 1)
-        return tech_spec
+        for file_info in files_to_spec:
+            filename = file_info["filename"]
+            file_purpose = file_info["purpose"]
+            self.stream_emitter("Architect", "info", f"Creating detailed spec for {filename}...", 1)
 
+            spec_prompt = FILE_SPEC_PROMPT_TEMPLATE.format(
+                project_description=project_metadata["project_description"],
+                filename=filename,
+                file_purpose=file_purpose,
+                all_files_summary=all_files_summary
+            )
+
+            try:
+                detailed_spec = await self._stream_and_collect_json(spec_prompt, LLMRole.ARCHITECT,
+                                                                    f"Architect-{filename}")
+                # Yield the file spec
+                yield {"type": "file_spec", "filename": filename, "spec": detailed_spec}
+                self.stream_emitter("Architect", "success", f"Specification for {filename} complete.", 2)
+            except Exception as e:
+                self.logger.error(f"Failed to generate spec for {filename}: {e}", exc_info=True)
+                yield {"type": "error", "filename": filename, "error": str(e)}
+
+    # This method is now used as a fallback or for simpler cases
+    async def create_tech_spec(self, user_prompt: str, conversation_context: List[Dict] = None) -> dict:
+        """Compatibility method that collects the stream into a single dictionary."""
+        final_spec = {"technical_specs": {"files": {}}}
+        async for item in self.create_tech_spec_stream(user_prompt, conversation_context):
+            if item["type"] == "metadata":
+                final_spec.update(item["data"])
+                final_spec["technical_specs"]["requirements"] = item["data"].get("requirements", [])
+            elif item["type"] == "file_spec":
+                final_spec["technical_specs"]["files"][item["filename"]] = item["spec"]
+            elif item["type"] == "error":
+                self.logger.error(f"Error streaming spec for {item['filename']}: {item['error']}")
+        return final_spec
+
+    # The analysis methods remain the same as they already work file-by-file
     async def _analyze_file_in_parallel(self, file_state: FileState) -> Dict[str, Any]:
         """Analyzes a single file using a focused LLM call."""
         prompt = FILE_ANALYSIS_PROMPT_TEMPLATE.format(
             file_path=file_state.path,
             file_content=file_state.content
         )
-        # Use a faster model for this focused task
         json_response = await self._stream_and_collect_json(prompt, LLMRole.CODER, f"Analyst-{file_state.path}")
-        # Return the analysis along with the file path for reassembly
         return {"file_path": file_state.path, "analysis": json_response}
 
     async def analyze_and_create_spec_from_project(self, project_state: ProjectStateManager) -> dict:
@@ -193,17 +231,11 @@ class ArchitectService(BaseAIService):
             self.stream_emitter("Architect", "warning", "No files found to analyze.", 1)
             return {}
 
-        # Create a list of concurrent analysis tasks
         tasks = [self._analyze_file_in_parallel(file_state) for file_state in files_to_analyze]
-
         self.stream_emitter("Architect", "info", f"Dispatching {len(tasks)} parallel analysis tasks.", 2)
-
-        # Execute all tasks concurrently and gather results
         analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         self.stream_emitter("Architect", "info", "Parallel analysis complete. Synthesizing final specification.", 1)
-
-        # Synthesize the final technical specification
         final_spec = {"files": {}}
         successful_analyses = 0
         for result in analysis_results:
@@ -222,20 +254,16 @@ class ArchitectService(BaseAIService):
             self.stream_emitter("Architect", "error", "All file analysis tasks failed. Cannot generate tech spec.", 1)
             return {}
 
-        # Construct the full tech_spec object expected by the system
         project_name = project_state.project_metadata.get("name", "Unknown Project")
         full_tech_spec = {
             "project_name": project_name,
             "project_description": f"An analysis of the existing project: {project_name}",
             "technical_specs": final_spec
-            # requirements and other fields can be populated here if needed
         }
 
         self._contribute_team_insight(
-            "architectural",
-            "Architect",
-            f"Completed parallel analysis of {successful_analyses}/{len(files_to_analyze)} files.",
-            "medium"
+            "architectural", "Architect",
+            f"Completed parallel analysis of {successful_analyses}/{len(files_to_analyze)} files.", "medium"
         )
 
         self.stream_emitter("Architect", "success", "Project analysis complete. Technical spec created!", 1)

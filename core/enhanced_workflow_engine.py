@@ -208,7 +208,6 @@ class HybridWorkflowEngine(QObject):
             if not self.project_state_manager:
                 self.set_project_state(ProjectStateManager(str(project_dir)))
 
-            # --- MODIFIED: Call the new file generation method ---
             await self._execute_self_correcting_file_generation(tech_spec, project_dir, tasks_by_file)
             await self._finalize_hybrid_project(tech_spec, project_dir, workflow_start_time)
 
@@ -217,7 +216,6 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow failed: {str(e)}", "0")
             self.workflow_completed.emit({"success": False, "error": str(e)})
 
-    # --- ENTIRELY NEW METHOD ---
     async def _execute_self_correcting_file_generation(self, tech_spec: dict, project_dir: Path,
                                                        tasks_by_file: Dict[str, List[SimpleTaskSpec]]):
         """Generates files using the new self-correction loop."""
@@ -231,11 +229,9 @@ class HybridWorkflowEngine(QObject):
             if file_spec.get("skip_generation", False): continue
 
             try:
-                # Initial Code Generation
                 self.node_status_changed.emit("coder", "working", f"Generating {filename}...")
                 micro_tasks_for_file = tasks_by_file.get(filename, [])
 
-                # --- Non-truncation change: Pass full generated_files_content ---
                 assembled_code = await self._generate_file_with_micro_tasks(filename, file_spec, tech_spec,
                                                                             generated_files_content,
                                                                             micro_tasks_for_file)
@@ -243,30 +239,30 @@ class HybridWorkflowEngine(QObject):
                     self.logger.warning(f"No code was assembled for {filename}. Skipping.")
                     continue
 
-                # Self-Correction Loop
                 max_retries = 3
                 for i in range(max_retries):
                     self.node_status_changed.emit("execution_engine", "working",
                                                   f"Validating {filename} (Attempt {i + 1})")
                     self.data_flow_started.emit("assembler", "execution_engine")
-                    await asyncio.sleep(0.1)  # UI breath
+                    await asyncio.sleep(0.1)
                     validation_result = await self.execution_engine.validate_code(filename, assembled_code)
-                    self.data_flow_completed.emit("assembler", "execution_engine")
 
                     if validation_result.result == ExecutionResult.SUCCESS:
+                        self.data_flow_completed.emit("assembler", "execution_engine")
                         self.node_status_changed.emit("execution_engine", "success", f"{filename} is valid.")
-                        break  # Exit loop if successful
+                        break
                     else:
+                        self.data_flow_completed.emit("assembler", "execution_engine")
                         self.node_status_changed.emit("execution_engine", "error", f"Validation failed")
                         self.detailed_log_event.emit("HybridEngine", "warning",
                                                      f"[{filename}] {validation_result.error}", "2")
+
                         if i == max_retries - 1:
                             self.logger.error(f"Exceeded max retries for {filename}. Using last generated code.")
                             self.detailed_log_event.emit("HybridEngine", "error",
                                                          f"Could not fix {filename} after {max_retries} attempts.", "1")
                             break
 
-                        # Refinement Step
                         self.node_status_changed.emit("reviewer", "working", f"Refining {filename}...")
                         self.data_flow_started.emit("execution_engine", "reviewer")
 
@@ -276,7 +272,6 @@ class HybridWorkflowEngine(QObject):
                         self.data_flow_completed.emit("execution_engine", "reviewer")
                         self.node_status_changed.emit("reviewer", "success", f"{filename} refined.")
 
-                # Final step: write the (hopefully) corrected code and log for dependency context
                 self._write_file(project_dir, filename, assembled_code)
                 generated_files_content[filename] = assembled_code
 
@@ -286,7 +281,6 @@ class HybridWorkflowEngine(QObject):
     async def _generate_file_with_micro_tasks(self, filename: str, file_spec: dict, tech_spec: dict,
                                               generated_files: dict, micro_tasks: List[SimpleTaskSpec]) -> str:
         if not micro_tasks:
-            # Use the full, untruncated dependency context for fallback
             dependency_context = self._build_dependency_context(file_spec.get("dependencies", []), generated_files)
             return await self.coder_service.generate_file_from_spec(filename, file_spec, {
                 "description": tech_spec.get("project_description", "")}, dependency_context)
@@ -345,8 +339,6 @@ class HybridWorkflowEngine(QObject):
             self.logger.error(f"Failed to write file {filename}: {e}", exc_info=True)
 
     def _build_dependency_context(self, dependencies: List[str], generated_files: Dict[str, Any]) -> str:
-        # --- NO TRUNCATION CHANGE ---
-        # Provide the FULL source code of dependencies
         context = []
         for dep_filename in dependencies:
             if dep_filename in generated_files:
