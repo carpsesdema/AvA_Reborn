@@ -69,13 +69,14 @@ class ProjectFinalizer:
 
     def _create_requirements_txt(self, project_dir: Path, tech_spec: dict):
         """Create requirements.txt file from tech spec."""
-        requirements = tech_spec.get("requirements", [])
+        # Use a more specific key if available, otherwise fallback
+        requirements = tech_spec.get("technical_specs", {}).get("requirements", []) or tech_spec.get("requirements", [])
         if requirements:
             req_file = project_dir / "requirements.txt"
             self.stream_emitter("ProjectFinalizer", "file_op",
                                 f"Creating requirements.txt with {len(requirements)} packages", "2")
             try:
-                req_content = "\n".join(requirements) + "\n"
+                req_content = "\n".join(sorted(list(set(requirements)))) + "\n" # Ensure unique and sorted
                 req_file.write_text(req_content, encoding='utf-8')
             except Exception as e:
                 self.logger.error(f"Failed to create requirements.txt: {e}", exc_info=True)
@@ -108,8 +109,12 @@ class ProjectFinalizer:
         self.stream_emitter("ProjectFinalizer", "info", "Installing requirements...", "3")
         pip_path = venv_path / "Scripts" / "pip.exe" if sys.platform == "win32" else venv_path / "bin" / "pip"
 
+        if not pip_path.exists():
+            self.stream_emitter("ProjectFinalizer", "error", f"Pip executable not found at {pip_path}", "3")
+            return
+
         pip_result = subprocess.run([str(pip_path), 'install', '-r', str(req_file)], capture_output=True, text=True,
-                                    cwd=str(req_file.parent))
+                                    check=False, cwd=str(req_file.parent))
 
         if pip_result.returncode == 0:
             self.stream_emitter("ProjectFinalizer", "success", "Requirements installed successfully", "3")
@@ -123,10 +128,17 @@ class ProjectFinalizer:
         # --- KEY CHANGE: Find the GDD file instead of constructing its name ---
         gdd_files = list(project_path.glob("*_GDD.md"))
         if not gdd_files:
-            self.logger.warning(f"Could not find a GDD file to update in {project_path}.")
-            return
+            # Check for standard names if glob fails
+            gdd_files = [f for f in [project_path / "GDD.md", project_path / "game_design_document.md"] if f.exists()]
 
-        gdd_file_path = gdd_files[0]  # Use the first one found
+        if not gdd_files:
+            self.logger.warning(f"Could not find a GDD file to update in {project_path}.")
+            # As a fallback, create one
+            self.stream_emitter("ProjectFinalizer", "info", "GDD not found, creating a new one.", "2")
+            gdd_file_path = project_path / f"{project_path.name}_GDD.md"
+            gdd_file_path.write_text(f"# Game Design Document: {project_name}\n\n## Development Log\n", encoding="utf-8")
+        else:
+            gdd_file_path = gdd_files[0]  # Use the first one found
         # --- END CHANGE ---
 
         self.stream_emitter("ProjectFinalizer", "file_op", f"Updating GDD log: {gdd_file_path.name}", "2")

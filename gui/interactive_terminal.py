@@ -124,32 +124,65 @@ class InteractiveTerminal(QWidget):
         """)
 
     def _run_main_py(self):
-        """Simple: just run python main.py"""
+        """Runs main.py using the project's own virtual environment."""
         if not self.current_project_path:
             self.append_error("No project loaded.")
             return
 
         main_file = self.current_project_path / 'main.py'
         if not main_file.exists():
-            self.append_error("main.py not found in project.")
+            self.append_error("main.py not found in the project directory.")
             return
 
-        self.append_system_message(f"Running main.py...")
-        self.execute_command(sys.executable, [str(main_file)])
+        # --- SMART VENV DETECTION ---
+        venv_path = self.current_project_path / 'venv'
+        if not venv_path.exists() or not venv_path.is_dir():
+            self.append_error("Project 'venv' not found. Please click 'Install Requirements' first.")
+            return
+
+        # Determine the correct python executable path based on OS
+        if sys.platform == "win32":
+            python_executable = venv_path / "Scripts" / "python.exe"
+        else:
+            python_executable = venv_path / "bin" / "python"
+
+        if not python_executable.exists():
+            self.append_error(f"Python executable not found in venv: {python_executable}")
+            self.append_system_message("Please try running 'Install Requirements' again.")
+            return
+
+        self.append_system_message("▶️ Running main.py with project's venv...")
+        self.execute_command(str(python_executable), [str(main_file)])
 
     def _install_requirements(self):
-        """Simple: install requirements.txt if it exists"""
+        """Installs requirements using the project's own virtual environment's pip."""
         if not self.current_project_path:
             self.append_error("No project loaded.")
             return
 
         req_file = self.current_project_path / 'requirements.txt'
         if not req_file.exists():
-            self.append_error("requirements.txt not found.")
+            self.append_error("requirements.txt not found in the project directory.")
             return
 
-        self.append_system_message("Installing requirements...")
-        self.execute_command(sys.executable, ['-m', 'pip', 'install', '-r', str(req_file)])
+        venv_path = self.current_project_path / 'venv'
+        if not venv_path.exists() or not venv_path.is_dir():
+            self.append_error("Project 'venv' not found. This should have been created automatically.")
+            self.append_system_message("If the problem persists, delete the project_dev folder and restart.")
+            return
+
+        # Determine the correct pip executable path
+        if sys.platform == "win32":
+            pip_executable = venv_path / "Scripts" / "pip.exe"
+        else:
+            pip_executable = venv_path / "bin" / "pip"
+
+        if not pip_executable.exists():
+            self.append_error(f"Pip executable not found in venv: {pip_executable}")
+            return
+
+        self.append_system_message("📦 Installing requirements into project venv...")
+        self.execute_command(str(pip_executable), ['install', '-r', str(req_file)])
 
     def set_working_directory(self, directory: str):
         """Set the working directory"""
@@ -159,7 +192,7 @@ class InteractiveTerminal(QWidget):
 
     def _update_prompt_label(self):
         """Update the prompt label"""
-        if hasattr(self, 'working_directory'):
+        if hasattr(self, 'working_directory') and self.working_directory:
             dir_name = self.working_directory.name
             self.prompt_label.setText(f"{dir_name}$ ")
             self.prompt_label.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
@@ -176,7 +209,7 @@ class InteractiveTerminal(QWidget):
         self.process.setWorkingDirectory(str(self.working_directory))
         self.process.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
 
-        command_str = f"{program} {' '.join(arguments)}"
+        command_str = f"{Path(program).name} {' '.join(arguments)}"
         self.append_command(command_str)
 
         self.process.start(program, arguments)

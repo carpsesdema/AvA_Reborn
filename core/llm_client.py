@@ -41,6 +41,7 @@ class EnhancedLLMClient:
         self.models: Dict[str, ModelConfig] = {}
         self.role_assignments: Dict[LLMRole, str] = {}
         self.personalities: Dict[LLMRole, str] = {}
+        self.role_temperatures: Dict[LLMRole, float] = {}  # NEW: Per-role temperature overrides
         self._initialize_models()
         self._load_personalities_from_config()
         self._initialize_default_personalities()
@@ -132,7 +133,8 @@ class EnhancedLLMClient:
         if api_key := os.getenv("DEEPSEEK_API_KEY"):
             base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
             self.models["deepseek-reasoner"] = ModelConfig(
-                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000, [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER]
+                "deepseek", "deepseek-reasoner", api_key, base_url, 0.1, 32000,
+                [LLMRole.ARCHITECT, LLMRole.CODER, LLMRole.ASSEMBLER]
             )
             self.models["deepseek-coder"] = ModelConfig(
                 "deepseek", "deepseek-coder", api_key, base_url, 0.1, 32000, [LLMRole.CODER]
@@ -149,7 +151,7 @@ class EnhancedLLMClient:
             suitable_roles=[LLMRole.CHAT, LLMRole.REVIEWER]
         )
         self.models["ollama_codellama"] = ModelConfig(
-            provider="ollama", model="codellama", base_url=ollama_base_url, temperature=0.2,
+            provider="ollama", model="codellama", base_url=ollama_base_url, temperature=0.1,
             suitable_roles=[LLMRole.CODER]
         )
         self.models["ollama_qwen2"] = ModelConfig(
@@ -159,10 +161,12 @@ class EnhancedLLMClient:
         print("✅ Ollama models configured (ensure models are pulled and server is running).")
 
     def _assign_roles(self):
-        """Assigns the best available model to each role based on suitability and speed."""
+        """Assigns the best available model to each role and sets default temperatures."""
         preferences = {
-            LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229", "gpt-4o"],
-            LLMRole.CODER: ["gemini-2.5-flash-preview-05-20", "deepseek-reasoner", "claude-3-5-sonnet-20240620", "gpt-4o"],
+            LLMRole.ARCHITECT: ["gemini-2.5-pro-preview-06-05", "deepseek-reasoner", "claude-3-opus-20240229",
+                                "gpt-4o"],
+            LLMRole.CODER: ["gemini-2.5-flash-preview-05-20", "deepseek-reasoner", "claude-3-5-sonnet-20240620",
+                            "gpt-4o"],
             LLMRole.ASSEMBLER: ["deepseek-reasoner", "claude-3-5-sonnet-20240620", "gpt-4o"],
             LLMRole.REVIEWER: ["gemini-2.5-flash-preview-05-20", "gpt-4o-mini"],
             LLMRole.CHAT: ["deepseek-chat", "gemini-2.5-flash-preview-05-20", "gpt-4o-mini"]
@@ -175,9 +179,7 @@ class EnhancedLLMClient:
                     assigned_model = model_name
                     break
 
-            # Fallback if no preferred models are available
             if not assigned_model:
-                # Find any model suitable for the role
                 for model_key, model_config in self.models.items():
                     if role in model_config.suitable_roles:
                         assigned_model = model_key
@@ -190,16 +192,25 @@ class EnhancedLLMClient:
             print("❌ No models available. Please check your API keys in the .env file.")
             return
 
-        # Final fallback for any unassigned roles
         for role in LLMRole:
             if not self.role_assignments.get(role):
                 self.role_assignments[role] = available_models[0]
+
+        # NEW: Set initial role temperatures from the assigned model's default
+        for role, model_name in self.role_assignments.items():
+            if model_name and model_name in self.models:
+                self.role_temperatures[role] = self.models[model_name].temperature
+
+        # NEW: Override Coder's default temperature as requested
+        if LLMRole.CODER in self.role_temperatures:
+            self.role_temperatures[LLMRole.CODER] = 0.1
 
         print("🎯 Smart Role Assignments:")
         for role, model_name in self.role_assignments.items():
             if model_name and model_name in self.models:
                 provider = self.models[model_name].provider
-                print(f"  {role.value.title():<10}: {provider}/{self.models[model_name].model}")
+                temp = self.role_temperatures.get(role, "N/A")
+                print(f"  {role.value.title():<10}: {provider}/{self.models[model_name].model} (Temp: {temp})")
             else:
                 print(f"  {role.value.title():<10}: ❌ Unassigned")
 
@@ -207,6 +218,8 @@ class EnhancedLLMClient:
         """Manually assign a model to a specific role."""
         if model_name in self.models:
             self.role_assignments[role] = model_name
+            # Update the role's temperature to the new model's default
+            self.role_temperatures[role] = self.models[model_name].temperature
             print(f"✅ Assigned {model_name} to {role.value} role")
         else:
             print(f"❌ Model {model_name} not found in available models.")
@@ -229,6 +242,16 @@ class EnhancedLLMClient:
 
         if not model_config:
             return self._fallback_response(prompt, role)
+
+        # Get role-specific temperature, fallback to model's default
+        role_temp = self.role_temperatures.get(role, model_config.temperature)
+
+        # Create a temporary config for this specific call to avoid modifying the original
+        call_config = ModelConfig(
+            provider=model_config.provider, model=model_config.model, api_key=model_config.api_key,
+            base_url=model_config.base_url, temperature=role_temp, max_tokens=model_config.max_tokens
+        )
+
         try:
             provider_map = {
                 "gemini": self._call_gemini,
@@ -237,11 +260,11 @@ class EnhancedLLMClient:
                 "openai": self._call_openai,
                 "ollama": self._call_ollama
             }
-            if model_config.provider in provider_map:
-                return await provider_map[model_config.provider](prompt, model_config, personality)
+            if call_config.provider in provider_map:
+                return await provider_map[call_config.provider](prompt, call_config, personality)
             return self._fallback_response(prompt, role)
         except Exception as e:
-            print(f"API call with {model_config.provider} for role {role.value} failed: {e}")
+            print(f"API call with {call_config.provider} for role {role.value} failed: {e}")
             return self._fallback_response(prompt, role, e)
 
     async def stream_chat(self, prompt: str, role: LLMRole = LLMRole.CHAT) -> AsyncGenerator[str, None]:
@@ -250,6 +273,16 @@ class EnhancedLLMClient:
         if not model_config:
             yield self._fallback_response(prompt, role)
             return
+
+        # Get role-specific temperature, fallback to model's default
+        role_temp = self.role_temperatures.get(role, model_config.temperature)
+
+        # Create a temporary config for this specific call
+        call_config = ModelConfig(
+            provider=model_config.provider, model=model_config.model, api_key=model_config.api_key,
+            base_url=model_config.base_url, temperature=role_temp, max_tokens=model_config.max_tokens
+        )
+
         stream_generator = None
         try:
             provider_map = {
@@ -259,8 +292,8 @@ class EnhancedLLMClient:
                 "openai": self._stream_openai,
                 "ollama": self._stream_ollama
             }
-            if model_config.provider in provider_map:
-                stream_generator = provider_map[model_config.provider](prompt, model_config, personality)
+            if call_config.provider in provider_map:
+                stream_generator = provider_map[call_config.provider](prompt, call_config, personality)
                 async for chunk in stream_generator:
                     yield chunk
             else:
@@ -324,7 +357,7 @@ class EnhancedLLMClient:
                     parts = content.get("parts", [])
                     if parts:
                         return parts[0].get("text", "")
-                    return "" # Return empty if no parts found
+                    return ""  # Return empty if no parts found
                 raise Exception(f"Gemini API error {response.status}: {response_json}")
 
     async def _stream_gemini(self, prompt: str, config: ModelConfig, personality: str = "") -> AsyncGenerator[
