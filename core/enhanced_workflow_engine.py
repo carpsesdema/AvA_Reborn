@@ -90,12 +90,11 @@ class HybridWorkflowEngine(QObject):
         self.assembler_service.set_project_state(project_state_manager)
         self.reviewer_service.set_project_state(project_state_manager)
 
-        # FINAL FIX: Initialize micro-task engine with ALL its dependencies
+        # THE FIX: Removed the extra rag_manager argument from this call
         self.micro_task_engine = StreamlinedMicroTaskEngine(
             self.llm_client,
             self.project_state_manager,
-            self.domain_context_manager,
-            self.rag_manager
+            self.domain_context_manager
         )
 
     async def _prepare_and_set_domain_context(self):
@@ -155,7 +154,6 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Analysis failed: {str(e)}", "0")
             self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
 
-    # ... rest of the file is unchanged ...
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
         """Execute the V6.2 Hybrid workflow combining architecture and micro-task orchestration."""
         self.logger.info(f"🚀 Starting V6.2 Hybrid workflow: {user_prompt[:100]}...")

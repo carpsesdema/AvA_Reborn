@@ -36,7 +36,8 @@ class ProjectStateManager:
     def scan_project(self, ignore_patterns: List[str] = None):
         """Scan project files, ignoring specified patterns."""
         if ignore_patterns is None:
-            ignore_patterns = ['.git', '__pycache__', '.DS_Store', 'venv', '*.log', 'rag_data']
+            # THE FIX: Added '*.db' to ignore database files like the context cache
+            ignore_patterns = ['.git', '__pycache__', '.DS_Store', 'venv', '*.log', 'rag_data', '*.db']
 
         self.logger.info(f"Scanning project at {self.project_root}...")
         for path in self.project_root.rglob('*'):
