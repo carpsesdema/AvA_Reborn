@@ -71,16 +71,19 @@ class ConnectionArrow(QGraphicsObject):
 
         # A special case for the correction loop arrow going "backwards"
         is_correction_loop = self.start_node.agent_id == "execution_engine" and self.end_node.agent_id == "reviewer"
+        is_feedback_loop = self.start_node.agent_id == "reviewer" and self.end_node.agent_id == "execution_engine"
 
         path = QPainterPath()
         path.moveTo(start_pos)
 
-        if is_correction_loop:
+        if is_correction_loop or is_feedback_loop:
             # Draw a different kind of curve for the feedback loop
             mid_x = (start_pos.x() + end_pos.x()) / 2
             mid_y = (start_pos.y() + end_pos.y()) / 2
+            # Use a higher control point for the feedback loop to make a nice arc
+            offset_y = -80 if is_feedback_loop else 0
             control1 = QPointF(mid_x + control_point_offset, start_pos.y())
-            control2 = QPointF(mid_x + control_point_offset, end_pos.y())
+            control2 = QPointF(mid_x + control_point_offset, end_pos.y() + offset_y)
             path.cubicTo(control1, control2, end_pos)
         else:
             # Normal vertical flow
@@ -213,34 +216,31 @@ class WorkflowMonitorScene(QGraphicsScene):
         self._connections.clear()
         self._workflow_layout.clear()
 
-    # --- MODIFIED: The new standard workflow! ---
+    # --- MODIFIED: The new, streamlined workflow! ---
     def setup_standard_workflow(self):
-        """Setup the standard AvA workflow with the self-correction loop."""
+        """Setup the streamlined AvA workflow without the Assembler."""
         self.clear_workflow()
 
-        # Add agent nodes in a logical flow
-        # Row 0
+        # Row 0: Planning
         self.add_agent_node("architect", "Architect", "🏛️", 0, 0)
 
-        # Row 1
+        # Row 1: Coding
         self.add_agent_node("coder", "Coder", "⚙️", 1, 0)
 
-        # Row 2
-        self.add_agent_node("assembler", "Assembler", "🧩", 2, 0)
-
-        # Row 3 - The correction loop level
-        self.add_agent_node("execution_engine", "Execution Engine", "🚀", 3, 0)
-        self.add_agent_node("reviewer", "Reviewer", "🧐", 3, 1)
+        # Row 2: Validation and Refinement Loop
+        self.add_agent_node("execution_engine", "Execution Engine", "🚀", 2, 0)
+        self.add_agent_node("reviewer", "Reviewer", "🧐", 2, 1)
 
         # Add primary connections
         self.add_connection("architect", "coder")
-        self.add_connection("coder", "assembler")
-        self.add_connection("assembler", "execution_engine")
+        self.add_connection("coder", "execution_engine")
 
-        # Add the self-correction loop connections
+        # Add the self-correction loop connection
         self.add_connection("execution_engine", "reviewer")
-        # Let's add a visual loop back from reviewer to assembler
-        self.add_connection("reviewer", "assembler")
+
+        # Optional: Add a visual arrow for the feedback loop
+        # This one goes from the reviewer back to the execution engine
+        self.add_connection("reviewer", "execution_engine")
 
         self._schedule_layout_update()
 
@@ -266,13 +266,10 @@ class WorkflowMonitorScene(QGraphicsScene):
     def _update_layout(self):
         if not self._workflow_layout: return
 
-        # Calculate grid dimensions and center offset
         num_rows = len(self._workflow_layout)
         num_cols = max(len(row) for row in self._workflow_layout) if num_rows > 0 else 0
         grid_width = (num_cols - 1) * self.NODE_SPACING_X
-        offset_x = (self.width() - grid_width) / 2
 
-        # Position nodes
         for r, row_data in enumerate(self._workflow_layout):
             row_width = (len(row_data) - 1) * self.NODE_SPACING_X
             row_offset_x = (self.width() - row_width) / 2
@@ -283,13 +280,7 @@ class WorkflowMonitorScene(QGraphicsScene):
                     y = self.SCENE_MARGIN + r * self.NODE_SPACING_Y
                     node.setPos(x, y)
 
-        # Update all connection paths
-        for (from_id, to_id), conn in self._connections.items():
-            start_node = self._agent_nodes.get(from_id)
-            end_node = self._agent_nodes.get(to_id)
-            if start_node and end_node:
-                # Add a special offset for the loopback arrow
-                offset = 100.0 if from_id == "reviewer" and to_id == "assembler" else 80.0
-                conn._update_path(control_point_offset=offset)
+        for conn in self._connections.values():
+            conn.update_positions()
 
         self.setSceneRect(self.itemsBoundingRect().adjusted(-20, -20, 20, 20))

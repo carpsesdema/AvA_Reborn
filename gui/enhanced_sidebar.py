@@ -74,7 +74,7 @@ class AvALeftSidebar(QWidget):
 
 
 class AIModelConfigPanel(StyledPanel):
-    """Modern AI Model Configuration panel showing V4 roles."""
+    """Modern AI Model Configuration panel showing the streamlined team."""
 
     model_config_requested = Signal()
 
@@ -83,7 +83,7 @@ class AIModelConfigPanel(StyledPanel):
         self._init_ui()
 
     def _init_ui(self):
-        """Initialize the UI components with the new role structure."""
+        """Initialize the UI components with the streamlined role structure."""
         self.config_btn = ModernButton("⚙️ Configure Models", button_type="primary")
         self.config_btn.clicked.connect(self.model_config_requested.emit)
         self.add_widget(self.config_btn)
@@ -93,11 +93,10 @@ class AIModelConfigPanel(StyledPanel):
         specialists_header.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; margin: 12px 0px 8px 0px; font-weight: 600;")
         self.add_widget(specialists_header)
 
-        # NEW V4 ROLES
+        # --- Streamlined V6 Roles ---
         specialists = [
             ("🏛️ Architect", "architect_status"),
             ("⚙️ Coder", "coder_status"),
-            ("🧩 Assembler", "assembler_status"),
             ("🧐 Reviewer", "reviewer_status"),
             ("💬 Chat", "chat_status")
         ]
@@ -116,34 +115,33 @@ class AIModelConfigPanel(StyledPanel):
             setattr(self, f"{attr_name}_indicator", indicator)
 
     def update_model_status_display(self, config_summary: dict):
-        """Update the model status display for the V4 roles."""
+        """Update the model status display for the streamlined roles."""
 
         def truncate_model(name, length=22):
             return name[:length - 3] + "..." if name and len(name) > length else name or "Not configured"
 
-        # NEW V4 ROLE MAPPING
+        # --- Streamlined V6 Role Mapping ---
         status_map = {
             "architect": (self.architect_status, self.architect_status_indicator, "🏛️ Architect"),
             "coder": (self.coder_status, self.coder_status_indicator, "⚙️ Coder"),
-            "assembler": (self.assembler_status, self.assembler_status_indicator, "🧩 Assembler"),
             "reviewer": (self.reviewer_status, self.reviewer_status_indicator, "🧐 Reviewer"),
             "chat": (self.chat_status, self.chat_status_indicator, "💬 Chat")
         }
 
         for role_str, (label_widget, indicator_widget, prefix) in status_map.items():
-            model_name = config_summary.get(role_str, "Not configured")
+            model_name = config_summary.get(role_str)
             display_name = truncate_model(model_name)
-            label_widget.setText(f"{prefix}: {display_name}")
-            if model_name and model_name != "Not configured":
+            if model_name:
+                label_widget.setText(f"{prefix}: {display_name}")
                 label_widget.setStyleSheet(f"color: {Colors.ACCENT_GREEN}; font-weight: 500;")
                 indicator_widget.update_status("success")
             else:
+                label_widget.setText(f"{prefix}: Not configured")
                 label_widget.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
                 indicator_widget.update_status("offline")
 
 
 class KnowledgeBasePanel(StyledPanel):
-    # ... (This class remains unchanged)
     scan_directory_requested = Signal()
 
     def __init__(self):
@@ -157,8 +155,6 @@ class KnowledgeBasePanel(StyledPanel):
 
         self.add_files_btn = ModernButton("📄 Add Files (Project)", button_type="secondary")
         self.add_widget(self.add_files_btn)
-
-        # RAG status display removed.
 
 
 class ChatActionsPanel(StyledPanel):

@@ -7,7 +7,6 @@ import textwrap
 from core.llm_client import LLMRole
 from .base_service import BaseAIService
 
-
 REVIEWER_PROMPT_TEMPLATE = textwrap.dedent("""
     You are the REVIEWER AI. Conduct a comprehensive code review of this Python file.
 
@@ -147,6 +146,11 @@ class ReviewerService(BaseAIService):
         """Clean code output by removing markdown formatting."""
         # Remove markdown fences
         match = re.search(r"```(?:python|py)?\s*\n(.*?)\n\s*```", code, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+        # Fallback for when the LLM just returns code without the python specifier
+        match = re.search(r"```\s*\n(.*?)\n\s*```", code, re.DOTALL)
         if match:
             return match.group(1).strip()
 

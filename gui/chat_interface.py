@@ -357,7 +357,6 @@ class ModernChatInput(QFrame):
 class ChatInterface(QWidget):
     """Main modern chat interface"""
 
-    # Simplified signal: Emits the user prompt and the current conversation history.
     workflow_requested = Signal(str, list)
 
     def __init__(self):
@@ -372,21 +371,17 @@ class ChatInterface(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
 
-        # Chat display area
         self.chat_scroll = ChatScrollArea()
         layout.addWidget(self.chat_scroll, 1)
 
-        # Chat input
         self.chat_input = ModernChatInput()
         self.chat_input.message_sent.connect(self._handle_message_sent)
         layout.addWidget(self.chat_input)
 
-        # Status bar
         status_layout = QHBoxLayout()
         status_layout.setContentsMargins(0, 8, 0, 0)
         status_layout.setSpacing(16)
 
-        # AI Specialists status
         self.specialists_indicator = StatusIndicator("ready")
         self.specialists_text = QLabel("AI Specialists: Ready")
         self.specialists_text.setFont(Typography.body_small())
@@ -397,31 +392,11 @@ class ChatInterface(QWidget):
         specialist_layout.addWidget(self.specialists_indicator)
         specialist_layout.addWidget(self.specialists_text)
 
-        # Performance status
-        self.performance_indicator = StatusIndicator("ready")
-        self.performance_text = QLabel("Performance: Ready")
-        self.performance_text.setFont(Typography.body_small())
-        self.performance_text.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-
-        performance_layout = QHBoxLayout()
-        performance_layout.setSpacing(6)
-        performance_layout.addWidget(self.performance_indicator)
-        performance_layout.addWidget(self.performance_text)
-
         status_layout.addLayout(specialist_layout)
         status_layout.addStretch()
-        status_layout.addLayout(performance_layout)
-        status_layout.addStretch()
-
-        layout.addLayout(status_layout)
         self.setLayout(layout)
 
-        # Apply main styling
-        self.setStyleSheet(f"""
-            QWidget {{
-                background: {Colors.PRIMARY_BG};
-            }}
-        """)
+        self.setStyleSheet(f"QWidget {{ background: {Colors.PRIMARY_BG}; }}")
 
     def _add_welcome_message(self):
         """Add the welcome message"""
@@ -429,11 +404,10 @@ class ChatInterface(QWidget):
 
 🚀 **Ready to build something amazing?**
 
-I use specialized AI agents:
+I use a streamlined team of AI agents:
 - **Architect** - Creates smart project architecture
-- **Coder** - Generates clean, professional code  
-- **Assembler** - Integrates everything seamlessly
-- **Reviewer** - Ensures quality and best practices
+- **Coder** - Generates clean, professional code
+- **Reviewer** - Ensures quality and handles fixes
 
 ✨ **Just tell me what you want to build!**
 Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer tool" """
@@ -449,56 +423,24 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
     def _handle_message_sent(self, message: str):
         """Handle sent messages"""
         self.add_user_message(message)
-
-        # Store in history
-        self.conversation_history.append({
-            "role": "user",
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        })
-
-        # Keep last 10 messages for context
-        if len(self.conversation_history) > 10:
-            self.conversation_history.pop(0)
-
-        # Emit signal to the application controller
+        self.conversation_history.append({"role": "user", "message": message, "timestamp": datetime.now().isoformat()})
+        if len(self.conversation_history) > 10: self.conversation_history.pop(0)
         self.workflow_requested.emit(message, self.conversation_history)
 
     def add_user_message(self, message: str):
         """Add a user message bubble"""
-        bubble = ChatBubble(
-            message=message,
-            sender="You",
-            role="user",
-            timestamp=datetime.now()
-        )
+        bubble = ChatBubble(message=message, sender="You", role="user", timestamp=datetime.now())
         self.chat_scroll.add_bubble(bubble)
 
     def add_assistant_response(self, response: str):
         """Add assistant response bubble"""
-        bubble = ChatBubble(
-            message=response,
-            sender="AvA",
-            role="assistant",
-            timestamp=datetime.now()
-        )
+        bubble = ChatBubble(message=response, sender="AvA", role="assistant", timestamp=datetime.now())
         self.chat_scroll.add_bubble(bubble)
-
-        # Store in history
-        self.conversation_history.append({
-            "role": "assistant",
-            "message": response,
-            "timestamp": datetime.now().isoformat()
-        })
+        self.conversation_history.append({"role": "assistant", "message": response, "timestamp": datetime.now().isoformat()})
 
     def add_workflow_status(self, status: str):
         """Add workflow status message"""
-        bubble = ChatBubble(
-            message=f"🔄 {status}",
-            sender="AvA",
-            role="streaming",
-            timestamp=datetime.now()
-        )
+        bubble = ChatBubble(message=f"🔄 {status}", sender="AvA", role="streaming", timestamp=datetime.now())
         self.chat_scroll.add_bubble(bubble)
 
     def clear_chat(self):
@@ -506,48 +448,14 @@ Examples: "Create a calculator GUI", "Build a web API", "Make a file organizer t
         content_layout = self.chat_scroll.content_layout
         while content_layout.count() > 0:
             item = content_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item.widget(): item.widget().deleteLater()
         content_layout.addStretch()
         self.conversation_history = []
-        self._add_welcome_message()  # Add welcome message back after clearing
-
-    def load_history(self, history: list):
-        """Clears the chat and loads a new history."""
-        self.clear_chat()
-        self.conversation_history = history
-
-        # Re-populate the chat with the loaded history
-        for message_data in history:
-            role = message_data.get("role")
-            message = message_data.get("message")
-            ts_str = message_data.get("timestamp")
-            try:
-                timestamp = datetime.fromisoformat(ts_str) if ts_str else datetime.now()
-            except (ValueError, TypeError):
-                timestamp = datetime.now()
-
-            # Recreate the bubble.
-            if role == "user":
-                bubble = ChatBubble(message=message, sender="You", role=role, timestamp=timestamp)
-                self.chat_scroll.add_bubble(bubble)
-            elif role == "assistant":
-                bubble = ChatBubble(message=message, sender="AvA", role=role, timestamp=timestamp)
-                self.chat_scroll.add_bubble(bubble)
-            elif role == "streaming":
-                bubble = ChatBubble(message=f"🔄 {message}", sender="AvA", role=role, timestamp=timestamp)
-                self.chat_scroll.add_bubble(bubble)
+        self._add_welcome_message()
 
     def update_specialists_status(self, text: str, status: str = "ready"):
-        """Update specialists status"""
         self.specialists_text.setText(text)
         self.specialists_indicator.update_status(status)
 
-    def update_performance_status(self, text: str, status: str = "ready"):
-        """Update performance status"""
-        self.performance_text.setText(text)
-        self.performance_indicator.update_status(status)
-
     def update_rag_status(self, rag_text: str, status: str = "working"):
-        """Update RAG status in the footer. (This is now a no-op)."""
         pass

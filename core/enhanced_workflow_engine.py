@@ -1,12 +1,12 @@
-# core/enhanced_workflow_engine.py - V6.6 - True Parallel Pipeline!
+# core/enhanced_workflow_engine.py - V6.8 - Staged Dependency-Aware Pipeline
 
 import asyncio
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from collections import defaultdict
+from typing import Dict, Any, List, Optional, Tuple
+from collections import defaultdict, deque
 import subprocess
 import sys
 
@@ -17,7 +17,7 @@ from core.services.coder_service import CoderService
 from core.services.reviewer_service import ReviewerService
 from core.services.assembler_service import AssemblerService
 from core.project_state_manager import ProjectStateManager
-from core.enhanced_micro_task_engine import StreamlinedMicroTaskEngine, SimpleTaskSpec
+from core.enhanced_micro_task_engine import SimpleTaskSpec
 from core.project_builder import ProjectBuilder
 from core.domain_context_manager import DomainContextManager
 from core.execution_engine import ExecutionEngine, ExecutionResult
@@ -25,7 +25,7 @@ from core.execution_engine import ExecutionEngine, ExecutionResult
 
 class HybridWorkflowEngine(QObject):
     """
-    🚀 V6.6 Hybrid Workflow Engine: True parallel pipeline processing!
+    🚀 V6.8 Hybrid Workflow Engine: Staged, dependency-aware parallel pipeline.
     """
     workflow_started = Signal(str, str)
     workflow_completed = Signal(dict)
@@ -57,7 +57,6 @@ class HybridWorkflowEngine(QObject):
         self.is_existing_project_loaded = False
         self.original_project_path: Optional[Path] = None
         self.original_user_prompt: str = ""
-        self.micro_task_engine: Optional[StreamlinedMicroTaskEngine] = None
         self.execution_engine: Optional[ExecutionEngine] = None
 
         def service_log_emitter(agent_name: str, type_key: str, content: str, indent_level: int):
@@ -65,7 +64,6 @@ class HybridWorkflowEngine(QObject):
 
         self.architect_service = ArchitectService(self.llm_client, service_log_emitter, self.rag_manager)
         self.coder_service = CoderService(self.llm_client, service_log_emitter, self.rag_manager)
-        self.assembler_service = AssemblerService(self.llm_client, service_log_emitter, self.rag_manager)
         self.reviewer_service = ReviewerService(self.llm_client, service_log_emitter, self.rag_manager)
 
         from core.config import ConfigManager
@@ -91,13 +89,8 @@ class HybridWorkflowEngine(QObject):
 
         self.architect_service.set_project_state(project_state_manager)
         self.coder_service.set_project_state(project_state_manager)
-        self.assembler_service.set_project_state(project_state_manager)
         self.reviewer_service.set_project_state(project_state_manager)
 
-        self.micro_task_engine = StreamlinedMicroTaskEngine(
-            llm_client=self.llm_client,
-            domain_context_manager=self.domain_context_manager
-        )
         self.execution_engine = ExecutionEngine(
             project_state_manager=project_state_manager,
             stream_emitter=lambda agent, type_key, content, level: self.detailed_log_event.emit(agent, type_key,
@@ -105,83 +98,29 @@ class HybridWorkflowEngine(QObject):
         )
         self.logger.info("Project state correctly set for all AI services, including ExecutionEngine.")
 
-    async def _prepare_and_set_domain_context(self):
-        """Analyzes the project's domain context ONCE and stores it in the state manager."""
-        if not self.domain_context_manager: return
-        if self.project_state_manager and self.project_state_manager.domain_context is not None:
-            self.detailed_log_event.emit("HybridEngine", "info", "Domain context already analyzed and cached.", "1")
-            return
-
-        self.detailed_log_event.emit("HybridEngine", "stage_start", "🔬 Analyzing project domain context...", "1")
-        self.node_status_changed.emit("architect", "working", "Analyzing domain...")
-
-        try:
-            comprehensive_context = await self.domain_context_manager.get_comprehensive_context()
-            if self.project_state_manager: self.project_state_manager.domain_context = comprehensive_context
-            self.detailed_log_event.emit("HybridEngine", "success", "✅ Domain context analysis complete.", "1")
-            self.node_status_changed.emit("architect", "success", "Domain analyzed.")
-        except Exception as e:
-            self.logger.error(f"Domain context analysis failed: {e}", exc_info=True)
-            self.detailed_log_event.emit("HybridEngine", "error", f"❌ Domain analysis failed: {e}", "1")
-            self.node_status_changed.emit("architect", "error", "Domain analysis failed.")
-
-    async def analyze_existing_project(self, project_path_str: str):
-        """Analyze an existing project and create technical specification."""
-        try:
-            self.workflow_reset.emit()
-            project_path = Path(project_path_str)
-            self.analysis_started.emit(project_path_str)
-            self.detailed_log_event.emit("HybridEngine", "stage_start", f"🔍 Analyzing: {project_path.name}", "0")
-
-            if not self.project_state_manager or self.project_state_manager.project_root != project_path:
-                self.set_project_state(ProjectStateManager(str(project_path)))
-
-            await self._prepare_and_set_domain_context()
-            self.node_status_changed.emit("architect", "working", "Creating spec from code...")
-            self.current_tech_spec = await self.architect_service.analyze_and_create_spec_from_project(
-                self.project_state_manager)
-
-            if not self.current_tech_spec: raise Exception("Failed to analyze project and create a specification.")
-
-            self.node_status_changed.emit("architect", "success", "Analysis complete.")
-            self.is_existing_project_loaded = True
-            self.original_project_path = project_path
-
-            self._ensure_gdd_exists(project_path, self.current_tech_spec.get("project_name", project_path.name),
-                                    self.current_tech_spec.get("project_description", ""))
-            self.detailed_log_event.emit("HybridEngine", "success", "✅ Analysis complete! Ready for modifications.",
-                                         "0")
-            self.analysis_completed.emit(project_path_str, self.current_tech_spec)
-            self.project_loaded.emit(project_path_str)
-        except Exception as e:
-            self.logger.error(f"Analysis failed: {e}", exc_info=True)
-            self.detailed_log_event.emit("HybridEngine", "error", f"❌ Analysis failed: {str(e)}", "0")
-            self.analysis_completed.emit(project_path_str, self.current_tech_spec or {})
-
     async def execute_enhanced_workflow(self, user_prompt: str, conversation_context: list = None):
-        """Execute the V6.6 Hybrid workflow with a true parallel pipeline."""
-        self.logger.info(f"🚀 Starting V6.6 Hybrid workflow: {user_prompt[:100]}...")
+        """Execute the V6.8 Hybrid workflow."""
+        self.logger.info(f"🚀 Starting V6.8 Hybrid workflow: {user_prompt[:100]}...")
         self.workflow_reset.emit()
         workflow_start_time = datetime.now()
         self.original_user_prompt = user_prompt
 
         try:
-            if self.project_state_manager and self.project_state_manager.files and not self.is_existing_project_loaded:
-                self.logger.info("Project state with files found. Auto-setting to modification workflow.")
-                self.is_existing_project_loaded = True
-                if not self.original_project_path: self.original_project_path = self.project_state_manager.project_root
+            # --- ARCHITECTURE PHASE ---
+            self.workflow_progress.emit("planning", "🧠 Architecting project...")
+            self.node_status_changed.emit("architect", "working", "Creating tech spec...")
 
-            if self.is_existing_project_loaded:
-                project_name = self.original_project_path.name
-                self.detailed_log_event.emit("HybridEngine", "stage_start",
-                                             f"🚀 Initializing HYBRID MODIFICATION for '{project_name}'...", "0")
-                await self._prepare_and_set_domain_context()
-            else:
-                self.detailed_log_event.emit("HybridEngine", "stage_start", "🚀 Initializing HYBRID NEW PROJECT...", "0")
+            # The Architect service now returns the full spec at once after streaming logs.
+            tech_spec = await self.architect_service.create_tech_spec(user_prompt, conversation_context)
+            if not tech_spec or not tech_spec.get("technical_specs", {}).get("files"):
+                raise Exception("Architecture phase failed to produce any file specifications.")
 
-            # --- TRUE PARALLEL PIPELINE EXECUTION ---
-            project_dir, generated_files = await self.run_parallel_generation_pipeline(user_prompt,
-                                                                                       conversation_context)
+            self.current_tech_spec = tech_spec
+            self.node_status_changed.emit("architect", "success", "Tech spec created.")
+            self.workflow_plan_ready.emit(tech_spec)
+
+            # --- STAGED GENERATION PIPELINE ---
+            project_dir, generated_files = await self.run_staged_generation_pipeline(tech_spec)
 
             await self._finalize_hybrid_project(self.current_tech_spec, project_dir, workflow_start_time,
                                                 len(generated_files))
@@ -191,151 +130,162 @@ class HybridWorkflowEngine(QObject):
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Workflow failed: {str(e)}", "0")
             self.workflow_completed.emit({"success": False, "error": str(e)})
 
-    async def run_parallel_generation_pipeline(self, user_prompt, conversation_context):
-        """Runs the Architect and then the Coder/Assembler/Reviewer pipeline in parallel."""
-        self.workflow_progress.emit("planning", "🧠 Architecting project...")
-        self.node_status_changed.emit("architect", "working", "Creating tech spec...")
+    def _build_dependency_graph(self, files_to_generate: Dict[str, Any]) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+        """Builds a dependency graph from the tech spec."""
+        dependencies = defaultdict(list)
+        file_map = {}  # Maps key (e.g., 'main') to full filename (e.g., 'main.py')
 
-        tech_spec_stream = self.architect_service.create_tech_spec_stream(user_prompt, conversation_context)
-        tech_spec = {"technical_specs": {"files": {}}}
-        all_file_generation_tasks = []
-        generated_files_content = {}
-        project_dir = None
+        # Create a mapping from simple name (without ext) to full filename
+        for full_filename in files_to_generate.keys():
+            key = Path(full_filename).stem
+            file_map[key] = full_filename
 
-        async for item in tech_spec_stream:
-            if item["type"] == "metadata":
-                tech_spec.update(item["data"])
-                tech_spec["technical_specs"]["requirements"] = item["data"].get("requirements", [])
-                self.current_tech_spec = tech_spec  # Set early for finalization step
-                self.detailed_log_event.emit("HybridEngine", "success",
-                                             f"Project Structure Planned: {tech_spec.get('project_name')}", "1")
-                # Now that we have the name, we can set up the directory
-                project_dir = await self._setup_project_directory(tech_spec)
-                if not self.project_state_manager: self.set_project_state(ProjectStateManager(str(project_dir)))
+        for full_filename, spec in files_to_generate.items():
+            key = Path(full_filename).stem
+            # Ensure every file is a key in the dependency graph
+            if key not in dependencies:
+                dependencies[key] = []
 
-            elif item["type"] == "file_spec":
-                filename = item["filename"]
-                file_spec = item["spec"]
-                tech_spec["technical_specs"]["files"][filename] = file_spec
-                self.node_status_changed.emit("architect", "working", f"Spec for {filename} done")
+            for dep_filename in spec.get("dependencies", []):
+                dep_key = Path(dep_filename).stem
+                # Only add dependency if it's a known file being generated
+                if dep_key in file_map:
+                    dependencies[key].append(dep_key)
+        return dict(dependencies), file_map
 
-                # Launch generation task for this file immediately
-                if project_dir is not None:
-                    task = asyncio.create_task(
-                        self._generate_and_validate_file_task(
-                            filename, file_spec, tech_spec, generated_files_content, project_dir
-                        )
-                    )
-                    all_file_generation_tasks.append(task)
-                else:
-                    self.logger.error("Project directory not set before file spec received. Cannot start task.")
+    def _determine_generation_stages(self, dependencies: Dict[str, List[str]]) -> List[List[str]]:
+        """Determines parallel generation stages using Kahn's algorithm for topological sorting."""
+        if not dependencies: return []
 
-            elif item["type"] == "error":
-                self.detailed_log_event.emit("HybridEngine", "error",
-                                             f"❌ Failed to create spec for {item['filename']}: {item['error']}", "2")
+        in_degree = {u: 0 for u in dependencies}
+        for u in dependencies:
+            for v in dependencies[u]:
+                if v in in_degree: in_degree[v] += 1
 
-        if not tech_spec.get("technical_specs", {}).get("files"):
-            raise Exception("Architecture phase failed to produce any file specifications.")
+        queue = deque([u for u, deg in in_degree.items() if deg == 0])
+        stages = []
+        count = 0
+        while queue:
+            current_stage = list(queue)
+            stages.append(current_stage)
 
-        self.node_status_changed.emit("architect", "success", "All specs created.")
-        self.workflow_plan_ready.emit(tech_spec)
+            for _ in range(len(current_stage)):
+                u = queue.popleft()
+                count += 1
+                for v in dependencies.get(u, []):
+                    if v in in_degree:
+                        in_degree[v] -= 1
+                        if in_degree[v] == 0:
+                            queue.append(v)
 
-        # Wait for all file generation tasks to complete
-        self.detailed_log_event.emit("HybridEngine", "info",
-                                     f"Waiting for {len(all_file_generation_tasks)} file generation tasks to complete...",
-                                     "1")
-        await asyncio.gather(*all_file_generation_tasks)
-        self.detailed_log_event.emit("HybridEngine", "success", "All parallel file generation tasks are complete.", "1")
+        if count != len(dependencies):
+            cycle_nodes = {node for node, deg in in_degree.items() if deg > 0}
+            self.logger.error(
+                f"A cycle was detected in the dependency graph involving nodes: {cycle_nodes}. Execution order may be incorrect.")
+            if remaining_nodes := list(cycle_nodes):
+                stages.append(remaining_nodes)
+        return stages
 
-        return project_dir, generated_files_content
+    def _build_dependency_context(self, dependency_keys: List[str], knowledge_packets: Dict[str, str],
+                                  project_description: str, file_map: Dict[str, str]) -> str:
+        """Builds a rich context string including full source code of completed dependencies."""
+        if not dependency_keys:
+            return "This file has no project dependencies."
 
-    async def _generate_and_validate_file_task(self, filename: str, file_spec: dict, tech_spec: dict,
-                                               generated_files_content: dict, project_dir: Path):
+        context_str = f"You are building a file for the project '{project_description}'.\n"
+        context_str += "This file must correctly import and use functions/classes from the following dependencies. The full source code for each completed dependency is provided for your reference:\n"
+
+        for dep_key in dependency_keys:
+            full_dep_filename = file_map.get(dep_key)
+            if full_dep_filename and full_dep_filename in knowledge_packets:
+                source_code = knowledge_packets[full_dep_filename]
+                context_str += f"\n--- SOURCE CODE FOR DEPENDENCY: {full_dep_filename} ---\n"
+                context_str += f"```python\n{source_code}\n```\n"
+            else:
+                context_str += f"\n--- NOTE: Source code for '{dep_key}' is not yet available. You may need to create placeholder imports. ---\n"
+        return context_str
+
+    async def run_staged_generation_pipeline(self, tech_spec: dict) -> Tuple[Path, Dict[str, str]]:
+        """Runs the generation pipeline in stages based on file dependencies."""
+        project_dir = await self._setup_project_directory(tech_spec)
+        files_to_generate = tech_spec.get("technical_specs", {}).get("files", {})
+        if not files_to_generate: return project_dir, {}
+
+        dependencies, file_map = self._build_dependency_graph(files_to_generate)
+        stages = self._determine_generation_stages(dependencies)
+
+        knowledge_packets = {}  # Stores filename -> source_code
+
+        for i, stage_keys in enumerate(stages):
+            self.detailed_log_event.emit("HybridEngine", "stage_start",
+                                         f"Executing Stage {i + 1}/{len(stages)} with {len(stage_keys)} file(s) in parallel...",
+                                         "1")
+
+            stage_tasks = []
+            for key in stage_keys:
+                full_filename = file_map.get(key)
+                if not full_filename: continue
+
+                file_spec = files_to_generate.get(full_filename)
+                dep_keys = dependencies.get(key, [])
+
+                task = self._generate_file_pipeline_task(full_filename, file_spec, tech_spec, knowledge_packets,
+                                                         dep_keys, file_map)
+                stage_tasks.append(task)
+
+            # Wait for all tasks in the current stage to complete
+            results = await asyncio.gather(*stage_tasks)
+            for file_name, source_code in results:
+                if source_code:
+                    knowledge_packets[file_name] = source_code
+                    self._write_file(project_dir, file_name, source_code)
+
+        return project_dir, knowledge_packets
+
+    async def _generate_file_pipeline_task(self, filename: str, file_spec: dict, tech_spec: dict,
+                                           knowledge_packets: dict, dep_keys: List[str], file_map: dict) -> Tuple[
+        str, Optional[str]]:
         """A complete, self-contained pipeline for generating a single file."""
         try:
-            project_context_for_tasks = {"project_name": tech_spec.get("project_name", ""),
-                                         "project_description": tech_spec.get("project_description", "")}
-            micro_tasks_for_file = await self.micro_task_engine.create_smart_tasks({filename: file_spec},
-                                                                                   project_context_for_tasks)
+            self.node_status_changed.emit("coder", "working", f"Coding {filename}...")
 
-            assembled_code = await self._generate_file_with_micro_tasks(filename, file_spec, tech_spec,
-                                                                        generated_files_content,
-                                                                        micro_tasks_for_file)
-            if not assembled_code:
-                self.logger.warning(f"No code was assembled for {filename}. Skipping validation and write.")
-                return
+            dependency_context = self._build_dependency_context(dep_keys, knowledge_packets,
+                                                                tech_spec.get("project_description", ""), file_map)
+            project_context = {"description": tech_spec.get("project_description", "")}
+
+            generated_code = await self.coder_service.generate_file_from_spec(filename, file_spec, project_context,
+                                                                              dependency_context)
 
             max_retries = 3
-            is_valid = False
             for i in range(max_retries):
                 self.node_status_changed.emit("execution_engine", "working", f"Validating {filename} (Try {i + 1})")
-                self.data_flow_started.emit("assembler", "execution_engine")
-                validation_result = await self.execution_engine.validate_code(filename, assembled_code)
-                self.data_flow_completed.emit("assembler", "execution_engine")
+                validation_result = await self.execution_engine.validate_code(filename, generated_code)
 
                 if validation_result.result == ExecutionResult.SUCCESS:
                     self.node_status_changed.emit("execution_engine", "success", f"{filename} is valid.")
-                    is_valid = True
-                    break
-                else:  # Validation failed
-                    self.node_status_changed.emit("execution_engine", "error", f"{filename} invalid")
-                    self.detailed_log_event.emit("HybridEngine", "warning", f"[{filename}] {validation_result.error}",
-                                                 "2")
-                    if i < max_retries - 1:
-                        self.node_status_changed.emit("reviewer", "working", f"Refining {filename}...")
-                        self.data_flow_started.emit("execution_engine", "reviewer")
-                        instruction = f"The code for {filename} failed validation with this error: '{validation_result.error}'. Please fix the code and return only the complete, corrected code."
-                        assembled_code = await self.reviewer_service.refine_code(assembled_code, instruction)
-                        self.data_flow_completed.emit("execution_engine", "reviewer")
-                        self.node_status_changed.emit("reviewer", "success", f"{filename} refined.")
-                    else:
-                        self.detailed_log_event.emit("HybridEngine", "error",
-                                                     f"Could not fix {filename} after {max_retries} attempts.", "1")
+                    self.detailed_log_event.emit("HybridEngine", "success", f"✅ {filename} passed validation.", "2")
+                    return filename, generated_code
 
-            self._write_file(project_dir, filename, assembled_code)
-            generated_files_content[filename] = assembled_code
+                self.node_status_changed.emit("execution_engine", "error", f"{filename} invalid")
+                self.detailed_log_event.emit("HybridEngine", "warning", f"[{filename}] {validation_result.clean_error}",
+                                             "2")
 
+                if i < max_retries - 1:
+                    self.node_status_changed.emit("reviewer", "working", f"Refining {filename}...")
+                    instruction = f"The code for {filename} failed validation. Please fix it. The error was: {validation_result.clean_error}"
+                    generated_code = await self.reviewer_service.refine_code(generated_code, instruction)
+                    self.node_status_changed.emit("reviewer", "success", f"{filename} refined.")
+                else:
+                    self.detailed_log_event.emit("HybridEngine", "error",
+                                                 f"Could not fix {filename} after {max_retries} attempts. Using last version.",
+                                                 "1")
+                    return filename, generated_code  # Return the last attempt
+
+            return filename, generated_code  # Should be unreachable, but as a fallback
         except Exception as e:
             self.logger.error(f"Task for generating {filename} failed: {e}", exc_info=True)
             self.detailed_log_event.emit("HybridEngine", "error", f"❌ Generation pipeline for {filename} failed.", "2")
-
-    async def _generate_file_with_micro_tasks(self, filename: str, file_spec: dict, tech_spec: dict,
-                                              generated_files: dict, micro_tasks: List[SimpleTaskSpec]) -> str:
-        self.node_status_changed.emit("coder", "working", f"Coding {filename}...")
-        if not micro_tasks:
-            dependency_context = self._build_dependency_context(file_spec.get("dependencies", []), generated_files)
-            return await self.coder_service.generate_file_from_spec(filename, file_spec, {
-                "description": tech_spec.get("project_description", "")}, dependency_context)
-
-        micro_task_results = await self._execute_micro_tasks_in_parallel(micro_tasks)
-        if not micro_task_results: return ""
-
-        self.data_flow_started.emit("coder", "assembler")
-        self.node_status_changed.emit("assembler", "working", f"Assembling {filename}...")
-        project_context = {"description": tech_spec.get("project_description", ""),
-                           "file_purpose": file_spec.get("purpose", "")}
-        assembled_code = await self.assembler_service.assemble_file_from_micro_tasks(filename, file_spec,
-                                                                                     micro_task_results,
-                                                                                     project_context)
-        self.data_flow_completed.emit("coder", "assembler")
-        self.node_status_changed.emit("assembler", "success", f"{filename} assembled.")
-        return assembled_code
-
-    async def _execute_micro_tasks_in_parallel(self, micro_tasks: List[SimpleTaskSpec]) -> List[Dict[str, Any]]:
-        if not micro_tasks: return []
-        semaphore = asyncio.Semaphore(5)
-
-        async def execute_task(task: SimpleTaskSpec):
-            async with semaphore:
-                try:
-                    return await self.coder_service.execute_micro_task_with_gemini_flash(task)
-                except Exception as e:
-                    self.logger.error(f"Micro-task {task.id} failed: {e}", exc_info=False)
-                    self.detailed_log_event.emit("HybridEngine", "error", f"❌ Micro-task {task.id} failed.", "2")
-                    return None
-
-        results = await asyncio.gather(*[execute_task(task) for task in micro_tasks])
-        return [res for res in results if res is not None]
+            return filename, None  # Indicate failure
 
     async def _setup_project_directory(self, tech_spec: dict) -> Path:
         project_name = tech_spec.get("project_name", "generated_project")
@@ -356,16 +306,9 @@ class HybridWorkflowEngine(QObject):
         except Exception as e:
             self.logger.error(f"Failed to write file {filename}: {e}", exc_info=True)
 
-    def _build_dependency_context(self, dependencies: List[str], generated_files: Dict[str, Any]) -> str:
-        context = []
-        for dep_filename in dependencies:
-            if dep_filename in generated_files: context.append(
-                f"--- DEPENDENCY: {dep_filename} ---\n\n```python\n{generated_files[dep_filename]}\n```")
-        return "\n\n".join(context) or "This file has no generated dependencies."
-
     async def _finalize_hybrid_project(self, tech_spec: dict, project_dir: Path, start_time: datetime, file_count: int):
         self.workflow_progress.emit("finalization", "🎯 Finalizing project...")
-        self._create_requirements_txt(project_dir, tech_spec)
+        if tech_spec: self._create_requirements_txt(project_dir, tech_spec)
         await self._setup_virtual_environment(project_dir)
         elapsed_time = (datetime.now() - start_time).total_seconds()
         result = {"success": True, "project_directory": str(project_dir), "execution_time": elapsed_time,
@@ -375,17 +318,11 @@ class HybridWorkflowEngine(QObject):
 
     def _create_requirements_txt(self, project_dir: Path, tech_spec: dict):
         requirements = tech_spec.get("technical_specs", {}).get("requirements", [])
-        if requirements: (project_dir / "requirements.txt").write_text("\n".join(requirements) + "\n")
-
-    def _ensure_gdd_exists(self, project_path: Path, project_name: str, project_description: str):
-        if not (project_path / f"{project_name}_GDD.md").exists():
-            (project_path / f"{project_name}_GDD.md").write_text(f"# {project_name}\n\n{project_description}\n")
+        if requirements: (project_dir / "requirements.txt").write_text("\n".join(set(requirements)) + "\n")
 
     async def _setup_virtual_environment(self, project_dir: Path):
         venv_path = project_dir / "venv"
-        if venv_path.exists():
-            self.detailed_log_event.emit("HybridEngine", "info", "Virtual environment already exists.", "2")
-            return
+        if venv_path.exists(): return
 
         self.detailed_log_event.emit("HybridEngine", "info", "Creating virtual environment...", "2")
         try:
@@ -404,7 +341,6 @@ class HybridWorkflowEngine(QObject):
                                              f"Failed to create venv: {result.stderr or result.stdout}", "3")
         except Exception as e:
             self.logger.error(f"Failed to create virtual environment: {e}", exc_info=True)
-            self.detailed_log_event.emit("HybridEngine", "error", f"Exception creating venv: {e}", "3")
 
     async def _install_requirements(self, venv_path: Path, req_file: Path):
         self.detailed_log_event.emit("HybridEngine", "info", "Installing requirements...", "3")
